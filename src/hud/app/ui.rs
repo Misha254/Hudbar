@@ -1,4 +1,5 @@
 use chrono::Datelike;
+use std::sync::OnceLock;
 pub const FONT: &str = "Minecraft Rus";
 pub const SIZE: f32 = 12.0;
 pub const SIZE_BT: f32 = 13.0;
@@ -89,6 +90,15 @@ pub const I_REC: &str = "\u{f044a}";
 pub const I_WEBCAM: &str = "\u{f09de}";
 pub const I_LOCK: &str = "\u{f023}";
 pub const I_CHECK: &str = "\u{f00c}";
+pub const RAM_ICON_W: f32 = 10.0;
+pub const RAM_ICON_DRAW_W: f32 = 6.0;
+pub const RAM_ICON_H: f32 = 14.0;
+
+pub fn ram_icon() -> Option<&'static crate::hud::tray::TrayIcon> {
+    static ICON: OnceLock<Option<crate::hud::tray::TrayIcon>> = OnceLock::new();
+    ICON.get_or_init(|| crate::hud::tray::png_to_icon(include_bytes!("../../../assets/ram.png")))
+        .as_ref()
+}
 
 pub const PANEL_W: f32 = 340.0;
 pub const PANEL_W_WIDE: f32 = 400.0;
@@ -216,9 +226,16 @@ pub fn shift_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
     (y, m as u32)
 }
 
+/// Насколько панель сдвинута вверх от открытого состояния. `popup_t` — 0..1,
+/// `content_h` — высота панели в логических пикселях. Возвращает смещение, которое
+/// нужно прибавить к координате указателя, чтобы получить координату содержимого.
+pub fn panel_slide_offset(popup_t: f32, content_h: f32) -> f32 {
+    (1.0 - popup_t.clamp(0.0, 1.0)) * content_h
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{cal_rows, cal_weeks, shift_month};
+    use super::{cal_rows, cal_weeks, panel_slide_offset, shift_month};
 
     #[test]
     fn handles_year_boundaries_when_shifting_months() {
@@ -237,12 +254,26 @@ mod tests {
         assert_eq!(cal_rows(2026, 13), 6);
         assert!(cal_weeks(2026, 13).is_empty());
     }
+
+    #[test]
+    fn panel_offset_is_zero_only_when_fully_open() {
+        assert_eq!(panel_slide_offset(1.0, 200.0), 0.0);
+        assert_eq!(panel_slide_offset(0.0, 200.0), 200.0);
+        assert_eq!(panel_slide_offset(0.5, 200.0), 100.0);
+    }
+
+    #[test]
+    fn panel_offset_clamps_animation_progress() {
+        assert_eq!(panel_slide_offset(1.4, 200.0), 0.0);
+        assert_eq!(panel_slide_offset(-0.3, 200.0), 200.0);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
     WifiChip,
     BtChip,
+    ControlChip,
     ClockChip,
     WeatherChip,
     VolChip,
@@ -262,6 +293,7 @@ pub enum PanelKind {
     Bt,
     Clock,
     Weather,
+    Control,
     Volume,
     Mic,
     TrayMenu { idx: usize },
@@ -330,6 +362,7 @@ pub struct Cell {
     pub hit: Option<Hit>,
     pub bat: Option<u8>,
     pub bar: Option<u8>,
+    pub ram: bool,
 }
 
 impl Cell {
@@ -345,6 +378,7 @@ impl Cell {
             hit: None,
             bat: None,
             bar: None,
+            ram: false,
         }
     }
 }
@@ -599,6 +633,72 @@ pub fn blit_argb(
             let ng = (acc[1] * sa + dst.green() as f32 * inv).min(255.0) as u8;
             let nb = (acc[2] * sa + dst.blue() as f32 * inv).min(255.0) as u8;
             let na = (acc[3] + dst.alpha() as f32 * inv).min(255.0) as u8;
+            if let Some(px) = tiny_skia::PremultipliedColorU8::from_rgba(nr, ng, nb, na) {
+                *dst = px;
+            }
+        }
+    }
+}
+
+pub fn blit_argb_tinted(
+    pixmap: &mut tiny_skia::Pixmap,
+    icon: &crate::hud::tray::TrayIcon,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: crate::hud::palette::Rgba,
+) {
+    let (sw, sh) = (icon.w as usize, icon.h as usize);
+    if sw == 0 || sh == 0 || icon.argb.len() < sw * sh * 4 {
+        return;
+    }
+    let dst_w = (width * SCALE) as usize;
+    let dst_h = (height * SCALE) as usize;
+    if dst_w == 0 || dst_h == 0 {
+        return;
+    }
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+    let pixels = pixmap.pixels_mut();
+    let x0 = x as i32;
+    let y0 = y as i32;
+    let tint_a = color.3 as f32 / 255.0;
+
+    for dy in 0..dst_h as i32 {
+        let fy = (dy as f32 + 0.5) * sh as f32 / dst_h as f32 - 0.5;
+        let y1 = fy.floor() as i32;
+        let ty = (fy - y1 as f32).clamp(0.0, 1.0);
+        for dx in 0..dst_w as i32 {
+            let fx = (dx as f32 + 0.5) * sw as f32 / dst_w as f32 - 0.5;
+            let x1 = fx.floor() as i32;
+            let tx = (fx - x1 as f32).clamp(0.0, 1.0);
+            let mut alpha = 0.0;
+            for oy in 0..2 {
+                for ox in 0..2 {
+                    let sx = (x1 + ox).clamp(0, sw as i32 - 1) as usize;
+                    let sy = (y1 + oy).clamp(0, sh as i32 - 1) as usize;
+                    let o = (sy * sw + sx) * 4;
+                    let weight = (if ox == 0 { 1.0 - tx } else { tx })
+                        * (if oy == 0 { 1.0 - ty } else { ty });
+                    alpha += icon.argb[o + 3] as f32 * weight;
+                }
+            }
+            let sa = (alpha / 255.0 * tint_a).clamp(0.0, 1.0);
+            if sa <= 0.004 {
+                continue;
+            }
+            let xx = x0 + dx;
+            let yy = y0 + dy;
+            if xx < 0 || yy < 0 || xx >= pw || yy >= ph {
+                continue;
+            }
+            let dst = &mut pixels[(yy * pw + xx) as usize];
+            let inv = 1.0 - sa;
+            let nr = (color.0 as f32 * sa + dst.red() as f32 * inv).min(255.0) as u8;
+            let ng = (color.1 as f32 * sa + dst.green() as f32 * inv).min(255.0) as u8;
+            let nb = (color.2 as f32 * sa + dst.blue() as f32 * inv).min(255.0) as u8;
+            let na = (alpha * tint_a + dst.alpha() as f32 * inv).min(255.0) as u8;
             if let Some(px) = tiny_skia::PremultipliedColorU8::from_rgba(nr, ng, nb, na) {
                 *dst = px;
             }

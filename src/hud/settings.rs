@@ -59,22 +59,27 @@ pub fn load() -> Settings {
 }
 
 fn parse_into(settings: &mut Settings, content: &str) {
-    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(content) else {
+    let Ok(value @ Value::Object(_)) = serde_json::from_str::<Value>(content) else {
         return;
     };
+    let object = value
+        .get("hudbar")
+        .and_then(Value::as_object)
+        .or_else(|| value.as_object())
+        .expect("object checked above");
     if let Some(height) = object.get("height").and_then(Value::as_u64) {
         settings.height = height.clamp(24, 48) as u32;
     }
-    settings.tray = get_bool(&object, "tray", settings.tray);
-    settings.weather = get_bool(&object, "weather", settings.weather);
-    settings.webcam = get_bool(&object, "webcam", settings.webcam);
-    settings.clock = get_bool(&object, "clock", settings.clock);
-    settings.recorder = get_bool(&object, "recorder", settings.recorder);
-    settings.battery = get_bool(&object, "battery", settings.battery);
-    settings.system = get_bool(&object, "system", settings.system);
-    settings.audio = get_bool(&object, "audio", settings.audio);
-    settings.network = get_bool(&object, "network", settings.network);
-    settings.dnd = get_bool(&object, "dnd", settings.dnd);
+    settings.tray = get_bool(object, "tray", settings.tray);
+    settings.weather = get_bool(object, "weather", settings.weather);
+    settings.webcam = get_bool(object, "webcam", settings.webcam);
+    settings.clock = get_bool(object, "clock", settings.clock);
+    settings.recorder = get_bool(object, "recorder", settings.recorder);
+    settings.battery = get_bool(object, "battery", settings.battery);
+    settings.system = get_bool(object, "system", settings.system);
+    settings.audio = get_bool(object, "audio", settings.audio);
+    settings.network = get_bool(object, "network", settings.network);
+    settings.dnd = get_bool(object, "dnd", settings.dnd);
 }
 
 #[cfg(test)]
@@ -84,7 +89,10 @@ mod tests {
     #[test]
     fn clamps_height_and_preserves_missing_options() {
         let mut settings = Settings::default();
-        parse_into(&mut settings, r#"{"height": 100, "weather": false}"#);
+        parse_into(
+            &mut settings,
+            r#"{"hudbar": {"height": 100, "weather": false}}"#,
+        );
 
         assert_eq!(settings.height, 48);
         assert!(!settings.weather);
@@ -98,5 +106,15 @@ mod tests {
 
         assert_eq!(settings.height, Settings::default().height);
         assert_eq!(settings.weather, Settings::default().weather);
+    }
+
+    #[test]
+    fn reads_legacy_flat_settings() {
+        let mut settings = Settings::default();
+        parse_into(&mut settings, r#"{"height": 31, "tray": false}"#);
+
+        assert_eq!(settings.height, 31);
+        assert!(!settings.tray);
+        assert!(settings.weather);
     }
 }

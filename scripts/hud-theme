@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+home = Path.home()
+config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+state_path = config / "hudbar/settings.json"
+legacy_state_path = config / "hud-settings/settings.json"
+default_state = {
+    "appearance": {"theme": "pixel"},
+    "hudbar": {"height": 27, "tray": True, "weather": True, "clock": True, "recorder": True, "battery": True, "system": True, "webcam": True, "audio": True, "network": True, "dnd": True},
+    "notifications": {"line_height": 18, "font_size": 13, "position": "top-right"},
+}
+
+
+def write_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        handle.write(text)
+        temporary = Path(handle.name)
+    os.chmod(temporary, mode)
+    os.replace(temporary, path)
+
+
+def load_state() -> dict:
+    try:
+        state = json.loads(state_path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        try:
+            state = json.loads(legacy_state_path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            state = {}
+    if "hudbar" not in state:
+        state = {"hudbar": state}
+    for section, values in default_state.items():
+        current = state.setdefault(section, {})
+        if isinstance(current, dict):
+            for key, value in values.items():
+                current.setdefault(key, value)
+    return state
+
+
+mode = sys.argv[1] if len(sys.argv) > 1 else "current"
+if mode not in {"pixel", "normal"}:
+    if mode == "current":
+        print(load_state()["appearance"]["theme"])
+        raise SystemExit(0)
+    print("usage: hud-theme pixel|normal|current", file=sys.stderr)
+    raise SystemExit(2)
+
+font_files = [
+    config / "rofi/hud.rasi", config / "rofi/hud-dmenu.rasi", config / "rofi/keybind.rasi",
+    config / "rofi/config.rasi", config / "rofi/emoji.rasi", config / "dunst/dunstrc",
+    config / "matugen/templates/dunst.conf", config / "swaylock/config",
+    config / "matugen/templates/swaylock.conf", config / "kitty/kitty.conf",
+    home / ".local/bin/wall.sh", home / ".local/bin/record.sh",
+    home / ".local/bin/powermenu.sh", home / ".local/bin/playerctl.sh",
+]
+pixel_patterns = [
+    r"JetBrainsMono Nerd Font Mono Bold", r"JetBrainsMono Nerd Font Mono",
+    r"JetBrainsMono Nerd Font Propo", r"JetBrainsMono Nerd Font",
+    r"JetBrains Mono Nerd Font", r"JetBrains Mono Bold", r"JetBrains Mono",
+]
+
+
+def convert(text: str) -> str:
+    if mode == "pixel":
+        for pattern in pixel_patterns:
+            text = re.sub(pattern, "Minecraft Rus", text)
+        return text
+    return text.replace("Minecraft Rus", "JetBrainsMono Nerd Font")
+
+
+for path in font_files:
+    if path.exists():
+        write_atomic(path, convert(path.read_text()))
+
+write_atomic(config / "hudbar/font", "Minecraft Rus\n" if mode == "pixel" else "JetBrainsMono Nerd Font Propo\n")
+state = load_state()
+state["appearance"]["theme"] = mode
+write_atomic(state_path, json.dumps(state, indent=2) + "\n")
+subprocess.run(["pkill", "-TERM", "-x", "hudbar"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+for _ in range(30):
+    if subprocess.run(["pgrep", "-x", "hudbar"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        break
+    time.sleep(0.1)
+subprocess.Popen([str(home / ".local/bin/hudbar")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+subprocess.run(["dunstctl", "reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+subprocess.run(["pkill", "-SIGUSR1", "kitty"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+print(mode)

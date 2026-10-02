@@ -1,4 +1,8 @@
 pub mod actions;
+#[allow(dead_code)]
+pub mod bind_data;
+#[allow(dead_code)]
+pub mod binds_layout;
 pub mod data;
 pub mod log;
 pub mod palette;

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+bin="${HUDBAR_BIN_DIR:-$HOME/.local/bin}/hud-yazibinds-rs"
+
+find_window_id() {
+    niri msg windows 2>/dev/null | python3 -c '
+import sys
+wid = None
+for line in sys.stdin:
+    line = line.rstrip()
+    if line.startswith("Window ID "):
+        wid = line.split()[2].rstrip(":")
+    if "Title: \"Yazi\"" in line and wid:
+        print(wid)
+        break
+' || true
+}
+
+window_id=$(find_window_id)
+if [[ -n "$window_id" ]]; then
+    niri msg action close-window --id "$window_id" >/dev/null 2>&1 || true
+    exit 0
+fi
+
+exec setsid -f "$bin"

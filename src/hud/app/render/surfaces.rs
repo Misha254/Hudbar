@@ -313,6 +313,11 @@ impl App {
             PanelKind::Wifi => data::refresh_wifi(&self.shared),
             PanelKind::Bt => data::refresh_bt(&self.shared),
             PanelKind::Weather => data::refresh_weather(&self.shared),
+            PanelKind::Control => {
+                data::refresh_wifi(&self.shared);
+                data::refresh_bt(&self.shared);
+                data::refresh_audio(&self.shared);
+            }
             PanelKind::Volume | PanelKind::Mic => data::refresh_audio(&self.shared),
             PanelKind::Clock | PanelKind::TrayMenu { .. } => {}
         }
@@ -328,6 +333,7 @@ impl App {
                         | (Hit::WeatherChip, PanelKind::Weather)
                         | (Hit::VolChip, PanelKind::Volume)
                         | (Hit::MicChip, PanelKind::Mic)
+                        | (Hit::ControlChip, PanelKind::Control)
                 ) {
                     Some(r.x + r.w / 2.0)
                 } else {
@@ -348,6 +354,7 @@ impl App {
             PanelKind::Weather => PANEL_W_WIDE,
             PanelKind::Clock => PANEL_W_CLOCK,
             PanelKind::Volume | PanelKind::Mic => PANEL_W_AV,
+            PanelKind::Control => PANEL_W,
             _ => PANEL_W,
         };
         let w = base_w.min(self.width as f32 - 8.0).max(200.0);

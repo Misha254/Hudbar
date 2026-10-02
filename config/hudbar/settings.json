@@ -1,0 +1,23 @@
+{
+  "appearance": {
+    "theme": "pixel"
+  },
+  "hudbar": {
+    "height": 27,
+    "tray": true,
+    "weather": true,
+    "webcam": true,
+    "clock": true,
+    "recorder": true,
+    "battery": true,
+    "system": true,
+    "audio": true,
+    "network": true,
+    "dnd": true
+  },
+  "notifications": {
+    "line_height": 18,
+    "font_size": 13,
+    "position": "top-right"
+  }
+}

@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import shutil
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+
+DEFAULTS = {
+    "appearance": {"theme": "pixel"},
+    "hudbar": {
+        "height": 27,
+        "tray": True,
+        "weather": True,
+        "webcam": True,
+        "clock": True,
+        "recorder": True,
+        "battery": True,
+        "system": True,
+        "audio": True,
+        "network": True,
+        "dnd": True,
+    },
+    "notifications": {"line_height": 18, "font_size": 13, "position": "top-right"},
+}
+
+
+def read_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def merge_settings(config_home: Path) -> dict:
+    canonical_path = config_home / "hudbar/settings.json"
+    legacy_path = config_home / "hud-settings/settings.json"
+    canonical = read_json(canonical_path)
+    legacy = read_json(legacy_path)
+
+    if isinstance(canonical.get("hudbar"), dict):
+        result = canonical
+    else:
+        result = {"hudbar": canonical}
+    for section in ("appearance", "notifications"):
+        legacy_section = legacy.get(section)
+        current_section = result.get(section)
+        if isinstance(legacy_section, dict):
+            merged = dict(legacy_section)
+            if isinstance(current_section, dict):
+                merged.update(current_section)
+            result[section] = merged
+
+    legacy_hudbar = legacy.get("hudbar")
+    if isinstance(legacy_hudbar, dict):
+        merged = dict(legacy_hudbar)
+        merged.update(result.get("hudbar", {}))
+        result["hudbar"] = merged
+
+    for section, values in DEFAULTS.items():
+        current = result.setdefault(section, {})
+        if not isinstance(current, dict):
+            current = result[section] = {}
+        for key, value in values.items():
+            current.setdefault(key, value)
+    return result
+
+
+def write_atomic(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        json.dump(data, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+        temporary = Path(handle.name)
+    os.chmod(temporary, mode)
+    os.replace(temporary, path)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Merge legacy HUD settings into hudbar/settings.json")
+    parser.add_argument("--config-home", type=Path, default=Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")))
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    target = args.config_home / "hudbar/settings.json"
+    data = merge_settings(args.config_home)
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+    if args.dry_run:
+        return 0
+
+    if target.exists():
+        backup = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+        backup /= f"hudbar/backups/settings-{datetime.now():%Y%m%d-%H%M%S}.json"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(target, backup)
+        print(f"backup: {backup}")
+    write_atomic(target, data)
+    print(f"migrated: {target}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

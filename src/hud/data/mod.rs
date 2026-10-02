@@ -23,7 +23,7 @@ pub use weather::refresh_weather;
 use network::{wifi, wifi_radio_on};
 use system::{
     bat_time_now, battery, bt_on, cpu_pct, cpu_temp, dnd_paused, mem_pct, mem_used_gib,
-    recorder_on, webcam_active,
+    power_state, recorder_on, webcam_active,
 };
 use weather::weather_loop;
 use workspaces::niri_loop;
@@ -200,14 +200,40 @@ pub fn send_tray_menu_click(shared: &Arc<Shared>, entry_id: i32) {
     }
     crate::hud::tray::send_menu_event(&svc, &mp, entry_id);
 }
+
+const BATTERY_EVENT_DEBOUNCE_TICKS: u64 = 3;
+
+fn battery_refresh_due(tick: u64, pending_since: Option<u64>) -> bool {
+    match pending_since {
+        Some(started) => tick >= started + BATTERY_EVENT_DEBOUNCE_TICKS,
+        None => tick % 30 == 1,
+    }
+}
+
 fn sys_loop(shared: Arc<Shared>) {
     let mut prev_cpu: Option<(u64, u64)> = None;
+    let mut previous_power: Option<(bool, bool)> = None;
+    let mut battery_pending_since: Option<u64> = None;
     let mut tick: u64 = 0;
     let bt_conn = dbus::blocking::Connection::new_system().ok();
     loop {
         tick += 1;
-        // Батарея + время разряда: раз в 30 сек (tick % 30 == 1 — сразу на старте).
-        let bat = if tick % 30 == 1 {
+        // AC/Charging проверяем часто, но полный расчёт ждёт стабилизации sysfs.
+        let power = power_state();
+        if let Some(state) = power {
+            if previous_power.is_some_and(|previous| previous != state) {
+                battery_pending_since = Some(tick);
+            }
+            previous_power = Some(state);
+        }
+
+        // Полный опрос батареи остаётся раз в 30 сек, а после события питания
+        // выполняется через несколько секунд, когда power_now уже обновился.
+        let refresh_battery = battery_refresh_due(tick, battery_pending_since);
+        if refresh_battery {
+            battery_pending_since = None;
+        }
+        let bat = if refresh_battery {
             Some((battery(), bat_time_now()))
         } else {
             None
@@ -284,7 +310,24 @@ mod tests {
     use super::network::{parse_bt_devices, parse_wifi_list};
     use super::weather::parse_weather;
     use super::workspaces::parse_ws;
-    use super::{BtDev, WifiNet};
+    use super::{BATTERY_EVENT_DEBOUNCE_TICKS, BtDev, WifiNet, battery_refresh_due};
+
+    #[test]
+    fn waits_after_a_power_event_before_refreshing_battery_time() {
+        assert!(!battery_refresh_due(7, Some(7)));
+        assert!(!battery_refresh_due(9, Some(7)));
+        assert!(battery_refresh_due(
+            7 + BATTERY_EVENT_DEBOUNCE_TICKS,
+            Some(7)
+        ));
+    }
+
+    #[test]
+    fn keeps_the_periodic_battery_refresh_schedule() {
+        assert!(battery_refresh_due(1, None));
+        assert!(battery_refresh_due(31, None));
+        assert!(!battery_refresh_due(8, None));
+    }
 
     #[test]
     fn parses_wifi_escaped_separators_and_keeps_strongest_network() {

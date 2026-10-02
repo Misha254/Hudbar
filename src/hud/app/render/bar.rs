@@ -1,5 +1,12 @@
 use super::*;
 
+fn low_battery_style(
+    palette: palette::Palette,
+    chip_bg: palette::Rgba,
+) -> (palette::Rgba, palette::Rgba) {
+    (palette.error, chip_bg)
+}
+
 impl App {
     pub fn group_width(&mut self, g: &Group) -> f32 {
         let k = SCALE;
@@ -11,6 +18,9 @@ impl App {
             }
             if c.bar.is_some() {
                 w += PIXEL_SEGMENT_W * k;
+            }
+            if c.ram {
+                w += RAM_ICON_W * k;
             }
         }
         if let Some((pl, pr, _)) = g.chip {
@@ -47,14 +57,15 @@ impl App {
         let mut cx = x + g.chip.map(|(pl, _, _)| pl * k).unwrap_or(0.0);
         for c in &g.cells {
             let iw = if c.bat.is_some() { BAT_ICON_W * k } else { 0.0 };
+            let ram_w = if c.ram { RAM_ICON_W * k } else { 0.0 };
             let text_w = self.text_width(&c.text, c.size);
             let bar_w = if c.bar.is_some() {
                 PIXEL_SEGMENT_W * k
             } else {
                 0.0
             };
-            let cw = (c.pad_l + c.pad_r) * k + text_w + iw + bar_w;
-            let text_x = cx + iw + c.pad_l * k;
+            let cw = (c.pad_l + c.pad_r) * k + text_w + iw + ram_w + bar_w;
+            let text_x = cx + iw + ram_w + c.pad_l * k;
             if let Some(bg) = c.bg {
                 fill_rect(pixmap, cx, y, cw, height, bg);
             }
@@ -91,6 +102,21 @@ impl App {
             }
             if let Some(pct) = c.bat {
                 self.draw_battery(pixmap, cx, y, height, pct, c.color);
+            }
+            if c.ram
+                && let Some(icon) = ram_icon()
+            {
+                let icon_x = cx + iw + (ram_w - RAM_ICON_DRAW_W * k) / 2.0;
+                let icon_y = y + (height - RAM_ICON_H * k) / 2.0;
+                blit_argb_tinted(
+                    pixmap,
+                    icon,
+                    icon_x,
+                    icon_y,
+                    RAM_ICON_DRAW_W,
+                    RAM_ICON_H,
+                    c.color,
+                );
             }
             let lh = self.height as f32;
             self.draw_text(pixmap, &c.text, c.size, c.color, text_x, 0.0, lh);
@@ -365,7 +391,8 @@ impl App {
                     false,
                 )
             } else if pct <= 15 {
-                (format!("{pct}%"), p.base, p.error, true)
+                let (color, bg) = low_battery_style(p, chip_bg);
+                (format!("{pct}%"), color, bg, true)
             } else if pct <= 30 {
                 (format!("{pct}%"), p.text.with_a(0.75), chip_bg, true)
             } else {
@@ -425,7 +452,11 @@ impl App {
                         p.text,
                     ));
                 }
-                cells.push(Cell::new(format!("{:.2}GiB", sys.mem_used_gib), p.text));
+                let mut ram = Cell::new(format!("{:.2}GiB", sys.mem_used_gib), p.text);
+                ram.pad_l = 2.0;
+                ram.pad_r = 0.0;
+                ram.ram = true;
+                cells.push(ram);
                 cells
             };
             right.push(Group {
@@ -510,6 +541,15 @@ impl App {
             });
         }
 
+        let mut control = Cell::new("⚙".to_string(), p.primary);
+        control.pad_l = 4.0;
+        control.pad_r = 4.0;
+        control.hit = Some(Hit::ControlChip);
+        right.push(Group {
+            cells: vec![control],
+            chip: Some((4.0, 4.0, chip_bg)),
+        });
+
         let mut rwidths: Vec<f32> = Vec::new();
         for g in &right {
             rwidths.push(self.group_width(g));
@@ -524,4 +564,22 @@ impl App {
     }
 
     // ---------- panel ----------
+}
+
+#[cfg(test)]
+mod tests {
+    use super::low_battery_style;
+    use crate::hud::palette::Palette;
+
+    #[test]
+    fn low_battery_keeps_the_normal_chip_background() {
+        let palette = Palette::default();
+        let chip_bg = palette.secondary.with_a(0.1);
+
+        let (text, background) = low_battery_style(palette, chip_bg);
+
+        assert_eq!(text, palette.error);
+        assert_eq!(background, chip_bg);
+        assert_ne!(background, palette.error);
+    }
 }

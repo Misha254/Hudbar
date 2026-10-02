@@ -190,6 +190,23 @@ pub fn mic_mute_toggle(shared: &Arc<Shared>) {
     });
 }
 
+pub fn dnd_toggle() {
+    std::thread::spawn(|| {
+        let paused = crate::hud::log::output("dunstctl", &["is-paused"])
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .is_some_and(|value| value.trim() == "true");
+        let target = if paused { "false" } else { "true" };
+        let _ = crate::hud::log::status("dunstctl", &["set-paused", target]);
+    });
+}
+
+pub fn spawn(command: &str) {
+    let command = command.to_string();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new(command).spawn();
+    });
+}
+
 pub fn bt_toggle(shared: &Arc<Shared>, mac: &str, connected: bool) {
     let s = shared.clone();
     let mac = mac.to_string();

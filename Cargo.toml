@@ -1,7 +1,19 @@
 [package]
 name = "hudbar"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+
+[[bin]]
+name = "hud-settings-rs"
+path = "src/bin/hud_settings.rs"
+
+[[bin]]
+name = "hud-keybinds-rs"
+path = "src/bin/hud_keybinds.rs"
+
+[[bin]]
+name = "hud-yazibinds-rs"
+path = "src/bin/hud_yazibinds.rs"
 
 [dependencies]
 chrono = "0.4.45"

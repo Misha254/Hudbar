@@ -42,6 +42,7 @@ impl App {
         match hit {
             Some(Hit::WifiChip) => self.toggle_panel(PanelKind::Wifi, qh),
             Some(Hit::BtChip) => self.toggle_panel(PanelKind::Bt, qh),
+            Some(Hit::ControlChip) => self.toggle_panel(PanelKind::Control, qh),
             Some(Hit::ClockChip) => self.toggle_panel(PanelKind::Clock, qh),
             Some(Hit::WeatherChip) => self.toggle_panel(PanelKind::Weather, qh),
             Some(Hit::VolChip) => self.toggle_panel(PanelKind::Volume, qh),
@@ -134,12 +135,26 @@ impl App {
         match kind {
             PanelKind::Wifi => sys.wifi_enabled,
             PanelKind::Bt => sys.bt_on,
+            PanelKind::Control => true,
             PanelKind::Volume => !sys.vol_muted,
             PanelKind::Mic => !sys.mic_muted,
             _ => false,
         }
     }
 
+    /// Насколько панель сейчас сдвинута вверх относительно открытого состояния.
+    /// Пока идёт анимация, координата указателя на поверхности попапа не равна
+    /// координате в его содержимом, поэтому ввод переводится через это смещение.
+    pub fn panel_offset(&self) -> f32 {
+        let height = self
+            .popup
+            .as_ref()
+            .map(|p| p.size.1 as f32)
+            .unwrap_or_else(|| self.panel_height() as f32);
+        panel_slide_offset(self.popup_t, height)
+    }
+
+    /// `y` здесь уже в координатах содержимого панели, а не поверхности.
     pub fn toggle_hit(&self, x: f32, y: f32) -> Option<PanelKind> {
         let panel = self.panel.as_ref()?;
         if !matches!(
@@ -168,6 +183,7 @@ impl App {
         ) {
             return;
         }
+        let y = y + self.panel_offset();
         match kind {
             PanelKind::Clock => {
                 self.on_clock_click(x, y);
@@ -239,6 +255,27 @@ impl App {
         }
         let sys = self.shared.sys.lock().unwrap().clone();
         match kind {
+            PanelKind::Control => {
+                let rows = self.control_rows();
+                let idx = ((y - PANEL_HEADER) / PANEL_ROW) as usize;
+                let Some((action, _, _)) = rows.get(idx) else {
+                    return;
+                };
+                let action = action.as_str();
+                match action {
+                    "Wi-Fi" => data::wifi_radio(&self.shared, !self.radio_state(PanelKind::Wifi)),
+                    "Bluetooth" => data::bt_power(&self.shared, !self.radio_state(PanelKind::Bt)),
+                    "DND" => crate::hud::actions::dnd_toggle(),
+                    "Звук" => crate::hud::actions::vol_mute_toggle(&self.shared),
+                    "Микрофон" => crate::hud::actions::mic_mute_toggle(&self.shared),
+                    "Настройки HUD" => crate::hud::actions::spawn("hud-settings"),
+                    "Обои" => crate::hud::actions::spawn("wall.sh"),
+                    "Питание" => crate::hud::actions::spawn("powermenu.sh"),
+                    "Блокировка" => crate::hud::actions::spawn("dynalock.sh"),
+                    _ => {}
+                }
+                self.close_panel();
+            }
             PanelKind::Wifi => {
                 if let Some(n) = sys.wifi_list.get(idx) {
                     if n.in_use {
@@ -272,6 +309,7 @@ impl App {
     }
 
     pub fn on_panel_hover(&mut self, x: f32, y: f32) {
+        let y = y + self.panel_offset();
         let hover_toggle = self.toggle_hit(x, y).is_some();
         let kind = self.panel.as_ref().map(|p| p.kind);
         let hover = if !hover_toggle {
