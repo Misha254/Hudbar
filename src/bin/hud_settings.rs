@@ -1026,16 +1026,35 @@ impl SettingsApp {
                     );
                 }
                 Row::NotificationPosition { position, rect } => {
+                    // Выбранный угол подсвечивается так же, как выбранная тема
+                    // в «Внешнем виде»: заливка, акцентная рамка и метка.
+                    let control = Control::NotificationPosition(position);
+                    let selected = self.config.position == position;
+                    let active = selected || self.hovered(control) || self.focused(control);
                     self.draw_button(
                         &mut pixmap,
                         p,
                         rect,
                         notification_position_label(position),
-                        self.hovered(Control::NotificationPosition(position))
-                            || self.focused(Control::NotificationPosition(position)),
+                        active,
                         s.micro,
                         pixel,
                     );
+                    if selected {
+                        let k = SCALE;
+                        let mark = Rect::new(rect.right() - 26.0, rect.y, 20.0, rect.h);
+                        self.painter
+                            .paint(&mut pixmap, "✓", s.row, p.accent, mark, Align::Center);
+                        stroke_rect(
+                            &mut pixmap,
+                            rect.x * k,
+                            rect.y * k,
+                            rect.w * k,
+                            rect.h * k,
+                            p.accent,
+                            2.0 * k,
+                        );
+                    }
                 }
                 Row::Height { dir, rect } => {
                     let control = Control::Height(dir);

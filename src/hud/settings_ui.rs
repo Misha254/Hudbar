@@ -1368,6 +1368,65 @@ mod tests {
         controls(rows)
     }
 
+    /// Выбранный угол должен отличаться от остальных и попадать в угол,
+    /// назначенный в `settings.json`.
+    #[test]
+    fn notification_corner_mark_matches_the_configured_position() {
+        for position in NotificationPosition::ALL {
+            let config = Config {
+                position,
+                ..Config::default()
+            };
+            let rows = rows_for(Section::Notifications, &config, &[], 0);
+
+            let chosen: Vec<NotificationPosition> = rows
+                .iter()
+                .filter_map(|row| match row {
+                    Row::NotificationPosition { position, .. } => Some(*position),
+                    _ => None,
+                })
+                .filter(|candidate| *candidate == position)
+                .collect();
+            assert_eq!(
+                chosen.len(),
+                1,
+                "угол {position:?} должен быть единственным выбранным"
+            );
+
+            let rect = rows
+                .iter()
+                .find_map(|row| match row {
+                    Row::NotificationPosition {
+                        position: p, rect, ..
+                    } if *p == position => Some(*rect),
+                    _ => None,
+                })
+                .expect("кнопка угла");
+            assert!(
+                rect.right() <= WIDTH - PAD_R + 0.5 && rect.x >= PAD_X - 0.5,
+                "кнопка угла вылезла за контент: {rect:?}"
+            );
+        }
+    }
+
+    /// Углов должно быть ровно четыре и все они равны по размеру.
+    #[test]
+    fn notification_corners_are_four_equal_buttons() {
+        let rows = rows_for(Section::Notifications, &Config::default(), &[], 0);
+        let rects: Vec<Rect> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::NotificationPosition { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rects.len(), NotificationPosition::ALL.len());
+        for rect in &rects {
+            assert_eq!(rect.w, rects[0].w);
+            assert_eq!(rect.h, rects[0].h);
+        }
+    }
+
     #[test]
     fn hotkeys_with_the_same_action_merge_into_one_row() {
         let keys = [
