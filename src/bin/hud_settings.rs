@@ -131,6 +131,8 @@ struct SettingsApp {
     hotkeys: Vec<Hotkey>,
     /// Прокрутка списка клавиш: биндов больше, чем помещается на экран.
     hotkey_scroll: usize,
+    /// Состояние раздела «Обои»: файлы, выбранная схема, прокрутка.
+    wallpaper: settings_ui::Wallpaper,
     /// Активный раздел и зона фокуса; переходы живут в `settings_ui::Nav`.
     nav: Nav,
     /// Тема, которую пользователь выбрал, но которая ещё не применена.
@@ -236,6 +238,51 @@ fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             text: p.text,
             muted: p.text.with_a(0.58),
         }
+    }
+}
+
+/// Файлы обоев из `~/wallpapers`. Окно само листает список: rofi с его
+/// превью тут не нужен, а выбор остаётся в одном окне.
+fn load_wallpapers() -> Vec<String> {
+    let mut files = Vec::new();
+    let mut stack = vec![home().join("wallpapers")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|ext| {
+                matches!(
+                    ext.to_string_lossy().as_ref(),
+                    "jpg" | "jpeg" | "png" | "webp" | "gif"
+                )
+            }) {
+                files.push(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+/// Имя файла без пути: в списке обоев полный путь занимает всю строку.
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Подпись обоев: имя файла и папка-категория вместо полного пути.
+fn wallpaper_dir_label(path: &str) -> String {
+    let name = file_name(path);
+    let mut parts = path.rsplit('/');
+    parts.next();
+    let dir = parts.next().unwrap_or("");
+    if dir.is_empty() || dir == "wallpapers" {
+        name.to_string()
+    } else {
+        format!("{dir}/{name}")
     }
 }
 
@@ -414,11 +461,12 @@ impl SettingsApp {
         if settings_stamp != self.settings_stamp {
             self.settings_stamp = settings_stamp;
             self.config = config::Config::from(&settings::load());
-            self.rows = settings_ui::rows_for(
+            self.rows = settings_ui::rows_for_state(
                 self.nav.section,
                 &self.config,
                 &self.hotkeys,
                 self.hotkey_scroll,
+                &self.wallpaper,
             );
             self.picked = None;
             self.painter.set_font(&self.font_for(self.pixel_mode()));
@@ -634,6 +682,105 @@ impl SettingsApp {
         };
         self.commit(config_io::Patch::Language(next));
     }
+    /// Выбор файла обоев: только запоминаем, ничего не применяем.
+    fn pick_wallpaper(&mut self, index: usize) {
+        if index < self.wallpaper.files.len() {
+            self.wallpaper.selected = index;
+            let name = self.wallpaper.files[index].clone();
+            self.status = format!("Выбран файл: {}", file_name(&name));
+            self.rebuild_rows();
+            self.dirty = true;
+        }
+    }
+
+    /// Выбор схемы matugen: тоже только запоминаем.
+    fn pick_scheme(&mut self, index: usize) {
+        if let Some(scheme) = settings_ui::SCHEMES.get(index) {
+            self.wallpaper.scheme = index;
+            self.status = format!("Схема: {scheme}");
+            self.rebuild_rows();
+            self.dirty = true;
+        }
+    }
+
+    /// Единственное место, где окно меняет обои: явное нажатие «Применить».
+    /// Запускается `wall.sh --set`, сам matugen окно не зовёт.
+    fn apply_wallpaper(&mut self) {
+        self.flush_height(true);
+        if self.busy() {
+            self.status = "Дождитесь предыдущего применения".to_string();
+            self.dirty = true;
+            return;
+        }
+        let Some(file) = self.wallpaper.files.get(self.wallpaper.selected).cloned() else {
+            self.status = "Нет выбранного файла".to_string();
+            self.dirty = true;
+            return;
+        };
+        let scheme = settings_ui::SCHEMES[self.wallpaper.scheme].to_string();
+        self.status = "Обои применяются…".to_string();
+        self.dirty = true;
+        self.start_job("Обои", move || {
+            let output = Command::new(home().join(".local/bin/wall.sh"))
+                .arg("--set")
+                .arg(&file)
+                .arg(&scheme)
+                .output()
+                .map_err(|error| error.to_string())?;
+            if output.status.success() {
+                return Ok(());
+            }
+            // wall.sh пишет причину в stderr — показываем её, а не код.
+            let reason = String::from_utf8_lossy(&output.stderr);
+            let reason = reason
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("неизвестная ошибка")
+                .to_string();
+            Err(format!(
+                "{reason} (код {})",
+                output.status.code().unwrap_or(-1)
+            ))
+        });
+    }
+
+    /// Страница вверх или вниз: что именно листается, решает активный раздел.
+    fn scroll_page(&mut self, forward: bool) {
+        match self.nav.section {
+            Section::Wallpaper => self.scroll_wallpapers(forward),
+            _ => self.scroll_hotkeys(forward),
+        }
+    }
+
+    /// Прокрутка списка обоев: выбранный файл всегда остаётся видимым.
+    fn scroll_wallpapers(&mut self, forward: bool) {
+        let page = settings_ui::WALLPAPER_FILES;
+        let count = self.wallpaper.files.len();
+        if page == 0 || count <= page {
+            return;
+        }
+        let max_scroll = count - page;
+        let selected = self.wallpaper.selected;
+        let next = if forward {
+            (self.wallpaper.scroll + page).min(max_scroll)
+        } else {
+            self.wallpaper.scroll.saturating_sub(page)
+        };
+        if next == self.wallpaper.scroll {
+            return;
+        }
+        self.wallpaper.scroll = next;
+        // Выделение подтягиваем в видимую часть списка.
+        if selected < next {
+            self.wallpaper.selected = next;
+        } else if selected >= next + page {
+            self.wallpaper.selected = next + page - 1;
+        }
+        self.status = format!("Файлов: {} · показано {}-{next}{page}", count, next + 1);
+        self.rebuild_rows();
+        self.dirty = true;
+    }
 
     /// Листание списка горячих клавиш: список длинный, а править его нельзя.
     fn scroll_hotkeys(&mut self, forward: bool) {
@@ -701,6 +848,9 @@ impl SettingsApp {
             Control::NotificationLineHeight(delta) => self.step_notification_line(delta),
             Control::NotificationPosition(position) => self.set_notification_position(position),
             Control::Goto(target) => self.open_section(target),
+            Control::WallpaperFile(index) => self.pick_wallpaper(index),
+            Control::Scheme(index) => self.pick_scheme(index),
+            Control::WallpaperApply => self.apply_wallpaper(),
             // Слайдер высоты реагирует на перетаскивание, а не на Space.
             Control::HeightSlider => {}
             Control::Language => self.toggle_language(),
@@ -830,8 +980,9 @@ impl SettingsApp {
                     self.dirty = true;
                 }
             }
-            Keysym::Page_Up | Keysym::KP_Page_Up => self.scroll_hotkeys(false),
-            Keysym::Page_Down | Keysym::KP_Page_Down => self.scroll_hotkeys(true),
+            // В «Обоях» страницы листают список файлов, в «Управлении» — бинды.
+            Keysym::Page_Up | Keysym::KP_Page_Up => self.scroll_page(false),
+            Keysym::Page_Down | Keysym::KP_Page_Down => self.scroll_page(true),
             Keysym::minus | Keysym::KP_Subtract | Keysym::underscore => self.step_height(-1),
             Keysym::plus | Keysym::equal | Keysym::KP_Add => self.step_height(1),
             _ => {}
@@ -1110,6 +1261,33 @@ impl SettingsApp {
                 Row::Hotkey { keys, desc, rect } => {
                     self.draw_hotkey(&mut pixmap, p, rect, &keys, &desc, s);
                 }
+                Row::WallpaperFile {
+                    name,
+                    rect,
+                    selected,
+                    ..
+                } => {
+                    let label = format!("{}/{name}", wallpaper_dir_label(&name));
+                    self.draw_wallpaper_file(&mut pixmap, p, rect, &label, selected, s);
+                }
+                Row::Scheme {
+                    name,
+                    index,
+                    rect,
+                    selected,
+                } => self.draw_scheme(&mut pixmap, p, rect, name, index, selected, s, pixel),
+                Row::WallpaperApply { rect } => {
+                    let control = Control::WallpaperApply;
+                    self.draw_button(
+                        &mut pixmap,
+                        p,
+                        rect,
+                        "Применить обои",
+                        self.hovered(control) || self.focused(control) || self.busy(),
+                        s.row,
+                        pixel,
+                    );
+                }
                 Row::Close { rect } => {
                     self.draw_button(
                         &mut pixmap,
@@ -1170,6 +1348,101 @@ impl SettingsApp {
                 rect.w * k,
                 k,
                 DEBUG_OUTLINE.with_a(0.8),
+            );
+        }
+    }
+
+    /// Файл обоев в списке: выбранный подсвечивается акцентной рамкой, имя
+    /// обрезается по ширине полосы.
+    fn draw_wallpaper_file(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        rect: Rect,
+        name: &str,
+        selected: bool,
+        s: Sizes,
+    ) {
+        let k = SCALE;
+        fill_round_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if self.pixel_mode() { 0.0 } else { 6.0 * k },
+            if selected { p.panel } else { p.idle_panel },
+        );
+        stroke_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if selected { p.accent } else { p.border },
+            if selected { 2.0 * k } else { k },
+        );
+        self.painter.paint_boxed(
+            pixmap,
+            name,
+            s.row,
+            if selected { p.text } else { p.muted },
+            Rect::new(rect.x + 12.0, rect.y, rect.w - 60.0, rect.h),
+            Align::Start,
+        );
+        if selected {
+            self.painter.paint(
+                pixmap,
+                "выбран",
+                s.micro,
+                p.accent,
+                Rect::new(rect.right() - 56.0, rect.y, 46.0, rect.h),
+                Align::End,
+            );
+        }
+    }
+
+    /// Схема matugen: та же подсветка выбранного, что и у темы.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_scheme(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        rect: Rect,
+        name: &str,
+        index: usize,
+        selected: bool,
+        s: Sizes,
+        pixel: bool,
+    ) {
+        let control = Control::Scheme(index);
+        self.draw_button(
+            pixmap,
+            p,
+            rect,
+            name,
+            selected || self.hovered(control) || self.focused(control),
+            s.micro,
+            pixel,
+        );
+        if selected {
+            let k = SCALE;
+            self.painter.paint(
+                pixmap,
+                "✓",
+                s.row,
+                p.accent,
+                Rect::new(rect.right() - 26.0, rect.y, 20.0, rect.h),
+                Align::Center,
+            );
+            stroke_rect(
+                pixmap,
+                rect.x * k,
+                rect.y * k,
+                rect.w * k,
+                rect.h * k,
+                p.accent,
+                2.0 * k,
             );
         }
     }
@@ -2200,7 +2473,11 @@ fn main() {
     let picked = config.theme == Some(config::Theme::Pixel);
     let hotkeys = load_hotkeys();
     let start = settings_ui::Section::from_env();
-    let rows = settings_ui::rows_for(start, &config, &hotkeys, 0);
+    let wallpaper = settings_ui::Wallpaper {
+        files: load_wallpapers(),
+        ..settings_ui::Wallpaper::default()
+    };
+    let rows = settings_ui::rows_for_state(start, &config, &hotkeys, 0, &wallpaper);
     let mut app = SettingsApp {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -2219,6 +2496,7 @@ fn main() {
         config,
         hotkeys,
         hotkey_scroll: 0,
+        wallpaper,
         nav: Nav::new(start),
         picked: None,
         status: "Готово".to_string(),

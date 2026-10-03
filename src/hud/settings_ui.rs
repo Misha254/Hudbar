@@ -52,9 +52,10 @@ impl Section {
         Section::ALL[index.min(Section::ALL.len() - 1)]
     }
 
-    /// Готов ли раздел: у незаконченных показывается заглушка.
+    /// Готов ли раздел: заглушек не осталось, но проверка остаётся явной,
+    /// чтобы новый недоработанный раздел не выглядел готовым молча.
     pub fn is_ready(self) -> bool {
-        !matches!(self, Section::Wallpaper)
+        Section::ALL.contains(&self)
     }
 
     /// Раздел, с которого окно открывается. `HUD_SETTINGS_SECTION=panel`
@@ -326,6 +327,11 @@ pub enum Control {
     NotificationPosition(NotificationPosition),
     /// Переход в другой раздел из «Обзора».
     Goto(Section),
+    /// Выбор файла обоев по индексу в списке: имя хранит окно, а не Control,
+    /// иначе Control перестал бы быть `Copy`.
+    WallpaperFile(usize),
+    Scheme(usize),
+    WallpaperApply,
     Language,
     Close,
 }
@@ -370,7 +376,12 @@ pub const fn hints(section: Section) -> [&'static str; 4] {
             "Esc закрыть",
         ],
         Section::Controls => ["PgUp/PgDn страницы", "← сайдбар", "Esc закрыть", ""],
-        Section::Wallpaper => ["←↑→ выбрать", "Space применить", "← сайдбар", "Esc закрыть"],
+        Section::Wallpaper => [
+            "PgUp/PgDn файлы",
+            "←↑→ выбрать",
+            "Space применить",
+            "Esc закрыть",
+        ],
     }
 }
 
@@ -415,6 +426,25 @@ pub enum Row {
         module: Module,
         line: usize,
         dir: i32,
+        rect: Rect,
+    },
+    /// Файл обоев в списке. Имя хранится здесь, а в `Control` — только индекс,
+    /// чтобы `Control` оставался `Copy`.
+    WallpaperFile {
+        name: String,
+        index: usize,
+        rect: Rect,
+        selected: bool,
+    },
+    /// Схема matugen: та же строка, что и файл обоев.
+    Scheme {
+        name: &'static str,
+        index: usize,
+        rect: Rect,
+        selected: bool,
+    },
+    /// Кнопка «Применить»: только она запускает `wall.sh --set`.
+    WallpaperApply {
         rect: Rect,
     },
     /// Подпись «Высота панели» и её шкала: не кликаются, кликают кнопки.
@@ -486,8 +516,11 @@ impl Row {
             | Row::NotificationPosition { rect, .. }
             | Row::Summary { rect, .. }
             | Row::Hotkey { rect, .. }
+            | Row::WallpaperFile { rect, .. }
+            | Row::Scheme { rect, .. }
             | Row::Language { rect }
-            | Row::Close { rect } => Some(*rect),
+            | Row::WallpaperApply { rect } => Some(*rect),
+            Row::Close { rect } => Some(*rect),
             Row::Move { rect, .. } => Some(*rect),
             Row::ModuleRow { rect, .. } => Some(*rect),
             _ => None,
@@ -511,6 +544,9 @@ impl Row {
             Row::Summary { section, .. } => Some(Control::Goto(*section)),
             Row::Language { .. } => Some(Control::Language),
             Row::Close { .. } => Some(Control::Close),
+            Row::WallpaperFile { index, .. } => Some(Control::WallpaperFile(*index)),
+            Row::Scheme { index, .. } => Some(Control::Scheme(*index)),
+            Row::WallpaperApply { .. } => Some(Control::WallpaperApply),
             Row::Hotkey { .. } => None,
             _ => None,
         }
@@ -616,6 +652,61 @@ const NOTIFY_LINE_Y: f32 = 268.0;
 const NOTIFY_POSITION_RULE_Y: f32 = 332.0;
 const NOTIFY_POSITION_HEADER_Y: f32 = 362.0;
 const NOTIFY_POSITION_Y: f32 = 386.0;
+
+// Раздел «Обои»: список файлов, схемы matugen и кнопка применения.
+const WALLPAPER_FILE_HEADER_Y: f32 = 132.0;
+const WALLPAPER_FILE_Y: f32 = 156.0;
+const WALLPAPER_FILE_ROWS: usize = 6;
+const WALLPAPER_SCHEME_HEADER_Y: f32 = 392.0;
+const WALLPAPER_SCHEME_Y: f32 = 414.0;
+// Схемы в три колонки: десять схем занимают четыре ряда и не наезжают
+// на кнопку «Применить».
+const WALLPAPER_SCHEME_COLUMNS: usize = 3;
+const WALLPAPER_APPLY_HEADER_Y: f32 = 578.0;
+const WALLPAPER_APPLY_Y: f32 = 600.0;
+/// Схемы matugen: тот же список, что в `wall.sh`.
+pub const SCHEMES: [&str; 10] = [
+    "scheme-tonal-spot",
+    "scheme-expressive",
+    "scheme-fidelity",
+    "scheme-fruit-salad",
+    "scheme-monochrome",
+    "scheme-neutral",
+    "scheme-rainbow",
+    "scheme-content",
+    "scheme-vibrant",
+    "scheme-smart",
+];
+
+/// Строка файла обоев в списке.
+pub fn wallpaper_file_rect(index: usize) -> Rect {
+    Rect::new(
+        PAD_X,
+        WALLPAPER_FILE_Y + (index % WALLPAPER_FILE_ROWS) as f32 * (ROW_H + 4.0),
+        WIDTH - PAD_X - PAD_R,
+        ROW_H,
+    )
+}
+
+/// Сколько файлов обоев помещается в список без прокрутки.
+pub const WALLPAPER_FILES: usize = WALLPAPER_FILE_ROWS;
+
+/// Схема matugen: две колонки.
+pub fn scheme_rect(index: usize) -> Rect {
+    let width = (WIDTH - PAD_X - PAD_R - COL_GAP * (WALLPAPER_SCHEME_COLUMNS - 1) as f32)
+        / WALLPAPER_SCHEME_COLUMNS as f32;
+    Rect::new(
+        PAD_X + (index % WALLPAPER_SCHEME_COLUMNS) as f32 * (width + COL_GAP),
+        WALLPAPER_SCHEME_Y + (index / WALLPAPER_SCHEME_COLUMNS) as f32 * (ROW_H + 4.0),
+        width,
+        ROW_H,
+    )
+}
+
+/// Кнопка «Применить»: только она запускает wall.sh.
+pub fn wallpaper_apply_rect() -> Rect {
+    Rect::new(PAD_X, WALLPAPER_APPLY_Y, 260.0, ROW_H + 4.0)
+}
 
 // Раздел «Управление»: список горячих клавиш из niri, только чтение.
 // Биндов больше сотни, поэтому список идёт в две колонки и листается.
@@ -1013,6 +1104,23 @@ pub fn rows_for(
     hotkeys: &[Hotkey],
     hotkey_scroll: usize,
 ) -> Vec<Row> {
+    rows_for_state(
+        section,
+        config,
+        hotkeys,
+        hotkey_scroll,
+        &Wallpaper::default(),
+    )
+}
+
+/// Полная раскладка с состоянием раздела «Обои»: файлы, схема и выбор.
+pub fn rows_for_state(
+    section: Section,
+    config: &Config,
+    hotkeys: &[Hotkey],
+    hotkey_scroll: usize,
+    wallpaper: &Wallpaper,
+) -> Vec<Row> {
     let mut rows = nav_rows();
     rows.push(Row::Header {
         text: section.title(),
@@ -1024,11 +1132,7 @@ pub fn rows_for(
         Section::Appearance => rows.extend(appearance_rows()),
         Section::Notifications => rows.extend(notification_rows()),
         Section::Controls => rows.extend(controls_rows(hotkeys, hotkey_scroll)),
-        Section::Wallpaper => rows.push(Row::Stub {
-            title: section.label(),
-            note: section.stub_note(),
-            y: STUB_Y,
-        }),
+        Section::Wallpaper => rows.extend(wallpaper_rows(wallpaper)),
     }
     rows.push(Row::Status { y: STATUS_Y });
     rows.push(Row::Footer { y: FOOTER_Y });
@@ -1233,9 +1337,69 @@ fn controls_rows(hotkeys: &[Hotkey], scroll: usize) -> Vec<Row> {
     rows
 }
 
-/// Раздел «Обои»: заглушка до Block C.
-#[allow(dead_code)]
-fn wallpaper_rows_removed() {}
+/// Состояние раздела «Обои»: список файлов, выбранная схема и прокрутка.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Wallpaper {
+    /// Файлы обоев, которые видны сейчас (окно листает список сам).
+    pub files: Vec<String>,
+    /// Индекс выбранного файла в `files`.
+    pub selected: usize,
+    /// Смещение списка файлов, когда их больше, чем помещается.
+    pub scroll: usize,
+    /// Индекс выбранной схемы в `SCHEMES`.
+    pub scheme: usize,
+}
+
+/// Раздел «Обои»: список файлов, схемы matugen и кнопка «Применить».
+/// Ничего не применяется само: только кнопка запускает `wall.sh --set`.
+fn wallpaper_rows(state: &Wallpaper) -> Vec<Row> {
+    let mut rows = vec![Row::Header {
+        text: "Файл обоев",
+        y: WALLPAPER_FILE_HEADER_Y,
+    }];
+    if state.files.is_empty() {
+        rows.push(Row::Stub {
+            title: "Ничего не найдено",
+            note: "~/wallpapers пуст",
+            y: WALLPAPER_FILE_Y,
+        });
+    }
+    for (offset, name) in state
+        .files
+        .iter()
+        .skip(state.scroll)
+        .take(WALLPAPER_FILES)
+        .enumerate()
+    {
+        let index = state.scroll + offset;
+        rows.push(Row::WallpaperFile {
+            name: name.clone(),
+            index,
+            rect: wallpaper_file_rect(offset),
+            selected: index == state.selected,
+        });
+    }
+    rows.push(Row::Header {
+        text: "Схема matugen",
+        y: WALLPAPER_SCHEME_HEADER_Y,
+    });
+    for (index, name) in SCHEMES.iter().enumerate() {
+        rows.push(Row::Scheme {
+            name,
+            index,
+            rect: scheme_rect(index),
+            selected: index == state.scheme,
+        });
+    }
+    rows.push(Row::Header {
+        text: "Применение",
+        y: WALLPAPER_APPLY_HEADER_Y,
+    });
+    rows.push(Row::WallpaperApply {
+        rect: wallpaper_apply_rect(),
+    });
+    rows
+}
 
 /// Пункты сайдбара. Рисование, hit-test и отладка берут один `nav_rect`.
 fn nav_rows() -> Vec<Row> {
@@ -1346,6 +1510,154 @@ mod tests {
 
     /// Выбранный угол должен отличаться от остальных и попадать в угол,
     /// назначенный в `settings.json`.
+    /// Прокрутка не должна уводить список за его конец и не прячет выбранное.
+    #[test]
+    fn wallpaper_scroll_stays_inside_the_list() {
+        let count = WALLPAPER_FILES * 2 + 5;
+        let mut state = Wallpaper {
+            files: (0..count).map(|n| format!("/w/{n}.jpg")).collect(),
+            selected: count - 1,
+            scroll: 0,
+            scheme: 0,
+        };
+
+        // Вперёд до упора.
+        for _ in 0..10 {
+            state.scroll = (state.scroll + WALLPAPER_FILES).min(count - WALLPAPER_FILES);
+        }
+        assert_eq!(
+            state.scroll,
+            count - WALLPAPER_FILES,
+            "scroll не вышел за конец"
+        );
+
+        // Назад до нуля.
+        for _ in 0..10 {
+            state.scroll = state.scroll.saturating_sub(WALLPAPER_FILES);
+        }
+        assert_eq!(state.scroll, 0, "scroll не ушёл в минус");
+    }
+
+    #[test]
+    fn wallpaper_section_lists_ten_schemes_and_one_apply_button() {
+        let state = Wallpaper {
+            files: (0..20)
+                .map(|n| format!("/home/mihail/wallpapers/nature/{n}.jpg"))
+                .collect(),
+            selected: 3,
+            scroll: 0,
+            scheme: 2,
+        };
+        let rows = rows_for_state(Section::Wallpaper, &Config::default(), &[], 0, &state);
+
+        let schemes: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Scheme { name, .. } => Some(*name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(schemes.len(), 10, "десять схем matugen");
+        assert_eq!(schemes[0], "scheme-tonal-spot");
+        assert_eq!(schemes[9], "scheme-smart");
+
+        assert_eq!(
+            rows.iter()
+                .filter(|row| matches!(row, Row::WallpaperApply { .. }))
+                .count(),
+            1,
+            "применение запускается только одной кнопкой"
+        );
+
+        // Видна только страница файлов, выбранный отмечен.
+        let files: Vec<(usize, bool)> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::WallpaperFile {
+                    index, selected, ..
+                } => Some((*index, *selected)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(files.len(), WALLPAPER_FILES, "список не длиннее экрана");
+        assert!(
+            files
+                .iter()
+                .any(|(index, selected)| *index == 3 && *selected)
+        );
+        assert_eq!(
+            files.iter().filter(|(_, selected)| *selected).count(),
+            1,
+            "выбран ровно один файл"
+        );
+    }
+
+    #[test]
+    fn wallpaper_rows_fit_the_content_area_and_never_overlap() {
+        let state = Wallpaper {
+            files: (0..WALLPAPER_FILES)
+                .map(|n| format!("/w/{n}.jpg"))
+                .collect(),
+            selected: 0,
+            scroll: 0,
+            scheme: 0,
+        };
+        let rows = rows_for_state(Section::Wallpaper, &Config::default(), &[], 0, &state);
+
+        let mut rects: Vec<Rect> = rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row,
+                    Row::WallpaperFile { .. } | Row::Scheme { .. } | Row::WallpaperApply { .. }
+                )
+            })
+            .filter_map(Row::rect)
+            .collect();
+        assert!(!rects.is_empty());
+        for rect in &rects {
+            assert!(
+                rect.x >= PAD_X - 0.5 && rect.right() <= WIDTH - PAD_R + 0.5,
+                "строка обоев вылезла за контент: {rect:?}"
+            );
+            assert!(
+                rect.bottom() <= STATUS_Y + 0.5,
+                "строка обоев налезает на статус: {rect:?}"
+            );
+        }
+        for (index, a) in rects.iter().enumerate() {
+            for b in rects.iter().skip(index + 1) {
+                let overlap =
+                    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom();
+                assert!(!overlap, "строки обоев пересеклись: {a:?} и {b:?}");
+            }
+        }
+        rects.clear();
+    }
+
+    #[test]
+    fn wallpaper_scroll_walks_the_file_list_without_running_past_the_edges() {
+        let count = WALLPAPER_FILES * 2 + 5;
+        let mut state = Wallpaper {
+            files: (0..count).map(|n| format!("/w/{n}.jpg")).collect(),
+            selected: 0,
+            scroll: 0,
+            scheme: 0,
+        };
+        // Последний полный экран: файл под последней строкой виден целиком.
+        state.scroll = count - WALLPAPER_FILES;
+        let rows = rows_for_state(Section::Wallpaper, &Config::default(), &[], 0, &state);
+        let last = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::WallpaperFile { index, .. } => Some(*index),
+                _ => None,
+            })
+            .max()
+            .expect("есть файлы");
+        assert_eq!(last, count - 1, "последний файл должен быть виден");
+    }
+
     #[test]
     fn notification_corner_mark_matches_the_configured_position() {
         for position in NotificationPosition::ALL {
