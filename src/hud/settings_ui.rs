@@ -58,17 +58,37 @@ impl Section {
         Section::ALL.contains(&self)
     }
 
+    /// Раздел по короткому имени: `"panel"`, `"wallpaper"` и так далее.
+    /// Тот же список ключей, что у `HUD_SETTINGS_SECTION`.
+    pub fn from_key(key: &str) -> Option<Section> {
+        match key {
+            "overview" => Some(Section::Overview),
+            "panel" => Some(Section::Panel),
+            "appearance" => Some(Section::Appearance),
+            "notifications" => Some(Section::Notifications),
+            "controls" => Some(Section::Controls),
+            "wallpaper" => Some(Section::Wallpaper),
+            _ => None,
+        }
+    }
+
+    /// Короткое имя раздела: для переменных окружения и снимков.
+    pub fn key(self) -> &'static str {
+        match self {
+            Section::Overview => "overview",
+            Section::Panel => "panel",
+            Section::Appearance => "appearance",
+            Section::Notifications => "notifications",
+            Section::Controls => "controls",
+            Section::Wallpaper => "wallpaper",
+        }
+    }
+
     /// Раздел, с которого окно открывается. `HUD_SETTINGS_SECTION=panel`
     /// нужно для снимков и проверок: без ручной раскладки по клавишам.
     pub fn from_env() -> Section {
-        match std::env::var("HUD_SETTINGS_SECTION").as_deref() {
-            Ok("panel") => Section::Panel,
-            Ok("appearance") => Section::Appearance,
-            Ok("notifications") => Section::Notifications,
-            Ok("controls") => Section::Controls,
-            Ok("wallpaper") => Section::Wallpaper,
-            _ => Section::Overview,
-        }
+        Section::from_key(&std::env::var("HUD_SETTINGS_SECTION").unwrap_or_default())
+            .unwrap_or(Section::Overview)
     }
 
     /// Подпись заглушки для ещё не сделанных разделов.
@@ -1643,6 +1663,24 @@ mod tests {
 
     fn controls_of(rows: &[Row]) -> Vec<Control> {
         controls(rows)
+    }
+
+    /// Короткое имя раздела и разбор по нему ходят парой: у окна это
+    /// `HUD_SETTINGS_SECTION`, у снимков — аргумент команды.
+    #[test]
+    fn section_key_round_trip() {
+        for section in Section::ALL {
+            assert_eq!(Section::from_key(section.key()), Some(section));
+        }
+        assert_eq!(Section::from_key("overview"), Some(Section::Overview));
+        assert_eq!(Section::from_key("нет такого"), None);
+        assert_eq!(Section::from_key(""), None);
+        // Неизвестное значение по-прежнему открывает «Обзор», а не паникует.
+        assert_eq!(
+            Section::from_env(),
+            Section::Overview,
+            "пустая переменная окружения должна давать «Обзор»"
+        );
     }
 
     /// Выбранный угол должен отличаться от остальных и попадать в угол,

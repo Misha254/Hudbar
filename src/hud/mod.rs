@@ -15,7 +15,17 @@ pub mod dunst;
 pub mod log;
 pub mod palette;
 pub mod settings;
-// Рекурсивный список файлов обоев из ~/wallpapers; окно подключит его.
+// Снимки окна настроек в PNG без Wayland.
+#[allow(dead_code)]
+pub mod settings_snapshot;
+// Отрисовка окна: трейты View/DrawExt, общие для живого окна и снапшота.
+#[allow(dead_code)]
+pub mod settings_ui;
+#[allow(dead_code)]
+pub mod settings_view;
+// Текст окна настроек: измерение глифов и центрирование подписей.
+#[allow(dead_code)]
+pub mod text;
 pub mod tray;
 #[allow(dead_code)]
 pub mod wallpaper;
