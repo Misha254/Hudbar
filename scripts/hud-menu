@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Переключатель окна меню HUDbar: если окно открыто — закрывает, если нет —
+# запускает. Приём тот же, что у hud-settings и hud-keybinds: найти окно и
+# либо закрыть его, либо поднять новое.
+#
+# Окно появится в M4. До этого `hud-menu-rs` умеет только снимки, поэтому
+# нажатие бинда ничего не покажет — скрипт при этом не падает.
+set -euo pipefail
+
+bin="${HUDBAR_BIN_DIR:-$HOME/.local/bin}/hud-menu-rs"
+
+find_window_id() {
+    niri msg -j windows 2>/dev/null | python3 -c '
+import json, sys
+try:
+    windows = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.exit(0)
+for window in windows:
+    # По app_id, а не по заголовку: заголовок переводится и меняется,
+    # идентификатор приложения остаётся.
+    if window.get("app_id") == "hud-menu-rs":
+        print(window["id"])
+        break
+' || true
+}
+
+window_id=$(find_window_id)
+if [[ -n "$window_id" ]]; then
+    niri msg action close-window --id "$window_id" >/dev/null 2>&1 || true
+    exit 0
+fi
+
+exec setsid -f "$bin"
