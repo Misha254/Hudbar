@@ -79,6 +79,10 @@ pub const VALUE_W: f32 = 168.0;
 pub const CHEVRON_W: f32 = 16.0;
 /// Плотность затемнения вокруг карточки.
 pub const SCRIM: f32 = 0.72;
+/// Прозрачность фона карточки в живом окне. Слой размывают правилом niri, и
+/// сквозь полупрозрачную карточку видно, что именно размывается. Снимки
+/// затемнение рисуют целиком, поэтому берут единицу.
+pub const CARD_ALPHA: f32 = 0.94;
 
 /// Режим ли поиск: в нём строки двухстрочные и выше. Флаг один, а не вывод
 /// из `caption`: путь есть только у найденной строки, а режим задаёт запрос.
@@ -154,6 +158,45 @@ pub fn marker_rect(row: Rect) -> Rect {
 pub fn center_band(rect: Rect, height: f32) -> Rect {
     let height = height.min(rect.h);
     Rect::new(rect.x, rect.y + (rect.h - height) / 2.0, rect.w, height)
+}
+
+/// Какая строка под указателем. Возвращает индекс в `Frame::items`, а не
+/// номер видимой строки: с прокруткой они разойдутся, и клик уедет.
+pub fn row_at(frame: &Frame, card: Rect, x: f32, y: f32) -> Option<usize> {
+    let row_h = row_height(search_mode(frame));
+    let list = Rect::new(card.x, card.y + HEADER_H, card.w, rows_shown(frame.items.len()) as f32 * row_h);
+    if x < card.x || x > card.right() || y < list.y || y >= list.bottom() {
+        return None;
+    }
+    let visible = ((y - list.y) / row_h).floor() as usize;
+    let absolute = frame.top + visible;
+    (absolute < frame.items.len()).then_some(absolute)
+}
+
+/// Делает пиксели карточки полупрозрачными. Буфер premultiplied, поэтому
+/// домножаются все четыре канала: цвета уже «внутри» альфы.
+pub fn apply_card_alpha(pixmap: &mut tiny_skia::Pixmap, card: Rect, alpha: f32) {
+    let factor = (alpha.clamp(0.0, 1.0) * 255.0) as u32;
+    let width = pixmap.width() as i32;
+    let height = pixmap.height() as i32;
+    let x0 = (card.x * SCALE).floor() as i32;
+    let y0 = (card.y * SCALE).floor() as i32;
+    let x1 = (card.right() * SCALE).ceil() as i32;
+    let y1 = (card.bottom() * SCALE).ceil() as i32;
+    let pixels = pixmap.pixels_mut();
+    for y in y0.max(0)..y1.min(height) {
+        for x in x0.max(0)..x1.min(width) {
+            let pixel = &mut pixels[y as usize * width as usize + x as usize];
+            if let Some(scaled) = tiny_skia::PremultipliedColorU8::from_rgba(
+                (pixel.red() as u32 * factor / 255) as u8,
+                (pixel.green() as u32 * factor / 255) as u8,
+                (pixel.blue() as u32 * factor / 255) as u8,
+                (pixel.alpha() as u32 * factor / 255) as u8,
+            ) {
+                *pixel = scaled;
+            }
+        }
+    }
 }
 
 /// Прямоугольник карточки по центру кадра. Затемнение рисуется по всему
@@ -263,19 +306,40 @@ impl<'a> MenuView<'a> {
     }
 }
 
-/// Рисует меню целиком и возвращает прямоугольник карточки.
+/// Рисует меню целиком и возвращает прямоугольник карточки. Кадр снимка:
+/// сначала затемнение, потом карточка по центру.
 pub fn render(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
     let surface = Rect::new(0.0, 0.0, frame_w(view), frame_h(view));
     let search = search_mode(frame);
     let rows = rows_shown(frame.items.len());
-    let row_h = row_height(search);
     let card = card_rect(surface.w, surface.h, rows, search);
     view.scrim(surface.w, surface.h);
+    paint(view, card, frame);
+    card
+}
+
+/// Рисует меню в окне, где буфер равен самой карточке. Затемнения здесь нет:
+/// под меню должны быть видны терминал и обои, размытие показывает
+/// правило слоя. Прозрачность карточки задаёт вызывающий через
+/// `apply_card_alpha`.
+pub fn render_window(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
+    let search = search_mode(frame);
+    let rows = rows_shown(frame.items.len());
+    let card = Rect::new(0.0, 0.0, CARD_W, card_height_for(rows, search));
     view.card(card);
+    paint(view, card, frame);
+    card
+}
+
+/// Содержимое карточки: шапка, строки, подвал. Общая часть для снимка и окна —
+/// расхождение только в фоне вокруг.
+fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
+    let search = search_mode(frame);
+    let rows = rows_shown(frame.items.len());
+    let row_h = row_height(search);
     header(view, card, frame);
     rows_view(view, card, frame, rows, row_h);
     footer(view, card, frame);
-    card
 }
 
 /// Ширина кадра: логические пиксели из буфера.
@@ -986,6 +1050,88 @@ mod tests {
         frame.query.clear();
         assert!(!search_mode(&frame));
     }
+
+    #[test]
+    fn row_hit_test_maps_a_point_to_an_item() {
+        let frame = Frame {
+            trail: vec!["HUD".to_string()],
+            items: (0..6)
+                .map(|index| super::super::item::Item {
+                    icon: "",
+                    title: format!("Пункт {index}"),
+                    value: String::new(),
+                    caption: None,
+                    kind: super::super::item::ItemKind::Leaf,
+                    origin: super::super::item::Origin { depth: 0, index },
+                })
+                .collect(),
+            selected: 0,
+            top: 2,
+            query: String::new(),
+            total: 6,
+            status: None,
+        };
+        let card = card_rect(1200.0, 800.0, 4, false);
+        let list_y = card.y + HEADER_H;
+        // Второй видимый пункт при top=2 — это items[3].
+        let inside = row_at(&frame, card, card.x + 40.0, list_y + ROW_H * 1.5);
+        assert_eq!(inside, Some(3), "top=2 сдвигает видимую часть");
+        assert_eq!(row_at(&frame, card, card.x + 40.0, list_y - 1.0), None);
+        assert_eq!(
+            row_at(&frame, card, card.x + 40.0, card.bottom() - 10.0),
+            None,
+            "подвал не строка"
+        );
+        assert_eq!(row_at(&frame, card, card.x - 5.0, list_y + 10.0), None);
+    }
+
+    #[test]
+    fn hit_test_uses_the_search_row_height() {
+        let frame = Frame {
+            trail: vec!["HUD".to_string()],
+            items: (0..3)
+                .map(|index| super::super::item::Item {
+                    icon: "",
+                    title: format!("Пункт {index}"),
+                    value: String::new(),
+                    caption: None,
+                    kind: super::super::item::ItemKind::Leaf,
+                    origin: super::super::item::Origin { depth: 0, index },
+                })
+                .collect(),
+            selected: 0,
+            top: 0,
+            query: "x".to_string(),
+            total: 3,
+            status: None,
+        };
+        let card = card_rect(1200.0, 800.0, 5, true);
+        let list_y = card.y + HEADER_H;
+        assert_eq!(
+            row_at(&frame, card, card.x + 10.0, list_y + 10.0),
+            Some(0)
+        );
+        // На обычной высоте строки эта точка была бы за пределами списка.
+        let plain = card_rect(1200.0, 800.0, 5, false);
+        let plain_list = plain.y + HEADER_H;
+        assert_eq!(
+            row_at(
+                &Frame { query: String::new(), ..frame.clone() },
+                plain,
+                card.x + 10.0,
+                plain_list + ROW_H_SEARCH + 10.0
+            ),
+            Some(1),
+            "высота строки поиска больше — точка попадает в следующую строку"
+        );
+    }
+
+    /// Полупрозрачность карточки объявлена константой, поэтому и проверка
+    /// должна быть константной — иначе она ничего не проверяла бы.
+    const _: () = assert!(
+        CARD_ALPHA > 0.8 && CARD_ALPHA < 1.0,
+        "полупрозрачность карточки должна быть лёгкой"
+    );
 
     #[test]
     fn failed_status_is_marked() {

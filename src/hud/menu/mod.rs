@@ -13,6 +13,10 @@
 #[allow(dead_code)]
 pub mod action;
 #[allow(dead_code)]
+pub mod input;
+#[allow(dead_code)]
+pub mod instance;
+#[allow(dead_code)]
 pub mod item;
 #[allow(dead_code)]
 pub mod snapshot;
@@ -328,6 +332,47 @@ pub fn demo_tree() -> Vec<Node> {
 /// Меню на тестовом дереве.
 pub fn demo_menu() -> Menu {
     Menu::new(demo_tree())
+}
+
+/// Разделы корня и их идентификаторы для прямого входа: `hud-menu style`.
+/// Идентификатор английский, чтобы набирать его было не только в русской
+/// раскладке.
+pub const SECTIONS: [(&str, &str); 8] = [
+    ("apps", "Приложения"),
+    ("panel", "Панель"),
+    ("style", "Стиль"),
+    ("notifications", "Уведомления"),
+    ("capture", "Захват"),
+    ("keybinds", "Бинды"),
+    ("system", "Система"),
+    ("about", "О программе"),
+];
+
+/// Заголовок раздела по идентификатору.
+pub fn section_title(id: &str) -> Option<&'static str> {
+    SECTIONS
+        .iter()
+        .find(|(key, _)| *key == id)
+        .map(|(_, title)| *title)
+}
+
+/// Открывает раздел сразу при старте. Возвращает `true`, если раздел найден:
+/// неизвестный идентификатор должен открывать корень, а не пустой уровень.
+pub fn open_section(menu: &mut Menu, id: &str) -> bool {
+    let Some(title) = section_title(id) else {
+        return false;
+    };
+    let Some(index) = menu
+        .current()
+        .list
+        .items()
+        .iter()
+        .position(|item| item.title == title)
+    else {
+        return false;
+    };
+    menu.current_mut().list.select(index);
+    menu.enter() == state::Outcome::Pushed
 }
 
 #[cfg(test)]
