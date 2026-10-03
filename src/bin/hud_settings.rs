@@ -1066,14 +1066,6 @@ impl SettingsApp {
                         settings_ui::stub_rect(y + 34.0),
                         Align::Start,
                     );
-                    self.painter.paint(
-                        &mut pixmap,
-                        "Раздел в разработке",
-                        s.micro,
-                        p.accent,
-                        settings_ui::stub_rect(y + 72.0),
-                        Align::Start,
-                    );
                 }
                 Row::Theme { pixel, rect } => self.draw_theme_card(&mut pixmap, p, pixel, rect, s),
                 Row::Toggle { module, rect } => {
