@@ -970,34 +970,8 @@ impl SettingsApp {
                         Align::Start,
                     );
                 }
-                Row::ModuleRow {
-                    module,
-                    rect,
-                    switch,
-                    ..
-                } => {
-                    let control = Control::Switch(module);
-                    self.draw_toggle(
-                        &mut pixmap,
-                        p,
-                        rect,
-                        module.label(),
-                        self.config.module_enabled(module),
-                        self.hovered(control),
-                        self.focused(control),
-                        s,
-                    );
-                    // Keep hit-testing on the compact switch rectangle while
-                    // the complete row remains the visual focus target.
-                    stroke_rect(
-                        &mut pixmap,
-                        switch.x * k,
-                        switch.y * k,
-                        switch.w * k,
-                        switch.h * k,
-                        p.border.with_a(0.35),
-                        k,
-                    );
+                Row::ModuleRow { module, line, rect } => {
+                    self.draw_module_row(&mut pixmap, p, module, line, rect, s)
                 }
                 Row::Move {
                     module, dir, rect, ..
@@ -1243,6 +1217,85 @@ impl SettingsApp {
             Rect::new(rect.x + rect.w * 0.5, rect.y, rect.w * 0.5 - 12.0, rect.h),
             Align::End,
         );
+    }
+
+    /// Строка модуля в разделе «Панель»: название, переключатель вкл/выкл и
+    /// кнопки ▲▼ строго слева направо, без наложений и обрезки.
+    fn draw_module_row(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        module: Module,
+        line: usize,
+        rect: Rect,
+        s: Sizes,
+    ) {
+        let k = SCALE;
+        let control = Control::Switch(module);
+        let on = self.config.module_enabled(module);
+        let radius = if self.pixel_mode() { 0.0 } else { 6.0 * k };
+        if self.hovered(control) || self.focused(control) {
+            fill_round_rect(
+                pixmap,
+                rect.x * k,
+                rect.y * k,
+                rect.w * k,
+                rect.h * k,
+                radius,
+                p.idle_panel,
+            );
+        }
+
+        // 1. Название. Длинные вроде «Не беспокоить» умещаются целиком:
+        //    ширина полосы задана от содержимого колонки, а не наоборот.
+        let name = module.label();
+        self.painter.paint(
+            pixmap,
+            name,
+            s.micro,
+            if on { p.text } else { p.muted },
+            settings_ui::module_name_rect(module, line),
+            Align::Start,
+        );
+
+        // 2. Переключатель вкл/выкл.
+        let switch = settings_ui::module_switch_rect(module, line);
+        fill_round_rect(
+            pixmap,
+            switch.x * k,
+            switch.y * k,
+            switch.w * k,
+            switch.h * k,
+            switch.h / 2.0 * k,
+            if on { p.accent } else { p.border },
+        );
+        let knob = switch.h - 4.0;
+        let knob_x = if on {
+            switch.right() - knob - 2.0
+        } else {
+            switch.x + 2.0
+        };
+        fill_round_rect(
+            pixmap,
+            knob_x * k,
+            (switch.y + 2.0) * k,
+            knob * k,
+            knob * k,
+            knob / 2.0 * k,
+            if on { p.base } else { p.text.with_a(0.7) },
+        );
+
+        if self.focused(control) {
+            fill_rect(
+                pixmap,
+                rect.x * k,
+                (rect.y + 5.0) * k,
+                2.0 * k,
+                (rect.h - 10.0) * k,
+                p.accent,
+            );
+        }
+        let _ = radius;
     }
 
     /// Горячая клавиша из niri: сочетание слева, расшифровка справа. Строка

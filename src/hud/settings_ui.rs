@@ -350,6 +350,10 @@ impl Rect {
     pub fn right(&self) -> f32 {
         self.x + self.w
     }
+
+    pub fn bottom(&self) -> f32 {
+        self.y + self.h
+    }
 }
 
 /// Подсказки в подвале окна: показываются все, раскладываются равномерно.
@@ -391,12 +395,11 @@ pub enum Row {
         hint: &'static str,
         rect: Rect,
     },
-    /// Строка модуля в разделе «Панель»: переключатель и кнопки ▲▼.
+    /// Строка модуля в разделе «Панель»: название, переключатель и ▲▼.
     ModuleRow {
         module: Module,
         line: usize,
         rect: Rect,
-        switch: Rect,
     },
     /// Кнопка перестановки модуля внутри зоны: `dir` — −1 вверх, +1 вниз.
     Move {
@@ -482,8 +485,8 @@ impl Row {
             | Row::Hotkey { rect, .. }
             | Row::Language { rect }
             | Row::Close { rect } => Some(*rect),
-            Row::ModuleRow { switch, .. } => Some(*switch),
             Row::Move { rect, .. } => Some(*rect),
+            Row::ModuleRow { rect, .. } => Some(*rect),
             _ => None,
         }
     }
@@ -583,12 +586,17 @@ const ZONE_LABEL_Y: f32 = 160.0;
 const ZONE_LABEL_H: f32 = 22.0;
 /// Верх первой строки модуля.
 const ZONE_ROWS_Y: f32 = 188.0;
-/// Ширина колонки зоны: три зоны в ряд с промежутками.
-const ZONE_W: f32 = 336.0;
-const ZONE_GAP: f32 = 16.0;
+/// Промежуток между зонами.
+const ZONE_GAP: f32 = 12.0;
 /// Ширина кнопок ▲▼ у строки модуля.
-const MOVE_BTN_W: f32 = 34.0;
-const MOVE_BTN_H: f32 = 32.0;
+const MOVE_BTN_W: f32 = 26.0;
+const MOVE_BTN_H: f32 = 26.0;
+/// Промежуток между кнопками ▲ и ▼.
+const MOVE_BTN_GAP: f32 = 4.0;
+/// Ширина переключателя вкл/выкл.
+const MODULE_SWITCH_W: f32 = 34.0;
+/// Внутренние отступы полосы модуля слева и справа.
+const MODULE_PAD_X: f32 = 6.0;
 const RULE_HEIGHT_Y: f32 = 440.0;
 const HEIGHT_HEADER_Y: f32 = 470.0;
 const HEIGHT_ROW_Y: f32 = 490.0;
@@ -756,6 +764,12 @@ pub fn hotkey_rect(index: usize) -> Rect {
 
 const HOTKEY_COL_GAP: f32 = 16.0;
 
+/// Ширина колонки зоны: три равные колонки строго внутри области контента.
+/// Считается от `WIDTH`, иначе третья зона уезжает за правый край окна.
+pub fn zone_width() -> f32 {
+    (WIDTH - PAD_X - PAD_R - ZONE_GAP * 2.0) / 3.0
+}
+
 /// Индекс зоны в `Zone::ALL` — он же порядок колонок на панели «Панель».
 pub fn zone_column(zone: Zone) -> usize {
     Zone::ALL.iter().position(|item| *item == zone).unwrap_or(0)
@@ -781,12 +795,12 @@ pub fn zone_hint(zone: Zone) -> &'static str {
 
 /// Полоса подписи зоны: заголовок и пояснение под ним.
 pub fn zone_label_rect(zone: Zone) -> Rect {
-    Rect::new(zone_x(zone), ZONE_LABEL_Y, ZONE_W, ZONE_LABEL_H)
+    Rect::new(zone_x(zone), ZONE_LABEL_Y, zone_width(), ZONE_LABEL_H)
 }
 
 /// Левая граница колонки зоны.
 pub fn zone_x(zone: Zone) -> f32 {
-    PAD_X + zone_column(zone) as f32 * (ZONE_W + ZONE_GAP)
+    PAD_X + zone_column(zone) as f32 * (zone_width() + ZONE_GAP)
 }
 
 /// Строка модуля внутри зоны. `line` — позиция внутри своей зоны, а не
@@ -795,39 +809,55 @@ pub fn module_rect(zone: Zone, line: usize) -> Rect {
     Rect::new(
         zone_x(zone),
         ZONE_ROWS_Y + line as f32 * (ROW_H + ITEM_GAP),
-        ZONE_W,
+        zone_width(),
         ROW_H,
+    )
+}
+
+/// Место под названия модулей: всё, что осталось слева после переключателя
+/// и кнопок ▲▼.
+pub fn module_name_rect(module: Module, line: usize) -> Rect {
+    let row = module_rect(module.zone(), line);
+    let tail = move_buttons_width() + MODULE_SWITCH_W + MODULE_PAD_X * 3.0;
+    Rect::new(row.x + MODULE_PAD_X, row.y, (row.w - tail).max(40.0), row.h)
+}
+
+/// Ширина блока кнопок ▲▼ вместе с их полями.
+pub fn move_buttons_width() -> f32 {
+    if Module::ALL.iter().all(|module| module.movable()) {
+        MOVE_BTN_W * 2.0 + MOVE_BTN_GAP
+    } else {
+        MOVE_BTN_W * 2.0 + MOVE_BTN_GAP
+    }
+}
+
+/// Переключатель вкл/выкл: между названием и кнопками ▲▼.
+pub fn module_switch_rect(module: Module, line: usize) -> Rect {
+    let row = module_rect(module.zone(), line);
+    let buttons = move_buttons_width() + MODULE_PAD_X * 2.0;
+    Rect::new(
+        row.right() - buttons - MODULE_SWITCH_W,
+        row.y + (row.h - 16.0) / 2.0,
+        MODULE_SWITCH_W,
+        16.0,
     )
 }
 
 /// Кнопка перестановки ▲/▼ у строки модуля.
 pub fn move_rect(module: Module, line: usize, up: bool) -> Rect {
     let row = module_rect(module.zone(), line);
+    let top = row.y + (row.h - MOVE_BTN_H) / 2.0;
+    let block = MOVE_BTN_W * 2.0 + MOVE_BTN_GAP;
+    let left = row.right() - MODULE_PAD_X - block;
     Rect::new(
         if up {
-            row.right() - MOVE_BTN_W
+            left
         } else {
-            row.right() - MOVE_BTN_W * 2.0 - 6.0
+            left + MOVE_BTN_W + MOVE_BTN_GAP
         },
-        row.y + (ROW_H - MOVE_BTN_H) / 2.0,
+        top,
         MOVE_BTN_W,
         MOVE_BTN_H,
-    )
-}
-
-/// Где в строке живёт переключатель видимости: левая часть, кнопки ▲▼ — справа.
-pub fn switch_rect(module: Module, line: usize) -> Rect {
-    let row = module_rect(module.zone(), line);
-    let buttons = if module.movable() {
-        MOVE_BTN_W * 2.0 + 12.0
-    } else {
-        0.0
-    };
-    Rect::new(
-        row.x + 8.0,
-        row.y + 4.0,
-        (row.w - 16.0 - buttons).max(40.0),
-        ROW_H - 8.0,
     )
 }
 
@@ -1102,7 +1132,6 @@ fn panel_rows(config: &Config) -> Vec<Row> {
                 module,
                 line,
                 rect: module_rect(zone, line),
-                switch: switch_rect(module, line),
             });
             if module.movable() {
                 for dir in [-1, 1] {
@@ -1262,6 +1291,11 @@ pub fn neighbour(rows: &[Row], from: Control, dx: i32, dy: i32) -> Option<Contro
             }
             let step = if dy != 0 {
                 if same_column && (rect.x - from_rect.x).abs() > 1.0 {
+                    continue;
+                }
+                // Кнопки ▲▼ лежат в полосе своей строки: вертикальный шаг
+                // переходит между строками, а не по кнопкам текущей.
+                if rect.y >= from_rect.y - 1.0 && rect.y < from_rect.bottom() - 1.0 {
                     continue;
                 }
                 let diff = (rect.y - from_rect.y) as i32;
@@ -1425,44 +1459,119 @@ mod tests {
     }
 
     #[test]
-    fn panel_hit_test_separates_switch_and_move_buttons() {
+    fn panel_rows_fit_the_content_area_and_never_overlap() {
         let rows = rows_for(Section::Panel, &Config::default(), &[], 0);
-        let switch = rows
-            .iter()
-            .find_map(|row| match row {
-                Row::ModuleRow {
-                    module: Module::Clock,
-                    switch,
-                    ..
-                } => Some(*switch),
-                _ => None,
-            })
-            .expect("clock switch");
-        assert_eq!(
-            hit(&rows, switch.x + switch.w / 2.0, switch.y + switch.h / 2.0),
-            Some(Focus::Content(Control::Switch(Module::Clock)))
-        );
+        let left = PAD_X;
+        let right = WIDTH - PAD_R;
 
-        let move_button = rows
+        let mut rects: Vec<Rect> = Vec::new();
+        for row in &rows {
+            let (Some(rect), Some(control)) = (row.rect(), row.control()) else {
+                continue;
+            };
+            if matches!(
+                control,
+                Control::Nav(_) | Control::Goto(_) | Control::Close | Control::HeightSlider
+            ) {
+                continue;
+            }
+            assert!(
+                rect.x >= left - 0.5 && rect.right() <= right + 0.5,
+                "{control:?} выходит за область контента: {rect:?}"
+            );
+            assert!(
+                rect.y >= ZONE_LABEL_Y - 1.0,
+                "{control:?} начинается выше зон: {rect:?}"
+            );
+            assert!(
+                rect.y + rect.h <= STATUS_Y + 0.5,
+                "{control:?} налезает на строку статуса: {rect:?}"
+            );
+            rects.push(rect);
+        }
+
+        // Строка может содержать свои кнопки — это не наложение. Поэтому
+        // пересекаться не должны ни строки между собой, ни кнопки между собой.
+        let rows_only: Vec<Rect> = rows
             .iter()
-            .find_map(|row| match row {
-                Row::Move {
-                    module: Module::Clock,
-                    dir: -1,
-                    rect,
-                    ..
-                } => Some(*rect),
-                _ => None,
-            })
-            .expect("clock up button");
-        assert_eq!(
-            hit(
-                &rows,
-                move_button.x + move_button.w / 2.0,
-                move_button.y + move_button.h / 2.0
-            ),
-            Some(Focus::Content(Control::Move(Module::Clock, -1)))
+            .filter(|row| matches!(row, Row::ModuleRow { .. } | Row::ZoneLabel { .. }))
+            .filter_map(Row::rect)
+            .collect();
+        assert!(!rows_only.is_empty());
+        for (index, a) in rows_only.iter().enumerate() {
+            for b in rows_only.iter().skip(index + 1) {
+                let overlap =
+                    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom();
+                assert!(!overlap, "строки пересеклись: {a:?} и {b:?}");
+            }
+        }
+
+        let mut buttons: Vec<Rect> = Vec::new();
+        for row in &rows {
+            let Row::Move {
+                module, line, rect, ..
+            } = row
+            else {
+                continue;
+            };
+            let owner = module_rect(module.zone(), *line);
+            assert!(
+                rect.x >= owner.x - 0.5 && rect.right() <= owner.right() + 0.5,
+                "кнопка вылезла из своей строки: {rect:?} в {owner:?}"
+            );
+            buttons.push(*rect);
+        }
+        for (index, a) in buttons.iter().enumerate() {
+            for b in buttons.iter().skip(index + 1) {
+                let overlap =
+                    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom();
+                assert!(!overlap, "кнопки ▲▼ пересеклись: {a:?} и {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn module_row_orders_name_switch_and_move_buttons() {
+        for module in Module::ALL {
+            for line in 0..3 {
+                let row = module_rect(module.zone(), line);
+                let name = module_name_rect(module, line);
+                let switch = module_switch_rect(module, line);
+                let up = move_rect(module, line, true);
+                let down = move_rect(module, line, false);
+
+                assert!(
+                    name.x < switch.x,
+                    "название должно быть левее переключателя: {module:?}"
+                );
+                assert!(
+                    switch.right() <= up.x,
+                    "переключатель должен быть левее кнопок ▲▼: {module:?}"
+                );
+                assert!(up.right() + MOVE_BTN_GAP <= down.x, "▲ и ▼ наложились");
+                for rect in [name, switch, up, down] {
+                    assert!(rect.right() <= row.right() + 0.5, "{module:?}: {rect:?}");
+                    assert!(rect.x >= row.x - 0.5, "{module:?}: {rect:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_module_names_fit_the_name_area() {
+        // «Не беспокоить» — самое длинное название, оно обязано помещаться.
+        let name = module_name_rect(Module::Dnd, 0);
+        assert!(
+            name.w >= 120.0,
+            "под название осталось {} px — «Не беспокоить» не влезет",
+            name.w
         );
+        for zone in Zone::ALL {
+            assert!(
+                zone_label_rect(zone).right() <= WIDTH - PAD_R + 0.5,
+                "подпись зоны вылезла за окно: {zone:?}"
+            );
+        }
     }
 
     #[test]
@@ -1678,9 +1787,9 @@ mod tests {
             .find_map(|row| match row {
                 Row::ModuleRow {
                     module: Module::Weather,
-                    switch,
+                    rect,
                     ..
-                } => Some(*switch),
+                } => Some(*rect),
                 _ => None,
             })
             .expect("строка погоды");
