@@ -1265,16 +1265,23 @@ pub trait DrawExt: View {
                     );
                 }
                 Row::HeightLabel { .. } => self.draw_height_scale(pixmap, p, s),
-                Row::NotificationFont { dir, rect } => {
-                    let label = format!("Размер шрифта: {}", self.config().font_size);
+                Row::NotificationFont {
+                    dir,
+                    rect,
+                    label,
+                    value,
+                } => {
                     self.painter().paint(
                         pixmap,
-                        &label,
+                        "Размер шрифта",
                         s.label,
                         p.text,
-                        Rect::new(settings_ui::PAD_X, rect.y, 260.0, rect.h),
+                        label,
                         Align::Start,
                     );
+                    let number = self.config().font_size.to_string();
+                    self.painter()
+                        .paint(pixmap, &number, s.value, p.text, value, Align::Center);
                     self.draw_step(
                         pixmap,
                         p,
@@ -1286,16 +1293,23 @@ pub trait DrawExt: View {
                         s.value,
                     );
                 }
-                Row::NotificationLineHeight { dir, rect } => {
-                    let label = format!("Высота строки: {}", self.config().line_height);
+                Row::NotificationLineHeight {
+                    dir,
+                    rect,
+                    label,
+                    value,
+                } => {
                     self.painter().paint(
                         pixmap,
-                        &label,
+                        "Высота строки",
                         s.label,
                         p.text,
-                        Rect::new(settings_ui::PAD_X, rect.y, 260.0, rect.h),
+                        label,
                         Align::Start,
                     );
+                    let number = self.config().line_height.to_string();
+                    self.painter()
+                        .paint(pixmap, &number, s.value, p.text, value, Align::Center);
                     self.draw_step(
                         pixmap,
                         p,

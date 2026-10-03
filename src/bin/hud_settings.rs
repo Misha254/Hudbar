@@ -62,6 +62,9 @@ mod settings_view;
 #[path = "../hud/text.rs"]
 mod text;
 #[allow(dead_code)]
+#[path = "../hud/ui_layout.rs"]
+mod ui_layout;
+#[allow(dead_code)]
 #[path = "../hud/ui_tokens.rs"]
 mod ui_tokens;
 #[allow(dead_code)]

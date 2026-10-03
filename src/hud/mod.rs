@@ -27,6 +27,9 @@ pub mod settings_view;
 #[allow(dead_code)]
 pub mod text;
 pub mod tray;
+// Слой раскладки: вертикальный стек полос, без отрисовки.
+#[allow(dead_code)]
+pub mod ui_layout;
 #[allow(dead_code)]
 pub mod ui_tokens;
 #[allow(dead_code)]

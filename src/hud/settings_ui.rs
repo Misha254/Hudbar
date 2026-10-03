@@ -3,6 +3,9 @@
 
 use super::config::Config;
 pub use super::settings::{Language, Module, NotificationPosition, Zone};
+use super::ui_layout;
+use super::ui_tokens::SECTION_GAP;
+use super::ui_tokens::spacing;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -500,13 +503,20 @@ pub enum Row {
         dir: i32,
         rect: Rect,
     },
+    /// Степпер размера шрифта: `label` — подпись слева, `value` — число,
+    /// `rect` — сама кнопка. Все три прямоугольника пришли из `Layout`.
     NotificationFont {
         dir: i32,
         rect: Rect,
+        label: Rect,
+        value: Rect,
     },
+    /// Степпер высоты строки: те же три полосы, что и у размера шрифта.
     NotificationLineHeight {
         dir: i32,
         rect: Rect,
+        label: Rect,
+        value: Rect,
     },
     NotificationPosition {
         position: NotificationPosition,
@@ -624,11 +634,11 @@ pub const PAD_X: f32 = 280.0;
 pub const PAD_R: f32 = 24.0;
 /// Ширина одной колонки тумблеров и карточек оформления.
 pub const COL_W: f32 = 390.0;
-const COL_GAP: f32 = 16.0;
+pub const COL_GAP: f32 = 16.0;
 /// Высота строки модуля и кнопки: одинаковая для текста и контролов.
 pub const ROW_H: f32 = 32.0;
-const ITEM_GAP: f32 = 8.0;
-const STEP_W: f32 = 40.0;
+pub const ITEM_GAP: f32 = 8.0;
+pub const STEP_W: f32 = 40.0;
 
 /// Высота полосы заголовка секции.
 pub const HEADER_H: f32 = 22.0;
@@ -655,8 +665,8 @@ const RAIL_STATUS_STEP: f32 = 30.0;
 
 // Правая колонка. Каждая цифра — либо верх полосы, либо её высота; между
 // секциями явные зазоры.
-const HEADER_Y: f32 = 100.0;
-const CARD_Y: f32 = 132.0;
+pub const HEADER_Y: f32 = 100.0;
+pub const CARD_Y: f32 = 132.0;
 const CARD_H: f32 = 116.0;
 /// Полоса заголовка карточки: чекбокс, имя темы и метка «применено» — одна строка.
 const CARD_TITLE_Y: f32 = 150.0;
@@ -694,7 +704,7 @@ const CONTROL_BUTTON_Y: f32 = 420.0;
 const RULE_HEIGHT_Y: f32 = 476.0;
 const HEIGHT_HEADER_Y: f32 = 506.0;
 const HEIGHT_ROW_Y: f32 = 526.0;
-const HEIGHT_ROW_H: f32 = 40.0;
+pub const HEIGHT_ROW_H: f32 = 40.0;
 
 // Раздел «Внешний вид»: две карточки тем и переключатель языка.
 const LANGUAGE_RULE_Y: f32 = 276.0;
@@ -702,14 +712,6 @@ const LANGUAGE_HEADER_Y: f32 = 306.0;
 const LANGUAGE_Y: f32 = 328.0;
 
 // Раздел «Уведомления».
-const NOTIFY_HEADER_Y: f32 = 132.0;
-const NOTIFY_FONT_RULE_Y: f32 = 156.0;
-const NOTIFY_FONT_Y: f32 = 180.0;
-const NOTIFY_LINE_RULE_Y: f32 = 244.0;
-const NOTIFY_LINE_Y: f32 = 268.0;
-const NOTIFY_POSITION_RULE_Y: f32 = 332.0;
-const NOTIFY_POSITION_HEADER_Y: f32 = 362.0;
-const NOTIFY_POSITION_Y: f32 = 386.0;
 
 // Раздел «Обои»: список файлов, схемы matugen и кнопка применения.
 const WALLPAPER_FILE_HEADER_Y: f32 = 132.0;
@@ -782,8 +784,8 @@ const TRACK_W: f32 = 520.0;
 /// Заглушка для ещё не сделанных разделов.
 const STUB_Y: f32 = 300.0;
 
-const STATUS_Y: f32 = 676.0;
-const FOOTER_Y: f32 = 700.0;
+pub const STATUS_Y: f32 = 676.0;
+pub const FOOTER_Y: f32 = 700.0;
 const FOOTER_H: f32 = 26.0;
 
 /// Прямоугольник пункта навигации по его индексу в `Section::ALL`.
@@ -1030,24 +1032,41 @@ pub fn height_step_rect(dir: i32) -> Rect {
     )
 }
 
-pub fn notification_step_rect(y: f32, dir: i32) -> Rect {
-    Rect::new(
-        WIDTH - PAD_R - (if dir < 0 { STEP_W * 2.0 + 8.0 } else { STEP_W }),
-        y,
-        STEP_W,
-        HEIGHT_ROW_H,
-    )
+/// Полоса настройки: подпись слева, значение и кнопки степпера справа. Все
+/// прямоугольники считает `Layout`, вручную они не собираются.
+pub struct StepperRow {
+    pub label: Rect,
+    pub value: Rect,
+    pub minus: Rect,
+    pub plus: Rect,
 }
 
-pub fn notification_position_rect(index: usize) -> Rect {
-    let column = index % 2;
-    let row = index / 2;
-    Rect::new(
-        PAD_X + column as f32 * (COL_W + COL_GAP),
-        NOTIFY_POSITION_Y + row as f32 * (ROW_H + ITEM_GAP),
-        COL_W,
-        ROW_H,
-    )
+impl StepperRow {
+    /// Кнопка по направлению: `−` или `+`.
+    pub fn button(&self, dir: i32) -> Rect {
+        if dir < 0 { self.minus } else { self.plus }
+    }
+}
+
+/// Раскладка одной полосы-степпера внутри `area`.
+fn stepper_row(area: Rect) -> StepperRow {
+    let mut layout = ui_layout::Layout::new(area, 0.0);
+    let cells = layout.split(
+        &[
+            ui_layout::Width::Fill(1.0),
+            ui_layout::Width::Fixed(ui_layout::VALUE_W),
+            ui_layout::Width::Fixed(ui_layout::STEP_W),
+            ui_layout::Width::Fixed(ui_layout::STEP_W),
+        ],
+        ITEM_GAP,
+        ui_layout::SETTING_ROW_H,
+    );
+    StepperRow {
+        label: cells[0],
+        value: cells[1],
+        minus: cells[2],
+        plus: cells[3],
+    }
 }
 
 /// Прямоугольник значения высоты и подписи диапазона.
@@ -1120,13 +1139,10 @@ pub fn debug_rects() -> Vec<Rect> {
     rects.push(height_hint_rect());
     rects.push(height_step_rect(-1));
     rects.push(height_step_rect(1));
-    for position in NotificationPosition::ALL {
-        rects.push(notification_position_rect(
-            NotificationPosition::ALL
-                .iter()
-                .position(|item| *item == position)
-                .unwrap_or(0),
-        ));
+    for row in notification_rows() {
+        if let Some(rect) = row.rect() {
+            rects.push(rect);
+        }
     }
     rects
 }
@@ -1412,38 +1428,82 @@ fn appearance_rows(language: Language) -> Vec<Row> {
 }
 
 /// Раздел «Уведомления»: размер шрифта, высота строки и угол экрана.
+///
+/// Первый раздел на новом слое раскладки: вертикальный стек из секций, между
+/// ними `SECTION_GAP`, без разделительных линий. Прямоугольники считает
+/// `Layout`, поэтому порядок секций меняется перестановкой блоков, а не
+/// правкой чисел.
 fn notification_rows() -> Vec<Row> {
-    let mut rows = vec![Row::Header {
-        text: "Размер",
-        y: NOTIFY_HEADER_Y,
-    }];
-    rows.push(Row::Rule {
-        y: NOTIFY_FONT_RULE_Y,
-    });
+    let mut rows = Vec::new();
+    let mut layout = ui_layout::Layout::new(ui_layout::content_area(), SECTION_GAP);
+
+    // Секция «Шрифт»: подпись, значение и −/+ одной полосой. Зазор SECTION_GAP
+    // стоит перед заголовком секции, а под ним полоса идёт сразу: иначе
+    // заголовок слипался бы со своей полосой.
+    rows.push(section_header(&mut layout, "Шрифт"));
+    let font = stepper_row(section_area(&mut layout, ui_layout::SETTING_ROW_H));
     for dir in [-1, 1] {
         rows.push(Row::NotificationFont {
             dir,
-            rect: notification_step_rect(NOTIFY_FONT_Y, dir),
-        });
-        rows.push(Row::NotificationLineHeight {
-            dir,
-            rect: notification_step_rect(NOTIFY_LINE_Y, dir),
+            rect: font.button(dir),
+            label: font.label,
+            value: font.value,
         });
     }
-    rows.push(Row::Rule {
-        y: NOTIFY_POSITION_RULE_Y,
-    });
-    rows.push(Row::Header {
-        text: "Угол экрана",
-        y: NOTIFY_POSITION_HEADER_Y,
-    });
+
+    // Секция «Строка»: та же форма, другая настройка.
+    layout.gap(SECTION_GAP);
+    rows.push(section_header(&mut layout, "Строка"));
+    let line = stepper_row(section_area(&mut layout, ui_layout::SETTING_ROW_H));
+    for dir in [-1, 1] {
+        rows.push(Row::NotificationLineHeight {
+            dir,
+            rect: line.button(dir),
+            label: line.label,
+            value: line.value,
+        });
+    }
+
+    // Секция «Угол экрана»: четыре варианта сеткой 2x2.
+    layout.gap(SECTION_GAP);
+    rows.push(section_header(&mut layout, "Угол экрана"));
+    let mut corners = layout.columns(2, COL_GAP, ROW_H);
+    // Второй ряд сетки ближе к первому, чем соседние секции друг к другу.
+    layout.gap(spacing::SM);
+    corners.extend(layout.columns(2, COL_GAP, ROW_H));
     for (index, position) in NotificationPosition::ALL.into_iter().enumerate() {
         rows.push(Row::NotificationPosition {
             position,
-            rect: notification_position_rect(index),
+            rect: corners[index],
         });
     }
+    layout.gap(SECTION_GAP);
     rows
+}
+
+/// Заголовок секции: та же полоса стека, но подпись рисует сама строка.
+/// После заголовка зазор обнуляется — полоса секции идёт под ним вплотную.
+fn section_header(layout: &mut ui_layout::Layout, text: &'static str) -> Row {
+    let rect = layout.row(HEADER_H);
+    layout.gap(0.0);
+    Row::Header { text, y: rect.y }
+}
+
+/// Область очередной полосы секции: отступ сверху, затем сама полоса.
+fn section_area(layout: &mut ui_layout::Layout, height: f32) -> Rect {
+    let y = layout.cursor_y();
+    layout.row(height);
+    Rect::new(layout_left(layout), y, layout_width(layout), height)
+}
+
+/// Слева и ширина области контента: `Layout` держит их приватно, а секциям
+/// нужно собрать вложенный стек (степпер, сетка) на той же полосе.
+fn layout_left(layout: &ui_layout::Layout) -> f32 {
+    layout.area().x
+}
+
+fn layout_width(layout: &ui_layout::Layout) -> f32 {
+    layout.area().w
 }
 
 /// Раздел «Управление»: горячие клавиши из niri. Только чтение, листается
@@ -1663,6 +1723,103 @@ mod tests {
 
     fn controls_of(rows: &[Row]) -> Vec<Control> {
         controls(rows)
+    }
+
+    /// Инвариант раскладки для каждой секции и обеих тем: интерактивные
+    /// прямоугольники лежат внутри контента, не наезжают друг на друга и не
+    /// выходят за окно. Секции, ещё не переведённые на `Layout`, проверяются
+    /// на своих старых константах — падать тест должен только на новых
+    /// нарушениях.
+    #[test]
+    fn every_section_keeps_its_rows_inside_the_content_area() {
+        let area = ui_layout::content_area();
+        for section in Section::ALL {
+            for pixel in [false, true] {
+                let mut config = Config::default();
+                config.theme = Some(if pixel {
+                    super::super::config::Theme::Pixel
+                } else {
+                    super::super::config::Theme::Normal
+                });
+                let wallpaper = Wallpaper {
+                    files: (0..40).map(|n| format!("/w/{n}.jpg")).collect(),
+                    selected: Some(0),
+                    scroll: 0,
+                    scheme: 0,
+                };
+                let rows = rows_for_state(section, &config, &[], 0, &wallpaper);
+                let tag = format!("{section:?}/{}", if pixel { "pixel" } else { "normal" });
+
+                // Сравниваем по самим строкам, а не по `Control`: в «Обзоре»
+                // две сводки ведут в одну секцию, значение контрола совпадает,
+                // и сравнение по нему видело бы «пересечение» строки с собой.
+                let mut rects: Vec<(String, Rect)> = rows
+                    .iter()
+                    .filter(|row| {
+                        row.control().is_some_and(|control| {
+                            !matches!(control, Control::Nav(_) | Control::Close)
+                        })
+                    })
+                    .filter_map(|row| {
+                        let name = match row {
+                            Row::Summary { label, .. } => format!("Summary({label})"),
+                            Row::WallpaperFile { index, .. } => format!("WallpaperFile({index})"),
+                            Row::Scheme { index, .. } => format!("Scheme({index})"),
+                            other => format!("{other:?}"),
+                        };
+                        row.rect().map(|rect| (name, rect))
+                    })
+                    .collect();
+                // «Управление» — список биндов только для чтения, там нет
+                // ни одного интерактивного контрола, и это норма.
+                if section == Section::Controls {
+                    continue;
+                }
+                assert!(!rects.is_empty(), "{tag}: нет ни одного контрола");
+
+                for (name, rect) in &rects {
+                    assert!(
+                        rect.x >= area.x - 0.5 && rect.right() <= area.right() + 0.5,
+                        "{tag}: {name} вылез из контента по X: {rect:?}"
+                    );
+                    assert!(
+                        rect.y >= area.y - 0.5 && rect.bottom() <= area.bottom() + 0.5,
+                        "{tag}: {name} вылез из контента по Y: {rect:?}"
+                    );
+                    assert!(
+                        rect.right() <= WIDTH + 0.5 && rect.bottom() <= HEIGHT + 0.5,
+                        "{tag}: {name} вышел за окно: {rect:?}"
+                    );
+                }
+
+                // Пересекаться не должны два независимых элемента. Вложенность
+                // допустима: строка модуля и кнопки ▲▼ внутри неё, полоса
+                // высоты и её шкала — это один контрол, разбитый на части.
+                for (index, (name, rect)) in rects.iter().enumerate() {
+                    for (other, other_rect) in rects.iter().skip(index + 1) {
+                        let overlap = rect.x < other_rect.right()
+                            && other_rect.x < rect.right()
+                            && rect.y < other_rect.bottom()
+                            && other_rect.y < rect.bottom();
+                        if !overlap {
+                            continue;
+                        }
+                        let contains = |outer: Rect, inner: Rect| {
+                            inner.x >= outer.x - 0.5
+                                && inner.right() <= outer.right() + 0.5
+                                && inner.y >= outer.y - 0.5
+                                && inner.bottom() <= outer.bottom() + 0.5
+                        };
+                        assert!(
+                            contains(*rect, *other_rect) || contains(*other_rect, *rect),
+                            "{tag}: {name} и {other} пересеклись, не будучи вложенными: \
+                             {rect:?} и {other_rect:?}"
+                        );
+                    }
+                }
+                rects.clear();
+            }
+        }
     }
 
     /// Короткое имя раздела и разбор по нему ходят парой: у окна это
