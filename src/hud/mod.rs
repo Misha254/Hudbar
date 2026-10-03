@@ -13,6 +13,9 @@ pub mod data;
 #[allow(dead_code)]
 pub mod dunst;
 pub mod log;
+// Меню HUDbar: модель (M1) и отрисовка (M2). Окно появится в M4.
+#[allow(dead_code)]
+pub mod menu;
 pub mod palette;
 pub mod settings;
 // Снимки окна настроек в PNG без Wayland.
@@ -28,6 +31,12 @@ pub mod settings_view;
 pub mod text;
 pub mod tray;
 // Слой раскладки: вертикальный стек полос, без отрисовки.
+// Глифы интерфейса: Nerd Font, всегда JetBrainsMono.
+#[allow(dead_code)]
+pub mod settings_icons;
+// Виджеты окна настроек.
+#[allow(dead_code)]
+pub mod settings_widgets;
 #[allow(dead_code)]
 pub mod ui_layout;
 #[allow(dead_code)]

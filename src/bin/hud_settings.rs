@@ -51,6 +51,9 @@ mod palette;
 #[allow(dead_code)]
 mod settings;
 #[allow(dead_code)]
+#[path = "../hud/settings_icons.rs"]
+mod settings_icons;
+#[allow(dead_code)]
 #[path = "../hud/settings_snapshot.rs"]
 mod settings_snapshot;
 #[allow(dead_code)]
@@ -59,6 +62,9 @@ mod settings_ui;
 #[allow(dead_code)]
 #[path = "../hud/settings_view.rs"]
 mod settings_view;
+#[allow(dead_code)]
+#[path = "../hud/settings_widgets.rs"]
+mod settings_widgets;
 #[path = "../hud/text.rs"]
 mod text;
 #[allow(dead_code)]

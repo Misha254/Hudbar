@@ -8,6 +8,10 @@ name = "hud-settings-rs"
 path = "src/bin/hud_settings.rs"
 
 [[bin]]
+name = "hud-menu-rs"
+path = "src/bin/hud_menu.rs"
+
+[[bin]]
 name = "hud-keybinds-rs"
 path = "src/bin/hud_keybinds.rs"
 
