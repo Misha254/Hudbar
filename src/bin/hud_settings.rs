@@ -4,11 +4,8 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
-use cosmic_text::{
-    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent,
-};
 use nix::poll::{PollFd, PollFlags, poll};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -36,22 +33,69 @@ use wayland_client::{
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
 };
 
+#[allow(dead_code)]
+#[path = "../hud/bind_data.rs"]
+mod bind_data;
+#[allow(dead_code)]
+#[path = "../hud/config.rs"]
+mod config;
+#[allow(dead_code)]
+#[path = "../hud/config_io.rs"]
+mod config_io;
+#[allow(dead_code)]
+#[path = "../hud/dunst.rs"]
+mod dunst;
 #[path = "../hud/palette.rs"]
 mod palette;
+#[path = "../hud/settings.rs"]
+#[allow(dead_code)]
+mod settings;
 #[allow(dead_code)]
 #[path = "../hud/settings_ui.rs"]
 mod settings_ui;
+#[path = "../hud/text.rs"]
+mod text;
 
-use settings_ui::{Control, Module, Rect, Row};
-
-const SCALE: f32 = 2.0;
+use config::Config;
+use settings_ui::{Control, Focus, Hotkey, Module, Nav, NotificationPosition, Rect, Row, Section};
+use text::{Align, SCALE, TextPainter};
 const WIDTH: u32 = settings_ui::WIDTH as u32;
 const HEIGHT: u32 = settings_ui::HEIGHT as u32;
-const TITLE: &str = "HUD Settings";
-/// Прозрачность фона как у hudbar: base на 90%, сквозь окно видно стол.
-const BG_ALPHA: f32 = 0.9;
-/// Скрипт, который пишет настройки, перезапускает панель и dunst.
-const HUD_SETTING: &str = ".local/bin/hud-setting";
+const TITLE: &str = "HUDbar  /  Control Center";
+/// Фон окна непрозрачный: сквозь настройки не должен просвечивать терминал.
+const BG_ALPHA: f32 = 1.0;
+/// Контуры и центральные линии отладочной отрисовки раскладки.
+const DEBUG_OUTLINE: palette::Rgba = palette::Rgba(0xff, 0x5c, 0x5c, 255);
+/// Шрифтовая шкала окна. Все размеры кратны друг другу, чтобы строки
+/// модуля, карточки и подвал выглядели одной системой.
+#[derive(Clone, Copy)]
+struct Sizes {
+    title: f32,
+    section: f32,
+    row: f32,
+    micro: f32,
+    value: f32,
+}
+
+fn sizes(pixel: bool) -> Sizes {
+    if pixel {
+        Sizes {
+            title: 19.0,
+            section: 14.0,
+            row: 13.0,
+            micro: 11.5,
+            value: 13.5,
+        }
+    } else {
+        Sizes {
+            title: 20.0,
+            section: 15.0,
+            row: 14.0,
+            micro: 12.0,
+            value: 15.0,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct UiPalette {
@@ -64,36 +108,11 @@ struct UiPalette {
     muted: palette::Rgba,
 }
 
-/// Состояние из `settings.json`: тема, высота бара и флаги модулей.
-struct State {
-    mode: String,
-    height: u32,
-    modules: Vec<(Module, bool)>,
-}
-
-impl State {
-    fn module(&self, module: Module) -> bool {
-        self.modules
-            .iter()
-            .find(|(m, _)| *m == module)
-            .map(|(_, on)| *on)
-            .unwrap_or(true)
-    }
-
-    fn set_module(&mut self, module: Module, on: bool) {
-        if let Some(entry) = self.modules.iter_mut().find(|(m, _)| *m == module) {
-            entry.1 = on;
-        }
-    }
-}
-
-/// Фоновый запуск `hud-setting`: он перезапускает панель и dunst, поэтому окно
-/// не должно висеть в ожидании. Пока команда идёт, ввод блокируется — иначе две
-/// одновременные правки state.json друг друга затрут.
+/// Фоновые операции, которым нужен рестарт панели или чтение двух конфигов.
 #[derive(Default)]
 struct Job {
     busy: bool,
-    result: Option<(bool, String)>,
+    result: Option<Result<String, String>>,
 }
 
 struct SettingsApp {
@@ -106,25 +125,40 @@ struct SettingsApp {
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     mods: Modifiers,
-    font_system: FontSystem,
-    swash: SwashCache,
-    font: String,
-    state: State,
+    painter: TextPainter,
+    config: config::Config,
+    /// Горячие клавиши из niri: раздел «Управление» только их показывает.
+    hotkeys: Vec<Hotkey>,
+    /// Прокрутка списка клавиш: биндов больше, чем помещается на экран.
+    hotkey_scroll: usize,
+    /// Активный раздел и зона фокуса; переходы живут в `settings_ui::Nav`.
+    nav: Nav,
     /// Тема, которую пользователь выбрал, но которая ещё не применена.
     picked: Option<bool>,
-    focus: Control,
     status: String,
     job: Arc<Mutex<Job>>,
     rows: Vec<Row>,
     palette: palette::Palette,
     settings_stamp: Option<SystemTime>,
     palette_stamp: Option<SystemTime>,
+    pending_height: Option<(u32, Instant)>,
     width: u32,
     height: u32,
     configured: bool,
     dirty: bool,
     exit: Arc<AtomicBool>,
-    hover: Option<Control>,
+    hover: Option<Focus>,
+    dragging_height: bool,
+    /// Удерживаемая стрелка в сайдбаре: собственный ускоренный повтор.
+    held: Option<HeldNav>,
+}
+
+/// Зажатая стрелка навигации по разделам и расписание её повторов.
+struct HeldNav {
+    raw: u32,
+    dir: i32,
+    next_at: Instant,
+    repeat: settings_ui::Repeat,
 }
 
 fn home() -> PathBuf {
@@ -139,40 +173,40 @@ fn stamp(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
-/// Читает `settings.json` целиком: тема, высота и флаги модулей.
-/// Отсутствующие ключи берём у модулей и у правого предела — как `hud-setting`.
-fn read_state() -> State {
-    let mut state = State {
-        mode: "pixel".to_string(),
-        height: 27,
-        modules: Module::ALL.into_iter().map(|m| (m, true)).collect(),
-    };
-    let Ok(text) = std::fs::read_to_string(settings_path()) else {
-        return state;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return state;
-    };
-    if let Some(mode) = value
-        .get("appearance")
-        .and_then(|v| v.get("theme"))
-        .and_then(|v| v.as_str())
-        .filter(|v| *v == "pixel" || *v == "normal")
-    {
-        state.mode = mode.to_string();
-    }
-    let Some(bar) = value.get("hudbar") else {
-        return state;
-    };
-    if let Some(height) = bar.get("height").and_then(|v| v.as_u64()) {
-        state.height = settings_ui::clamp_height(height as i64);
-    }
-    for module in Module::ALL {
-        if let Some(on) = bar.get(module.key()).and_then(|v| v.as_bool()) {
-            state.set_module(module, on);
+/// Горячие клавиши из `~/.config/niri/binds.kdl` для раздела «Управление».
+/// Окно их только показывает: править бинды здесь нельзя.
+fn load_hotkeys() -> Vec<Hotkey> {
+    bind_data::load_niri()
+        .into_iter()
+        .map(|entry| Hotkey {
+            keys: entry.key,
+            desc: entry.desc,
+        })
+        .collect()
+}
+
+fn restart_hudbar() -> Result<(), String> {
+    let _ = Command::new("pkill")
+        .args(["-TERM", "-x", "hudbar"])
+        .status();
+    for _ in 0..30 {
+        if !Command::new("pgrep")
+            .args(["-x", "hudbar"])
+            .status()
+            .map_err(|error| error.to_string())?
+            .success()
+        {
+            break;
         }
+        thread::sleep(Duration::from_millis(100));
     }
-    state
+    Command::new(home().join(".local/bin/hudbar"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn mix(a: palette::Rgba, b: palette::Rgba, t: f32) -> palette::Rgba {
@@ -208,10 +242,140 @@ fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
     }
 }
 
+fn notification_position_label(position: NotificationPosition) -> &'static str {
+    match position {
+        NotificationPosition::TopLeft => "Сверху слева",
+        NotificationPosition::TopRight => "Сверху справа",
+        NotificationPosition::BottomLeft => "Снизу слева",
+        NotificationPosition::BottomRight => "Снизу справа",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use text::SCALE;
+
+    /// Фон окна настроек обязан быть непрозрачным: сквозь него видно терминал,
+    /// и подписи на прозрачном фоне читаются хуже.
+    #[test]
+    fn window_background_is_opaque() {
+        let palette = palette::Palette::default();
+        assert_eq!(ui_palette(false, palette).base.3, 255);
+        assert_eq!(ui_palette(true, palette).base.3, 255);
+        assert_eq!(BG_ALPHA, 1.0);
+    }
+
+    #[test]
+    fn settings_window_has_no_legacy_setting_commands() {
+        let source = include_str!("hud_settings.rs");
+        let command_lines = source.lines().filter(|line| {
+            line.contains("Command::new") || line.contains(".arg(") || line.contains(".args(")
+        });
+        for line in command_lines {
+            assert!(
+                !line.contains("hud-setting"),
+                "legacy setting command: {line}"
+            );
+            assert!(!line.contains("hud-theme"), "legacy theme command: {line}");
+        }
+    }
+
+    /// Фон заливает весь буфер целиком, включая поля: иначе сквозь окно видно
+    /// то, что под ним.
+    #[test]
+    fn background_covers_the_whole_buffer() {
+        let width = (settings_ui::WIDTH * SCALE) as u32;
+        let height = (settings_ui::HEIGHT * SCALE) as u32;
+        let mut pixmap = tiny_skia::Pixmap::new(width, height).unwrap();
+        let p = ui_palette(false, palette::Palette::default());
+        pixmap.fill(p.base.to_tiny());
+        for (x, y) in [
+            (0, 0),
+            (width - 1, height - 1),
+            (0, height - 1),
+            (width - 1, 0),
+        ] {
+            let pixel = pixmap.pixel(x, y).unwrap();
+            assert_eq!(pixel.alpha(), 255, "поле ({x}, {y}) не залито");
+        }
+    }
+
+    /// Границы залитых пикселей текста внутри полосы.
+    fn ink_bounds(pixmap: &tiny_skia::Pixmap) -> (f32, f32) {
+        let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+        for y in 0..pixmap.height() {
+            for x in 0..pixmap.width() {
+                let pixel = pixmap.pixel(x, y).unwrap();
+                if pixel.alpha() > 8 {
+                    top = top.min(y as f32);
+                    bottom = bottom.max(y as f32);
+                }
+            }
+        }
+        assert!(top <= bottom, "текст не нарисован");
+        (top, bottom)
+    }
+
+    /// Главная проверка: центр текста должен совпадать с центром своей полосы.
+    /// Раньше подписи садились на 15–20 px ниже элементов, потому что высота
+    /// блока считалась по заданной высоте строки, а не по реальным глифам.
+    #[test]
+    fn text_ink_is_centered_in_its_band() {
+        let mut painter = TextPainter::new("JetBrainsMono Nerd Font Propo");
+        let mut failures = Vec::new();
+        for (label, size, align) in [
+            ("Обзор", 15.0, Align::Start),
+            ("Закрыть", 12.0, Align::Center),
+            ("Трей", 14.0, Align::Start),
+            ("Погода", 14.0, Align::Start),
+            ("вкл", 12.0, Align::End),
+            ("−", 15.0, Align::Center),
+            ("27", 15.0, Align::Center),
+            ("Обычный", 18.0, Align::Start),
+        ] {
+            let rect = settings_ui::Rect::new(40.0, 60.0, 220.0, 32.0);
+            let width = (settings_ui::WIDTH * SCALE) as u32;
+            let height = (settings_ui::HEIGHT * SCALE) as u32;
+            let mut pixmap = tiny_skia::Pixmap::new(width, height).unwrap();
+            pixmap.fill(tiny_skia::Color::TRANSPARENT);
+            painter.paint(
+                &mut pixmap,
+                label,
+                size,
+                palette::Rgba(255, 255, 255, 255),
+                rect,
+                align,
+            );
+            let (top, bottom) = ink_bounds(&pixmap);
+            let ink_center = (top + bottom) / 2.0 / SCALE;
+            let band_center = rect.y + rect.h / 2.0;
+            let delta = ink_center - band_center;
+            if delta.abs() > 1.0 {
+                failures.push(format!("{label}: смещение {delta:+.2} px"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "текст не центрирован в полосе: {}",
+            failures.join(", ")
+        );
+    }
+}
+
 impl SettingsApp {
     /// Тема, которую сейчас рисуем: выбранная, иначе применённая.
+    /// Тема в файле, без учёта неприменённого выбора.
+    fn current_mode(&self) -> &'static str {
+        match self.config.theme {
+            Some(config::Theme::Pixel) => "pixel",
+            _ => "normal",
+        }
+    }
+
     fn pixel_mode(&self) -> bool {
-        self.picked.unwrap_or(self.state.mode == "pixel")
+        self.picked
+            .unwrap_or(self.config.theme == Some(config::Theme::Pixel))
     }
 
     fn font_for(&self, pixel: bool) -> String {
@@ -227,17 +391,23 @@ impl SettingsApp {
     }
 
     fn poll_job(&mut self) {
-        let Ok(mut job) = self.job.lock() else {
-            return;
+        let result = {
+            let Ok(mut job) = self.job.lock() else {
+                return;
+            };
+            let Some(result) = job.result.take() else {
+                return;
+            };
+            job.busy = false;
+            result
         };
-        let Some((ok, what)) = job.result.take() else {
-            return;
-        };
-        job.busy = false;
-        self.status = if ok {
-            format!("{what} — готово")
-        } else {
-            format!("{what} — не получилось")
+        self.picked = None;
+        self.config = Config::from(&settings::load());
+        self.painter.set_font(&self.font_for(self.pixel_mode()));
+        self.rebuild_rows();
+        self.status = match result {
+            Ok(what) => format!("{what} — готово"),
+            Err(error) => format!("ошибка: {error}"),
         };
         self.dirty = true;
     }
@@ -246,9 +416,15 @@ impl SettingsApp {
         let settings_stamp = stamp(&settings_path());
         if settings_stamp != self.settings_stamp {
             self.settings_stamp = settings_stamp;
-            self.state = read_state();
+            self.config = config::Config::from(&settings::load());
+            self.rows = settings_ui::rows_for(
+                self.nav.section,
+                &self.config,
+                &self.hotkeys,
+                self.hotkey_scroll,
+            );
             self.picked = None;
-            self.font = self.font_for(self.pixel_mode());
+            self.painter.set_font(&self.font_for(self.pixel_mode()));
             self.dirty = true;
         }
         let palette_path = home().join(".config/hudbar/colors.css");
@@ -260,8 +436,10 @@ impl SettingsApp {
         }
     }
 
-    /// Запускает `hud-setting` в фоне и показывает, что идёт применение.
-    fn run(&mut self, args: &[&str], what: &str) {
+    fn start_job<F>(&mut self, what: &str, operation: F)
+    where
+        F: FnOnce() -> Result<(), String> + Send + 'static,
+    {
         if self.busy() {
             self.status = "Дождитесь предыдущего применения".to_string();
             self.dirty = true;
@@ -274,170 +452,407 @@ impl SettingsApp {
             job.result = None;
         }
         let what = what.to_string();
-        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let job = Arc::clone(&self.job);
         thread::spawn(move || {
-            let ok = Command::new(home().join(HUD_SETTING))
-                .args(&args)
-                .status()
-                .is_ok_and(|status| status.success());
+            let result = operation().map(|_| what);
             if let Ok(mut job) = job.lock() {
                 job.busy = false;
-                job.result = Some((ok, what));
+                job.result = Some(result);
             }
         });
     }
 
     fn apply_theme(&mut self, pixel: bool) {
+        self.flush_height(true);
+        if self.busy() {
+            self.status = "Дождитесь предыдущего применения".to_string();
+            self.dirty = true;
+            return;
+        }
         let mode = if pixel { "pixel" } else { "normal" };
-        if mode == self.state.mode {
+        if mode == self.current_mode() {
             self.picked = None;
             self.dirty = true;
             return;
         }
         self.picked = Some(pixel);
-        self.font = self.font_for(pixel);
-        self.run(&["theme", mode], "Оформление");
-    }
-
-    fn toggle_module(&mut self, module: Module) {
-        let next = !self.state.module(module);
-        self.run(
-            &[
-                "hud-toggle",
-                module.key(),
-                if next { "true" } else { "false" },
-            ],
-            module.label(),
-        );
+        self.painter.set_font(&self.font_for(pixel));
+        let theme = if pixel {
+            config::Theme::Pixel
+        } else {
+            config::Theme::Normal
+        };
+        self.start_job("Оформление", move || {
+            config_io::apply_theme(theme).map_err(|error| error.to_string())?;
+            restart_hudbar()
+        });
     }
 
     fn step_height(&mut self, delta: i32) {
-        let Some(height) = settings_ui::step_height(self.state.height, delta) else {
+        if self.busy() {
+            self.status = "Дождитесь предыдущего применения".to_string();
+            self.dirty = true;
+            return;
+        }
+        let Some(height) = settings_ui::step_height(self.config.height, delta) else {
             return;
         };
-        let value = height.to_string();
-        self.run(&["hud-height", &value], "Высота панели");
+        self.config.height = height;
+        self.pending_height = Some((height, Instant::now() + Duration::from_millis(300)));
+        self.status = format!("Высота панели: {height} px");
+        self.rebuild_rows();
+        self.dirty = true;
     }
 
-    fn activate(&mut self, control: Control) {
-        match control {
-            Control::Theme(pixel) => self.apply_theme(pixel),
-            Control::Toggle(module) => self.toggle_module(module),
-            Control::Height(delta) => self.step_height(delta),
-            Control::Close => self.exit.store(true, Ordering::Relaxed),
+    fn set_height_from_x(&mut self, x: f32) {
+        let track = settings_ui::height_track_rect();
+        let ratio = ((x - track.x) / track.w).clamp(0.0, 1.0);
+        let value = settings_ui::HEIGHT_MIN
+            + ((settings_ui::HEIGHT_MAX - settings_ui::HEIGHT_MIN) as f32 * ratio).round() as u32;
+        let delta = value as i32 - self.config.height as i32;
+        if delta != 0 {
+            self.step_height(delta);
         }
     }
 
-    /// Левая стрелка и вверх идут назад, правая и вниз — вперёд.
-    fn move_focus(&mut self, dx: i32, dy: i32) {
-        if let Some(next) = settings_ui::neighbour(&self.rows, self.focus, dx, dy) {
-            self.focus = next;
+    fn flush_height(&mut self, force: bool) {
+        let Some((height, deadline)) = self.pending_height else {
+            return;
+        };
+        if !force && Instant::now() < deadline {
+            return;
+        }
+        self.pending_height = None;
+        match config_io::apply_patch(&config_io::Patch::Height(height)) {
+            Ok(_) => {
+                self.config = Config::from(&settings::load());
+                self.status = format!("Высота панели: {height} px — применено");
+            }
+            Err(error) => {
+                self.config = Config::from(&settings::load());
+                self.status = format!("ошибка: {error}");
+            }
+        }
+        self.rebuild_rows();
+        self.dirty = true;
+    }
+
+    fn step_notification_font(&mut self, delta: i32) {
+        let value = (self.config.font_size as i32 + delta).clamp(10, 18) as u32;
+        if value == self.config.font_size || self.busy() {
+            return;
+        }
+        self.config.font_size = value;
+        self.status = format!("Размер уведомлений: {value}");
+        self.apply_notifications(config_io::Patch::Notifications {
+            font_size: Some(value),
+            line_height: None,
+            position: None,
+        });
+    }
+
+    fn step_notification_line(&mut self, delta: i32) {
+        let value = (self.config.line_height as i32 + delta).clamp(14, 28) as u32;
+        if value == self.config.line_height || self.busy() {
+            return;
+        }
+        self.config.line_height = value;
+        self.status = format!("Высота строки: {value}");
+        self.apply_notifications(config_io::Patch::Notifications {
+            font_size: None,
+            line_height: Some(value),
+            position: None,
+        });
+    }
+
+    fn set_notification_position(&mut self, position: NotificationPosition) {
+        if position == self.config.position || self.busy() {
+            return;
+        }
+        self.config.position = position;
+        self.apply_notifications(config_io::Patch::Notifications {
+            font_size: None,
+            line_height: None,
+            position: Some(position),
+        });
+    }
+
+    fn apply_notifications(&mut self, patch: config_io::Patch) {
+        self.flush_height(true);
+        self.start_job("Уведомления", move || {
+            config_io::apply_patch(&patch).map_err(|error| error.to_string())?;
+            let config = Config::from(&settings::load());
+            dunst::apply(&dunst::values_from_config(&config)).map_err(|error| error.to_string())?;
+            Ok(())
+        });
+    }
+
+    /// Пишет одно поле и перечитывает файл заново.
+    ///
+    /// `apply_patch` читает `settings.json` с диска и накладывает патч, поэтому
+    /// кэш окна не может затереть чужое. При ошибке значение в интерфейсе
+    /// откатывается к тому, что лежит в файле, а в статусе появляется причина.
+    fn commit(&mut self, patch: config_io::Patch) {
+        let label = patch.label();
+        match config_io::apply_patch(&patch) {
+            Ok(_) => {
+                // Файл — источник истины: перечитываем, а не доверяем кэшу.
+                self.config = Config::from(&settings::load());
+                self.status = format!("{label} — применено");
+                self.rebuild_rows();
+                self.dirty = true;
+            }
+            Err(why) => {
+                self.config = Config::from(&settings::load());
+                self.status = format!("{label} — ошибка: {why}");
+                self.rebuild_rows();
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// Переключатель видимости: пишем один флаг, панель подхватит на лету.
+    fn toggle_module(&mut self, module: Module) {
+        let on = !self.config.module_enabled(module);
+        self.commit(config_io::Patch::ModuleVisible { module, on });
+    }
+
+    /// Перестановка внутри зоны. Модуль не выходит за пределы своей группы:
+    /// `Config::move_selected` возвращает `false` на краю, и мы ничего не пишем.
+    fn move_module(&mut self, module: Module, delta: i32) {
+        if !self.config.move_selected(module, delta) {
+            self.status = format!("{} — край группы", module.label());
+            self.dirty = true;
+            return;
+        }
+        let moved = self.config.clone();
+        self.commit(config_io::Patch::ModuleOrder(moved.flatten()));
+    }
+
+    fn toggle_language(&mut self) {
+        let next = if self.config.language == settings::Language::Ru {
+            settings::Language::En
+        } else {
+            settings::Language::Ru
+        };
+        self.commit(config_io::Patch::Language(next));
+    }
+
+    /// Листание списка горячих клавиш: список длинный, а править его нельзя.
+    fn scroll_hotkeys(&mut self, forward: bool) {
+        if self.nav.section != Section::Controls {
+            return;
+        }
+        let page = settings_ui::HOTKEY_PAGE;
+        if page == 0 || self.hotkeys.len() <= page {
+            return;
+        }
+        let pages = self.hotkeys.len().div_ceil(page);
+        let current = self.hotkey_scroll / page;
+        let next = if forward {
+            (current + 1).min(pages - 1)
+        } else {
+            current.saturating_sub(1)
+        };
+        if next != current {
+            self.hotkey_scroll = next * page;
+            self.status = format!("Горячие клавиши: страница {}/{pages}", next + 1);
+            self.rebuild_rows();
             self.dirty = true;
         }
     }
 
-    fn hit(&self, x: f32, y: f32) -> Option<Control> {
-        settings_ui::hit(&self.rows, x / SCALE, y / SCALE)
+    /// Переход в другой раздел из «Обзора».
+    fn open_section(&mut self, target: Section) {
+        self.nav.section = target;
+        self.nav.focus = Focus::Nav(target.index());
+        self.rebuild_rows();
+        self.dirty = true;
     }
 
-    fn layout(&mut self, text: &str, size: f32, line_h: f32) -> (f32, Vec<(CacheKey, i32, i32)>) {
-        let mut buffer = Buffer::new_empty(Metrics::new(size * SCALE, line_h * SCALE));
-        let attrs = Attrs::new().family(Family::Name(&self.font));
-        let mut width: f32 = 0.0;
-        let mut glyphs = Vec::new();
+    /// Пересобирает строки под активный раздел. Фокус сайдбара сохраняется,
+    /// из содержимого переносится на первый контрол нового раздела.
+    fn rebuild_rows(&mut self) {
+        self.rows = settings_ui::rows_for(
+            self.nav.section,
+            &self.config,
+            &self.hotkeys,
+            self.hotkey_scroll,
+        );
+        if !self.nav.focus_nav()
+            && let Some(content) = self.nav.first_content(&self.rows)
         {
-            let mut b = buffer.borrow_with(&mut self.font_system);
-            b.set_text(text, &attrs, Shaping::Advanced, None);
-            b.set_size(None, None);
-            b.shape_until_scroll(false);
-            for run in b.layout_runs() {
-                width = width.max(run.line_w);
-                for glyph in run.glyphs {
-                    let physical = glyph.physical((0.0, run.line_y), 1.0);
-                    glyphs.push((physical.cache_key, physical.x, physical.y));
-                }
+            self.nav.focus = content;
+        }
+    }
+
+    /// Клик и Enter ведут в одно место: в сайдбаре открывают раздел, в контенте
+    /// применяют контрол. Раздел требует пересборки строк.
+    fn activate(&mut self) {
+        let Some(control) = self.nav.activate() else {
+            self.rebuild_rows();
+            self.dirty = true;
+            return;
+        };
+        match control {
+            Control::Nav(_) => {}
+            Control::Theme(pixel) => self.apply_theme(pixel),
+            Control::Toggle(module) | Control::Switch(module) => self.toggle_module(module),
+            Control::Move(module, dir) => self.move_module(module, dir),
+            Control::Height(delta) => self.step_height(delta),
+            Control::NotificationFont(delta) => self.step_notification_font(delta),
+            Control::NotificationLineHeight(delta) => self.step_notification_line(delta),
+            Control::NotificationPosition(position) => self.set_notification_position(position),
+            Control::Goto(target) => self.open_section(target),
+            // Слайдер высоты реагирует на перетаскивание, а не на Space.
+            Control::HeightSlider => {}
+            Control::Language => self.toggle_language(),
+            Control::Close => {
+                self.flush_height(true);
+                self.exit.store(true, Ordering::Relaxed);
             }
         }
-        (width, glyphs)
+    }
+
+    fn move_focus(&mut self, dx: i32, dy: i32) {
+        let before = self.nav.section;
+        if self.nav.move_focus(&self.rows, dx, dy) {
+            if self.nav.section != before {
+                self.rebuild_rows();
+            }
+            self.dirty = true;
+        }
+    }
+
+    /// Координаты указателя уже логические: `wl_pointer` сообщает их в
+    /// surface-local пикселях, поэтому масштаб буфера не применяется.
+    fn hit(&self, x: f32, y: f32) -> Option<Focus> {
+        settings_ui::hit(&self.rows, x, y)
     }
 
     fn text_width(&mut self, text: &str, size: f32) -> f32 {
-        self.layout(text, size, size + 8.0).0
+        self.painter.text_width(text, size)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_text(
-        &mut self,
-        pixmap: &mut tiny_skia::Pixmap,
-        text: &str,
-        size: f32,
-        color: palette::Rgba,
-        x: f32,
-        y: f32,
-        line_h: f32,
-    ) {
-        let (_, glyphs) = self.layout(text, size, line_h);
-        for (key, gx, gy) in glyphs {
-            if let Some(image) = self.swash.get_image_uncached(&mut self.font_system, key)
-                && matches!(image.content, SwashContent::Mask)
-            {
-                blend(
-                    pixmap,
-                    x as i32 + gx,
-                    y as i32 + gy - image.placement.top,
-                    image.placement.width,
-                    image.placement.height,
-                    color,
-                    &image.data,
-                );
-            }
+    /// Сфокусирован ли контрол правой колонки.
+    fn focused(&self, control: Control) -> bool {
+        self.nav.focus == Focus::Content(control)
+    }
+
+    /// Наведён ли мышью контрол правой колонки.
+    fn hovered(&self, control: Control) -> bool {
+        self.hover == Some(Focus::Content(control))
+    }
+
+    /// Стрелка в сайдбаре: первый шаг и запуск ускоренного повтора.
+    fn hold_nav_key(&mut self, raw: u32, dir: i32) {
+        let repeat = settings_ui::Repeat::sections();
+        let next_at = Instant::now() + Duration::from_millis(repeat.delay_ms as u64);
+        self.held = Some(HeldNav {
+            raw,
+            dir,
+            next_at,
+            repeat,
+        });
+    }
+
+    fn release_nav_key(&mut self, raw: u32) {
+        if self.held.as_ref().is_some_and(|held| held.raw == raw) {
+            self.held = None;
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_text_boxed(
-        &mut self,
-        pixmap: &mut tiny_skia::Pixmap,
-        text: &str,
-        size: f32,
-        color: palette::Rgba,
-        max_width: f32,
-        x: f32,
-        y: f32,
-        line_h: f32,
-    ) {
-        let max_width_px = max_width * SCALE;
-        let mut shown = text.to_string();
-        if self.text_width(&shown, size) > max_width_px {
-            while !shown.is_empty() {
-                let candidate = format!("{shown}…");
-                if self.text_width(&candidate, size) <= max_width_px {
-                    shown = candidate;
-                    break;
-                }
-                shown.pop();
-            }
+    /// Индекс активного пункта сайдбара.
+    fn nav_index(&self) -> usize {
+        match self.nav.focus {
+            Focus::Nav(index) => index,
+            Focus::Content(_) => self.nav.section.index(),
         }
-        self.draw_text(pixmap, &shown, size, color, x, y, line_h);
+    }
+
+    /// Один шаг ускоренного повтора: переключение раздела и пересчёт паузы.
+    /// Перескок через край перезапускает кривую, иначе после перехода на
+    /// противоположный конец список летел бы сразу на максимальной скорости.
+    fn repeat_step(&mut self) {
+        let Some(held) = self.held.as_mut() else {
+            return;
+        };
+        let dir = held.dir;
+        let pause = held.repeat.next_interval();
+        held.next_at = Instant::now() + Duration::from_millis(pause as u64);
+        let before = self.nav_index();
+        let last = settings_ui::Section::ALL.len() - 1;
+        self.move_focus(0, dir);
+        let wrapped =
+            (before == 0 && self.nav_index() == last) || (before == last && self.nav_index() == 0);
+        if wrapped && let Some(held) = self.held.as_mut() {
+            held.repeat = settings_ui::Repeat::sections();
+            held.next_at =
+                Instant::now() + Duration::from_millis(held.repeat.next_interval() as u64);
+        }
+    }
+
+    /// Тик окна: если подошёл срок ускоренного повтора, делаем шаг.
+    pub fn tick_repeat(&mut self) {
+        let due = self
+            .held
+            .as_ref()
+            .is_some_and(|held| Instant::now() >= held.next_at);
+        if due {
+            self.repeat_step();
+        }
+    }
+
+    /// Ближайший момент повтора — им же меряем паузу в poll-цикле.
+    fn repeat_deadline(&self) -> Option<Duration> {
+        self.held
+            .as_ref()
+            .map(|held| held.next_at.saturating_duration_since(Instant::now()))
     }
 
     /// Общая обработка клавиши для `press_key` и `repeat_key`.
     fn on_key(&mut self, event: KeyEvent) {
         match event.keysym {
-            Keysym::Escape => self.exit.store(true, Ordering::Relaxed),
-            Keysym::Return | Keysym::KP_Enter | Keysym::space => {
-                let control = self.focus;
-                self.activate(control);
+            Keysym::Escape => {
+                self.flush_height(true);
+                self.exit.store(true, Ordering::Relaxed);
             }
+            Keysym::Return | Keysym::KP_Enter | Keysym::space => self.activate(),
+            // Язык переключается отдельной клавишей: `L`.
+            Keysym::l | Keysym::L => self.toggle_language(),
+            // Shift+↑/↓ переставляют модуль внутри его зоны; без Shift те же
+            // стрелки двигают фокус по разделу.
+            Keysym::Up if self.mods.shift => self.shift_module(-1),
+            Keysym::Down if self.mods.shift => self.shift_module(1),
             Keysym::Up => self.move_focus(0, -1),
             Keysym::Down => self.move_focus(0, 1),
             Keysym::Left => self.move_focus(-1, 0),
             Keysym::Right => self.move_focus(1, 0),
-            Keysym::Tab => self.move_focus(0, if self.mods.shift { -1 } else { 1 }),
+            Keysym::Tab => {
+                if self.nav.cycle_zone(&self.rows, self.mods.shift) {
+                    self.dirty = true;
+                }
+            }
+            Keysym::Page_Up | Keysym::KP_Page_Up => self.scroll_hotkeys(false),
+            Keysym::Page_Down | Keysym::KP_Page_Down => self.scroll_hotkeys(true),
             Keysym::minus | Keysym::KP_Subtract | Keysym::underscore => self.step_height(-1),
             Keysym::plus | Keysym::equal | Keysym::KP_Add => self.step_height(1),
             _ => {}
+        }
+    }
+
+    /// Shift+↑/↓: если фокус на строке модуля — перестановка внутри зоны,
+    /// иначе перемещение фокуса, как у обычных стрелок.
+    fn shift_module(&mut self, delta: i32) {
+        let module = match self.nav.focus {
+            Focus::Content(Control::Switch(module)) | Focus::Content(Control::Toggle(module)) => {
+                Some(module)
+            }
+            _ => None,
+        };
+        match module {
+            Some(module) => self.move_module(module, delta),
+            None => self.move_focus(0, delta),
         }
     }
 
@@ -452,42 +867,38 @@ impl SettingsApp {
         };
         let p = ui_palette(self.pixel_mode(), self.palette);
         let pixel = self.pixel_mode();
-        let title_size = if pixel { 24.0 } else { 26.0 };
-        let head_size = if pixel { 12.0 } else { 13.0 };
-        let label_size = if pixel { 12.0 } else { 13.0 };
-        let small_size = if pixel { 11.0 } else { 12.0 };
-        let value_size = if pixel { 13.0 } else { 14.0 };
+        let s = sizes(pixel);
         pixmap.fill(p.base.to_tiny());
         let k = SCALE;
         fill_rect(&mut pixmap, 0.0, 0.0, pw as f32, k, p.accent);
         fill_rect(&mut pixmap, 0.0, 0.0, k, ph as f32, p.accent.with_a(0.3));
 
-        self.draw_text(
+        self.draw_navigation(&mut pixmap, p, s);
+
+        self.painter.paint(
             &mut pixmap,
             TITLE,
-            title_size,
+            s.title,
             p.text,
-            26.0 * k,
-            20.0 * k,
-            34.0 * k,
+            settings_ui::title_rect(),
+            Align::Start,
         );
 
         let status = self.status.clone();
         // строки копируем: рисование берёт &mut self, а обход идёт по self.rows
         let rows = self.rows.clone();
         for row in &rows {
-            match *row {
-                Row::Header { text, y } => self.draw_text(
+            match row.clone() {
+                Row::Header { text, y } => self.painter.paint(
                     &mut pixmap,
                     text,
-                    head_size,
-                    p.muted,
-                    settings_ui::PAD_X * k,
-                    y * k,
-                    18.0 * k,
+                    s.section,
+                    p.text,
+                    settings_ui::header_rect(y),
+                    Align::Start,
                 ),
                 Row::Rule { y } => {
-                    let w = settings_ui::WIDTH - settings_ui::PAD_X * 2.0;
+                    let w = settings_ui::WIDTH - settings_ui::PAD_X - settings_ui::PAD_R;
                     fill_rect(
                         &mut pixmap,
                         settings_ui::PAD_X * k,
@@ -497,11 +908,36 @@ impl SettingsApp {
                         p.border,
                     );
                 }
-                Row::Theme { pixel, rect } => {
-                    self.draw_theme_card(&mut pixmap, p, pixel, rect, title_size)
+                Row::Nav { .. } => {}
+                Row::Stub { title, note, y } => {
+                    self.painter.paint(
+                        &mut pixmap,
+                        title,
+                        s.section + 4.0,
+                        p.text,
+                        settings_ui::stub_rect(y),
+                        Align::Start,
+                    );
+                    self.painter.paint(
+                        &mut pixmap,
+                        note,
+                        s.row,
+                        p.muted,
+                        settings_ui::stub_rect(y + 34.0),
+                        Align::Start,
+                    );
+                    self.painter.paint(
+                        &mut pixmap,
+                        "Раздел в разработке",
+                        s.micro,
+                        p.accent,
+                        settings_ui::stub_rect(y + 72.0),
+                        Align::Start,
+                    );
                 }
+                Row::Theme { pixel, rect } => self.draw_theme_card(&mut pixmap, p, pixel, rect, s),
                 Row::Toggle { module, rect } => {
-                    let on = self.state.module(module);
+                    let on = self.config.module_enabled(module);
                     let control = Control::Toggle(module);
                     self.draw_toggle(
                         &mut pixmap,
@@ -509,14 +945,126 @@ impl SettingsApp {
                         rect,
                         module.label(),
                         on,
-                        self.hover == Some(control),
-                        self.focus == control,
-                        label_size,
-                        small_size,
+                        self.hovered(control),
+                        self.focused(control),
+                        s,
                     );
                 }
-                Row::HeightLabel { scale, .. } => {
-                    self.draw_height_scale(&mut pixmap, p, scale, value_size, small_size);
+                Row::ZoneLabel {
+                    title, hint, rect, ..
+                } => {
+                    self.painter.paint(
+                        &mut pixmap,
+                        title,
+                        s.row,
+                        p.text,
+                        Rect::new(rect.x, rect.y, rect.w, 18.0),
+                        Align::Start,
+                    );
+                    self.painter.paint(
+                        &mut pixmap,
+                        hint,
+                        s.micro,
+                        p.muted,
+                        Rect::new(rect.x, rect.y + 18.0, rect.w, 16.0),
+                        Align::Start,
+                    );
+                }
+                Row::ModuleRow {
+                    module,
+                    rect,
+                    switch,
+                    ..
+                } => {
+                    let control = Control::Switch(module);
+                    self.draw_toggle(
+                        &mut pixmap,
+                        p,
+                        rect,
+                        module.label(),
+                        self.config.module_enabled(module),
+                        self.hovered(control),
+                        self.focused(control),
+                        s,
+                    );
+                    // Keep hit-testing on the compact switch rectangle while
+                    // the complete row remains the visual focus target.
+                    stroke_rect(
+                        &mut pixmap,
+                        switch.x * k,
+                        switch.y * k,
+                        switch.w * k,
+                        switch.h * k,
+                        p.border.with_a(0.35),
+                        k,
+                    );
+                }
+                Row::Move {
+                    module, dir, rect, ..
+                } => {
+                    let control = Control::Move(module, dir);
+                    self.draw_step(
+                        &mut pixmap,
+                        p,
+                        rect,
+                        if dir < 0 { "▲" } else { "▼" },
+                        self.hovered(control),
+                        self.focused(control),
+                        s.micro,
+                    );
+                }
+                Row::HeightLabel { .. } => self.draw_height_scale(&mut pixmap, p, s),
+                Row::NotificationFont { dir, rect } => {
+                    self.painter.paint(
+                        &mut pixmap,
+                        &format!("Размер шрифта: {}", self.config.font_size),
+                        s.row,
+                        p.text,
+                        Rect::new(settings_ui::PAD_X, rect.y, 260.0, rect.h),
+                        Align::Start,
+                    );
+                    self.draw_step(
+                        &mut pixmap,
+                        p,
+                        rect,
+                        if dir < 0 { "−" } else { "+" },
+                        self.hovered(Control::NotificationFont(dir))
+                            || self.focused(Control::NotificationFont(dir)),
+                        self.focused(Control::NotificationFont(dir)),
+                        s.value,
+                    );
+                }
+                Row::NotificationLineHeight { dir, rect } => {
+                    self.painter.paint(
+                        &mut pixmap,
+                        &format!("Высота строки: {}", self.config.line_height),
+                        s.row,
+                        p.text,
+                        Rect::new(settings_ui::PAD_X, rect.y, 260.0, rect.h),
+                        Align::Start,
+                    );
+                    self.draw_step(
+                        &mut pixmap,
+                        p,
+                        rect,
+                        if dir < 0 { "−" } else { "+" },
+                        self.hovered(Control::NotificationLineHeight(dir))
+                            || self.focused(Control::NotificationLineHeight(dir)),
+                        self.focused(Control::NotificationLineHeight(dir)),
+                        s.value,
+                    );
+                }
+                Row::NotificationPosition { position, rect } => {
+                    self.draw_button(
+                        &mut pixmap,
+                        p,
+                        rect,
+                        notification_position_label(position),
+                        self.hovered(Control::NotificationPosition(position))
+                            || self.focused(Control::NotificationPosition(position)),
+                        s.micro,
+                        pixel,
+                    );
                 }
                 Row::Height { dir, rect } => {
                     let control = Control::Height(dir);
@@ -525,53 +1073,82 @@ impl SettingsApp {
                         p,
                         rect,
                         if dir < 0 { "−" } else { "+" },
-                        self.hover == Some(control),
-                        self.focus == control,
-                        value_size,
+                        self.hovered(control),
+                        self.focused(control),
+                        s.value,
                     );
                 }
                 Row::Status { y } => {
                     let busy = self.busy();
-                    self.draw_text(
+                    self.painter.paint(
                         &mut pixmap,
                         &status,
-                        value_size,
+                        s.value,
                         if busy { p.accent } else { p.muted },
-                        settings_ui::PAD_X * k,
-                        y * k,
-                        20.0 * k,
+                        settings_ui::header_rect(y),
+                        Align::Start,
                     );
                 }
-                Row::Footer { y } => self.draw_footer(&mut pixmap, p, y, small_size),
-                Row::Close { rect } => {
-                    let control = Control::Close;
-                    let fill = if self.hover == Some(control) || self.focus == control {
-                        p.panel
+                Row::Footer { y } => {
+                    let hints: &[&str] = if self.nav.section == Section::Controls {
+                        &["PgUp/PgDn страницы", "← сайдбар", "Esc закрыть"]
                     } else {
-                        p.idle_panel
+                        &settings_ui::HINTS
                     };
-                    fill_round_rect(
+                    self.draw_footer_hints(&mut pixmap, p, y, s.micro, hints);
+                }
+                Row::Language { rect } => {
+                    let label = if self.config.language == settings::Language::Ru {
+                        "РУС"
+                    } else {
+                        "ENG"
+                    };
+                    self.draw_button(
                         &mut pixmap,
-                        rect.x * k,
-                        rect.y * k,
-                        rect.w * k,
-                        rect.h * k,
-                        if pixel { 0.0 } else { 8.0 * k },
-                        fill,
-                    );
-                    let label = "Закрыть";
-                    let w = self.text_width(label, label_size);
-                    self.draw_text(
-                        &mut pixmap,
+                        p,
+                        rect,
                         label,
-                        label_size,
-                        p.text,
-                        (rect.x + (rect.w - w / SCALE) / 2.0) * k,
-                        (rect.y + 7.0) * k,
-                        18.0 * k,
+                        self.hovered(Control::Language) || self.focused(Control::Language),
+                        s.micro,
+                        pixel,
+                    );
+                }
+                Row::Summary {
+                    label, value, rect, ..
+                } => {
+                    self.draw_summary(&mut pixmap, p, rect, label, &value, s);
+                }
+                Row::Goto { section, rect } => {
+                    let control = Control::Goto(section);
+                    self.draw_button(
+                        &mut pixmap,
+                        p,
+                        rect,
+                        &format!("{}  →", section.label()),
+                        self.hovered(control) || self.focused(control),
+                        s.row,
+                        pixel,
+                    );
+                }
+                Row::Hotkey { keys, desc, rect } => {
+                    self.draw_hotkey(&mut pixmap, p, rect, &keys, &desc, s);
+                }
+                Row::Close { rect } => {
+                    self.draw_button(
+                        &mut pixmap,
+                        p,
+                        rect,
+                        "Закрыть",
+                        self.hovered(Control::Close) || self.focused(Control::Close),
+                        s.micro,
+                        pixel,
                     );
                 }
             }
+        }
+
+        if settings_ui::debug_layout() {
+            self.draw_debug_overlay(&mut pixmap);
         }
 
         let stride = (pw * 4) as i32;
@@ -595,22 +1172,304 @@ impl SettingsApp {
         self.window.commit();
     }
 
+    /// Контуры всех полос и линия их центра — включается `HUD_DEBUG_LAYOUT=1`.
+    fn draw_debug_overlay(&mut self, pixmap: &mut tiny_skia::Pixmap) {
+        let k = SCALE;
+        for rect in settings_ui::debug_rects() {
+            stroke_rect(
+                pixmap,
+                rect.x * k,
+                rect.y * k,
+                rect.w * k,
+                rect.h * k,
+                DEBUG_OUTLINE,
+                k,
+            );
+            // горизонтальная линия центра полосы
+            fill_rect(
+                pixmap,
+                rect.x * k,
+                (rect.y + rect.h / 2.0) * k,
+                rect.w * k,
+                k,
+                DEBUG_OUTLINE.with_a(0.8),
+            );
+        }
+    }
+
+    /// Строка сводки: подпись слева, значение справа. Кликается как ссылка в
+    /// раздел, к которому относится значение, — дублировать контролы не нужно.
+    fn draw_summary(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        rect: Rect,
+        label: &str,
+        value: &str,
+        s: Sizes,
+    ) {
+        let k = SCALE;
+        fill_round_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if self.pixel_mode() { 0.0 } else { 8.0 * k },
+            p.idle_panel,
+        );
+        stroke_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            p.border,
+            k,
+        );
+        self.painter.paint(
+            pixmap,
+            label,
+            s.row,
+            p.muted,
+            Rect::new(rect.x + 12.0, rect.y, rect.w * 0.5, rect.h),
+            Align::Start,
+        );
+        self.painter.paint(
+            pixmap,
+            value,
+            s.row,
+            p.text,
+            Rect::new(rect.x + rect.w * 0.5, rect.y, rect.w * 0.5 - 12.0, rect.h),
+            Align::End,
+        );
+    }
+
+    /// Горячая клавиша из niri: сочетание слева, расшифровка справа. Строка
+    /// informational — кликать тут нечего.
+    fn draw_hotkey(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        rect: Rect,
+        keys: &str,
+        desc: &str,
+        s: Sizes,
+    ) {
+        let k = SCALE;
+        fill_round_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if self.pixel_mode() { 0.0 } else { 6.0 * k },
+            p.idle_panel,
+        );
+        self.painter.paint(
+            pixmap,
+            keys,
+            s.micro,
+            p.accent,
+            Rect::new(rect.x + 10.0, rect.y, 210.0, rect.h),
+            Align::Start,
+        );
+        self.painter.paint(
+            pixmap,
+            desc,
+            s.row,
+            p.text,
+            Rect::new(rect.x + 228.0, rect.y, rect.w - 238.0, rect.h),
+            Align::Start,
+        );
+    }
+
+    /// Кнопка шапки: подпись центрируется по обеим осям внутри рамки.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_button(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        rect: Rect,
+        label: &str,
+        active: bool,
+        size: f32,
+        pixel: bool,
+    ) {
+        let k = SCALE;
+        fill_round_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if pixel { 0.0 } else { 6.0 * k },
+            if active { p.panel } else { p.idle_panel },
+        );
+        stroke_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if active { p.accent } else { p.border },
+            k,
+        );
+        self.painter
+            .paint(pixmap, label, size, p.text, rect, Align::Center);
+    }
+
+    fn draw_navigation(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, s: Sizes) {
+        let k = SCALE;
+        let focus = self.nav.focus;
+        let hover = self.hover;
+        let section_now = self.nav.section;
+        let rail = settings_ui::rail_rect();
+        fill_round_rect(
+            pixmap,
+            rail.x * k,
+            rail.y * k,
+            rail.w * k,
+            rail.h * k,
+            7.0 * k,
+            p.idle_panel,
+        );
+        stroke_rect(
+            pixmap,
+            rail.x * k,
+            rail.y * k,
+            rail.w * k,
+            rail.h * k,
+            p.border,
+            k,
+        );
+        self.painter.paint(
+            pixmap,
+            "РАЗДЕЛЫ",
+            s.micro,
+            p.muted,
+            Rect::new(rail.x + 18.0, rail.y + 14.0, rail.w - 36.0, 20.0),
+            Align::Start,
+        );
+
+        // Три состояния пункта: активный раздел — заливка и полоса слева,
+        // фокус — контур, наведение — слабая подсветка.
+        for (index, section) in Section::ALL.iter().enumerate() {
+            let rect = settings_ui::nav_rect(index);
+            let selected = *section == section_now;
+            let focused = focus == Focus::Nav(index);
+            let hovered = hover == Some(Focus::Nav(index));
+            if selected {
+                fill_round_rect(
+                    pixmap,
+                    rect.x * k,
+                    rect.y * k,
+                    rect.w * k,
+                    rect.h * k,
+                    5.0 * k,
+                    p.panel,
+                );
+                fill_rect(
+                    pixmap,
+                    rect.x * k,
+                    (rect.y + 8.0) * k,
+                    3.0 * k,
+                    (rect.h - 16.0) * k,
+                    p.accent,
+                );
+            } else if hovered {
+                fill_round_rect(
+                    pixmap,
+                    rect.x * k,
+                    rect.y * k,
+                    rect.w * k,
+                    rect.h * k,
+                    5.0 * k,
+                    p.idle_panel,
+                );
+            }
+            if focused && !selected {
+                stroke_rect(
+                    pixmap,
+                    rect.x * k,
+                    rect.y * k,
+                    rect.w * k,
+                    rect.h * k,
+                    p.accent,
+                    k,
+                );
+            }
+            self.painter.paint(
+                pixmap,
+                section.label(),
+                s.row,
+                if selected { p.text } else { p.muted },
+                Rect::new(rect.x + 20.0, rect.y, rect.w - 32.0, rect.h),
+                Align::Start,
+            );
+        }
+
+        let rail_w = rail.w - 36.0;
+        fill_rect(
+            pixmap,
+            (rail.x + 18.0) * k,
+            settings_ui::RAIL_RULE_Y * k,
+            rail_w * k,
+            k,
+            p.border,
+        );
+        let theme = if self.pixel_mode() {
+            "ТЕМА: PIXEL"
+        } else {
+            "ТЕМА: NORMAL"
+        };
+        let language = if self.config.language == settings::Language::Ru {
+            "ЯЗЫК: РУС"
+        } else {
+            "ЯЗЫК: ENG"
+        };
+        let lines = [
+            ("СОСТОЯНИЕ", p.muted),
+            ("● HUDbar активен", p.accent),
+            (concat!("v", env!("CARGO_PKG_VERSION")), p.muted),
+            (theme, p.muted),
+            (language, p.muted),
+        ];
+        for (index, (text, color)) in lines.into_iter().enumerate() {
+            let y = settings_ui::RAIL_STATUS_Y + index as f32 * 30.0;
+            self.painter.paint(
+                pixmap,
+                text,
+                s.micro,
+                color,
+                Rect::new(rail.x + 18.0, y, rail_w, 22.0),
+                Align::Start,
+            );
+        }
+    }
+
+    /// Карточка темы: чекбокс, название и метка «применено» стоят в одной полосе,
+    /// описание и шрифт — в двух следующих. Всё центрируется по вертикали.
     fn draw_theme_card(
         &mut self,
         pixmap: &mut tiny_skia::Pixmap,
         p: UiPalette,
         pixel: bool,
         rect: Rect,
-        title_size: f32,
+        s: Sizes,
     ) {
         let k = SCALE;
         let control = Control::Theme(pixel);
-        let applied = self.state.mode == if pixel { "pixel" } else { "normal" };
+        let applied = self.config.theme
+            == Some(if pixel {
+                config::Theme::Pixel
+            } else {
+                config::Theme::Normal
+            });
         let selected = self.pixel_mode() == pixel;
-        let hovered = self.hover == Some(control);
-        let focused = self.focus == control;
+        let hovered = self.hovered(control);
+        let focused = self.focused(control);
         let (title, description, font) = settings_ui::theme_card(pixel);
-        let fill = if selected { p.panel } else { p.idle_panel };
         let border = if selected || hovered || focused {
             p.accent
         } else {
@@ -622,8 +1481,8 @@ impl SettingsApp {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if self.pixel_mode() { 0.0 } else { 12.0 * k },
-            fill,
+            if self.pixel_mode() { 0.0 } else { 10.0 * k },
+            if selected { p.panel } else { p.idle_panel },
         );
         stroke_rect(
             pixmap,
@@ -638,58 +1497,68 @@ impl SettingsApp {
                 k
             },
         );
-        let cx = rect.x + 16.0;
-        let cy = rect.y + 18.0;
-        fill_round_rect(pixmap, cx * k, cy * k, 18.0 * k, 18.0 * k, 0.0, p.accent);
+
+        // Полоса заголовка: чекбокс, имя темы и метка применения — одна строка.
+        let title_band = settings_ui::card_title_rect(pixel);
+        let box_size = 18.0;
+        let box_x = rect.x + 16.0;
+        let box_y = title_band.y + (title_band.h - box_size) / 2.0;
         fill_round_rect(
             pixmap,
-            (cx + 1.0) * k,
-            (cy + 1.0) * k,
-            16.0 * k,
-            16.0 * k,
-            (-k).max(0.0),
+            box_x * k,
+            box_y * k,
+            box_size * k,
+            box_size * k,
+            if self.pixel_mode() { 0.0 } else { 4.0 * k },
             if selected { p.accent } else { p.base },
         );
-        self.draw_text(
+        stroke_rect(
+            pixmap,
+            box_x * k,
+            box_y * k,
+            box_size * k,
+            box_size * k,
+            p.accent,
+            k,
+        );
+        self.painter.paint(
             pixmap,
             title,
-            title_size,
+            s.section + 3.0,
             p.text,
-            (rect.x + 46.0) * k,
-            (rect.y + 14.0) * k,
-            24.0 * k,
+            Rect::new(
+                box_x + box_size + 12.0,
+                title_band.y,
+                title_band.w - box_size - 96.0,
+                title_band.h,
+            ),
+            Align::Start,
         );
-        let mark = if applied { "применено" } else { "" };
-        if !mark.is_empty() {
-            let w = self.text_width(mark, 12.0);
-            self.draw_text(
+        if applied {
+            self.painter.paint(
                 pixmap,
-                mark,
-                12.0,
+                "применено",
+                s.micro,
                 p.accent,
-                (rect.right() - 16.0 - w / SCALE) * k,
-                (rect.y + 18.0) * k,
-                16.0 * k,
+                Rect::new(rect.right() - 104.0, title_band.y, 88.0, title_band.h),
+                Align::End,
             );
         }
-        self.draw_text_boxed(
+        self.painter.paint_boxed(
             pixmap,
             description,
-            if self.pixel_mode() { 12.0 } else { 13.0 },
+            s.micro,
             p.muted,
-            rect.w - 32.0,
-            cx * k,
-            (rect.y + 50.0) * k,
-            18.0 * k,
+            settings_ui::card_desc_rect(pixel),
+            Align::Start,
         );
-        self.draw_text(
+        self.painter.paint_boxed(
             pixmap,
             font,
-            if self.pixel_mode() { 11.0 } else { 12.0 },
+            s.micro,
             p.accent,
-            cx * k,
-            (rect.y + 78.0) * k,
-            16.0 * k,
+            settings_ui::card_font_rect(pixel),
+            Align::Start,
         );
     }
 
@@ -704,8 +1573,7 @@ impl SettingsApp {
         on: bool,
         hovered: bool,
         focused: bool,
-        label_size: f32,
-        small_size: f32,
+        s: Sizes,
     ) {
         let k = SCALE;
         if hovered || focused {
@@ -723,100 +1591,102 @@ impl SettingsApp {
             fill_rect(
                 pixmap,
                 rect.x * k,
-                (rect.y + 5.0) * k,
+                (rect.y + 6.0) * k,
                 2.0 * k,
-                (rect.h - 10.0) * k,
+                (rect.h - 12.0) * k,
                 p.accent,
             );
         }
-        let sw_w = 34.0;
-        let sw_h = 18.0;
-        let sx = rect.right() - sw_w - 12.0;
-        let sy = rect.y + (rect.h - sw_h) / 2.0;
+        // Переключатель, подпись и «вкл» живут в одной полосе строки, поэтому
+        // их центры совпадают по вертикали при любом размере шрифта.
+        let switch_w = 38.0;
+        let switch_h = 20.0;
+        let switch_rect = Rect::new(rect.right() - 12.0 - switch_w, rect.y, switch_w, rect.h);
+        let track_y = switch_rect.y + (switch_rect.h - switch_h) / 2.0;
         fill_round_rect(
             pixmap,
-            sx * k,
-            sy * k,
-            sw_w * k,
-            sw_h * k,
-            if self.pixel_mode() { 0.0 } else { 9.0 * k },
+            switch_rect.x * k,
+            track_y * k,
+            switch_w * k,
+            switch_h * k,
+            if self.pixel_mode() { 0.0 } else { 10.0 * k },
             if on { p.accent } else { p.border },
         );
-        let knob = 14.0;
-        let kx = if on { sx + sw_w - knob - 2.0 } else { sx + 2.0 };
+        let knob = 16.0;
+        let knob_x = if on {
+            switch_rect.right() - knob - 2.0
+        } else {
+            switch_rect.x + 2.0
+        };
         fill_round_rect(
             pixmap,
-            kx * k,
-            (sy + 2.0) * k,
+            knob_x * k,
+            (track_y + 2.0) * k,
             knob * k,
             knob * k,
-            if self.pixel_mode() { 0.0 } else { 7.0 * k },
+            if self.pixel_mode() { 0.0 } else { 8.0 * k },
             if on { p.base } else { p.text.with_a(0.7) },
         );
-        self.draw_text(
+        self.painter.paint(
             pixmap,
             label,
-            label_size,
+            s.row,
             if on { p.text } else { p.muted },
-            (rect.x + 12.0) * k,
-            (rect.y + 7.0) * k,
-            18.0 * k,
+            Rect::new(rect.x + 12.0, rect.y, 240.0, rect.h),
+            Align::Start,
         );
-        let state = if on { "вкл" } else { "выкл" };
-        let state_w = self.text_width(state, small_size);
-        self.draw_text(
+        self.painter.paint(
             pixmap,
-            state,
-            small_size,
+            if on { "вкл" } else { "выкл" },
+            s.micro,
             p.muted,
-            (sx - 8.0) * k - state_w,
-            (rect.y + 8.0) * k,
-            16.0 * k,
+            Rect::new(switch_rect.x - 60.0, rect.y, 48.0, rect.h),
+            Align::End,
         );
     }
 
-    /// Шкала высоты: заливка по доле от минимума к максимуму плюс число.
-    fn draw_height_scale(
-        &mut self,
-        pixmap: &mut tiny_skia::Pixmap,
-        p: UiPalette,
-        scale: Rect,
-        value_size: f32,
-        small_size: f32,
-    ) {
+    /// Строка высоты: дорожка, значение, подпись диапазона и кнопки шага стоят
+    /// в одной полосе, поэтому всё лежит на одной линии.
+    fn draw_height_scale(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, s: Sizes) {
         let k = SCALE;
-        let (x0, y, w, h) = (scale.x, scale.y, scale.w, scale.h);
-        let span = settings_ui::HEIGHT_MAX - settings_ui::HEIGHT_MIN;
-        let share = (self.state.height - settings_ui::HEIGHT_MIN) as f32 / span as f32;
-        fill_round_rect(pixmap, x0 * k, y * k, w * k, h * k, 3.0 * k, p.idle_panel);
+        let track = settings_ui::height_track_rect();
         fill_round_rect(
             pixmap,
-            x0 * k,
-            y * k,
-            (w * share).max(4.0) * k,
-            h * k,
+            track.x * k,
+            track.y * k,
+            track.w * k,
+            track.h * k,
+            3.0 * k,
+            p.idle_panel,
+        );
+        let span = settings_ui::HEIGHT_MAX - settings_ui::HEIGHT_MIN;
+        let share = (self.config.height - settings_ui::HEIGHT_MIN) as f32 / span as f32;
+        fill_round_rect(
+            pixmap,
+            track.x * k,
+            track.y * k,
+            (track.w * share).max(6.0) * k,
+            track.h * k,
             3.0 * k,
             p.accent,
         );
-        let value = self.state.height.to_string();
-        self.draw_text(
+        let value = self.config.height.to_string();
+        self.painter.paint(
             pixmap,
             &value,
-            value_size,
+            s.value,
             p.text,
-            (x0 + w + 12.0) * k,
-            (y - 8.0) * k,
-            20.0 * k,
+            settings_ui::height_value_rect(),
+            Align::Center,
         );
         let hint = format!("{}–{} px", settings_ui::HEIGHT_MIN, settings_ui::HEIGHT_MAX);
-        self.draw_text(
+        self.painter.paint(
             pixmap,
             &hint,
-            small_size,
+            s.micro,
             p.muted,
-            (x0 + w + 44.0) * k,
-            (y - 5.0) * k,
-            16.0 * k,
+            settings_ui::height_hint_rect(),
+            Align::Start,
         );
     }
 
@@ -832,11 +1702,6 @@ impl SettingsApp {
         value_size: f32,
     ) {
         let k = SCALE;
-        let fill = if hovered || focused {
-            p.panel
-        } else {
-            p.idle_panel
-        };
         fill_round_rect(
             pixmap,
             rect.x * k,
@@ -844,7 +1709,11 @@ impl SettingsApp {
             rect.w * k,
             rect.h * k,
             if self.pixel_mode() { 0.0 } else { 8.0 * k },
-            fill,
+            if hovered || focused {
+                p.panel
+            } else {
+                p.idle_panel
+            },
         );
         if focused {
             stroke_rect(
@@ -857,23 +1726,34 @@ impl SettingsApp {
                 k,
             );
         }
-        let w = self.text_width(label, value_size);
-        self.draw_text(
-            pixmap,
-            label,
-            value_size,
-            p.text,
-            (rect.x + (rect.w - w / SCALE) / 2.0) * k,
-            (rect.y + 6.0) * k,
-            18.0 * k,
-        );
+        self.painter
+            .paint(pixmap, label, value_size, p.text, rect, Align::Center);
     }
 
-    fn draw_footer(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, y: f32, size: f32) {
-        let k = SCALE;
-        for (i, hint) in settings_ui::HINTS.into_iter().enumerate() {
-            let x = settings_ui::PAD_X + i as f32 * settings_ui::HINT_GAP;
-            self.draw_text(pixmap, hint, size, p.muted, x * k, y * k, 16.0 * k);
+    /// Подсказки внизу: промежутки одинаковые, блок центрируется по ширине полосы.
+    fn draw_footer_hints(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        y: f32,
+        size: f32,
+        hints: &[&str],
+    ) {
+        let band = settings_ui::footer_rect();
+        let widths: Vec<f32> = hints
+            .iter()
+            .map(|hint| self.text_width(hint, size))
+            .collect();
+        let offsets = settings_ui::spread(band.w, &widths);
+        for (hint, offset) in hints.iter().zip(offsets) {
+            self.painter.paint(
+                pixmap,
+                hint,
+                size,
+                p.muted,
+                Rect::new(band.x + offset, y, 400.0, band.h),
+                Align::Start,
+            );
         }
     }
 }
@@ -1001,18 +1881,32 @@ impl PointerHandler for SettingsApp {
                         self.hover = next;
                         self.dirty = true;
                     }
+                    if self.dragging_height {
+                        self.set_height_from_x(event.position.0 as f32);
+                    }
                 }
                 PointerEventKind::Leave { .. } => {
                     self.hover = None;
                     self.dirty = true;
                 }
                 PointerEventKind::Press { button: 0x110, .. } => {
-                    if let Some(control) =
-                        self.hit(event.position.0 as f32, event.position.1 as f32)
-                    {
-                        self.focus = control;
-                        self.activate(control);
+                    let position = (event.position.0 as f32, event.position.1 as f32);
+                    if let Some(focus) = self.hit(position.0, position.1) {
+                        // Клик всегда двигает фокус и выполняет действие: в сайдбаре
+                        // открывает раздел, в контенте применяет контрол.
+                        self.nav.focus = focus;
+                        self.hover = Some(focus);
+                        if focus == Focus::Content(Control::HeightSlider) {
+                            self.dragging_height = true;
+                            self.set_height_from_x(position.0);
+                        } else {
+                            self.activate();
+                        }
                     }
+                }
+                PointerEventKind::Release { button: 0x110, .. } if self.dragging_height => {
+                    self.dragging_height = false;
+                    self.flush_height(true);
                 }
                 _ => {}
             }
@@ -1049,7 +1943,28 @@ impl KeyboardHandler for SettingsApp {
         _: u32,
         event: KeyEvent,
     ) {
+        // Пока стрелка удерживается, шаги идут по своему таймеру: повторы
+        // композитора в этот момент только мешали бы.
+        if self
+            .held
+            .as_ref()
+            .is_some_and(|held| held.raw == event.raw_code)
+        {
+            return;
+        }
+        let raw = event.raw_code;
+        let arrow = match event.keysym {
+            Keysym::Up => Some(-1),
+            Keysym::Down => Some(1),
+            _ => None,
+        };
+        let in_sidebar = self.nav.focus_nav();
         self.on_key(event);
+        if let Some(dir) = arrow
+            && in_sidebar
+        {
+            self.hold_nav_key(raw, dir);
+        }
     }
     fn repeat_key(
         &mut self,
@@ -1059,7 +1974,14 @@ impl KeyboardHandler for SettingsApp {
         _: u32,
         event: KeyEvent,
     ) {
-        // удержание стрелки должно листать и менять высоту, а не срабатывать раз
+        // Повтор композитора во время удержания игнорируем: шагает наш таймер.
+        if self
+            .held
+            .as_ref()
+            .is_some_and(|held| held.raw == event.raw_code)
+        {
+            return;
+        }
         self.on_key(event);
     }
     fn release_key(
@@ -1068,8 +1990,10 @@ impl KeyboardHandler for SettingsApp {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.release_nav_key(event.raw_code);
+        self.flush_height(true);
     }
     fn update_modifiers(
         &mut self,
@@ -1165,42 +2089,6 @@ fn stroke_rect(
     fill_rect(pixmap, x + w - width, y, width, h, color);
 }
 
-fn blend(
-    pixmap: &mut tiny_skia::Pixmap,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    color: palette::Rgba,
-    mask: &[u8],
-) {
-    let pw = pixmap.width() as i32;
-    let ph = pixmap.height() as i32;
-    let pixels = pixmap.pixels_mut();
-    for row in 0..h as i32 {
-        for col in 0..w as i32 {
-            let xx = x + col;
-            let yy = y + row;
-            if xx < 0 || yy < 0 || xx >= pw || yy >= ph {
-                continue;
-            }
-            let alpha = mask[(row * w as i32 + col) as usize] as u32 * color.3 as u32 / 255;
-            if alpha == 0 {
-                continue;
-            }
-            let dst = &mut pixels[(yy * pw + xx) as usize];
-            let inv = 255 - alpha;
-            let nr = (color.0 as u32 * alpha / 255 + dst.red() as u32 * inv / 255).min(255) as u8;
-            let ng = (color.1 as u32 * alpha / 255 + dst.green() as u32 * inv / 255).min(255) as u8;
-            let nb = (color.2 as u32 * alpha / 255 + dst.blue() as u32 * inv / 255).min(255) as u8;
-            let na = (alpha + dst.alpha() as u32 * inv / 255).min(255) as u8;
-            if let Some(px) = tiny_skia::PremultipliedColorU8::from_rgba(nr, ng, nb, na) {
-                *dst = px;
-            }
-        }
-    }
-}
-
 fn main() {
     let conn = Connection::connect_to_env().expect("wayland connection");
     let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
@@ -1217,10 +2105,16 @@ fn main() {
     window.commit();
 
     let exit = Arc::new(AtomicBool::new(false));
-    // буфер 660x704 при scale 2 — около 7.4 МБ, держим три
-    let pool = SlotPool::new(26_000_000, &shm).expect("shm pool");
-    let state = read_state();
-    let picked = state.mode == "pixel";
+    // Буфер 1100x740 при scale 2 — это 2200x1480x4 = 13 МБ на кадр. Пул держим
+    // на три кадра, иначе при нехватке буферов кадр не рисуется вовсе и сквозь
+    // окно видно то, что под ним.
+    let frame_bytes = WIDTH as usize * HEIGHT as usize * 4 * (SCALE as usize) * (SCALE as usize);
+    let pool = SlotPool::new(frame_bytes * 3 + 4_000_000, &shm).expect("shm pool");
+    let config = config::Config::from(&settings::load());
+    let picked = config.theme == Some(config::Theme::Pixel);
+    let hotkeys = load_hotkeys();
+    let start = settings_ui::Section::from_env();
+    let rows = settings_ui::rows_for(start, &config, &hotkeys, 0);
     let mut app = SettingsApp {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -1231,28 +2125,31 @@ fn main() {
         pointer: None,
         keyboard: None,
         mods: Modifiers::default(),
-        font_system: FontSystem::new(),
-        swash: SwashCache::new(),
-        font: if picked {
-            "Minecraft Rus".to_string()
+        painter: TextPainter::new(if picked {
+            "Minecraft Rus"
         } else {
-            "JetBrainsMono Nerd Font Propo".to_string()
-        },
-        state,
+            "JetBrainsMono Nerd Font Propo"
+        }),
+        config,
+        hotkeys,
+        hotkey_scroll: 0,
+        nav: Nav::new(start),
         picked: None,
-        focus: Control::Theme(picked),
         status: "Готово".to_string(),
         job: Arc::new(Mutex::new(Job::default())),
-        rows: settings_ui::rows(),
+        rows,
         palette: palette::load(),
         settings_stamp: stamp(&settings_path()),
         palette_stamp: stamp(&home().join(".config/hudbar/colors.css")),
+        pending_height: None,
         width: WIDTH,
         height: HEIGHT,
         configured: false,
         dirty: true,
         exit,
         hover: None,
+        dragging_height: false,
+        held: None,
     };
 
     while !app.exit.load(Ordering::Relaxed) {
@@ -1263,7 +2160,11 @@ fn main() {
         }
         if let Some(guard) = event_queue.prepare_read() {
             let mut fds = [PollFd::new(conn.as_fd(), PollFlags::POLLIN)];
-            let _ = poll(&mut fds, 250u16);
+            let timeout = app
+                .repeat_deadline()
+                .map(|left| left.as_millis().min(250) as u16)
+                .unwrap_or(250);
+            let _ = poll(&mut fds, timeout);
             if fds[0]
                 .revents()
                 .is_some_and(|flags| flags.intersects(PollFlags::POLLIN))
@@ -1276,6 +2177,8 @@ fn main() {
         if event_queue.dispatch_pending(&mut app).is_err() {
             break;
         }
+        app.tick_repeat();
+        app.flush_height(false);
         if app.dirty {
             app.dirty = false;
             app.draw();

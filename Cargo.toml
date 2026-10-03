@@ -21,7 +21,9 @@ cosmic-text = "0.19.0"
 dbus = "0.9.12"
 nix = { version = "0.31.3", features = ["poll", "fs"] }
 png = "0.18.1"
-serde_json = "1.0.151"
+# preserve_order держит порядок ключей settings.json: без него serde_json
+# сортирует объект по алфавиту и каждая запись переставляет файл целиком.
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
 smithay-client-toolkit = "0.21.1"
 tiny-skia = "0.12.0"
 wayland-client = "0.31.15"

@@ -1,4 +1,17 @@
 {
+  "language": "ru",
+  "module_order": [
+    "tray",
+    "weather",
+    "webcam",
+    "clock",
+    "recorder",
+    "battery",
+    "system",
+    "audio",
+    "network",
+    "dnd"
+  ],
   "appearance": {
     "theme": "pixel"
   },

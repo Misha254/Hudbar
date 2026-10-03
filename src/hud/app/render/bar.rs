@@ -7,6 +7,19 @@ fn low_battery_style(
     (palette.error, chip_bg)
 }
 
+/// Группа панели вместе с её местом в `module_order`.
+struct Slot {
+    order: usize,
+    group: Group,
+}
+/// Раскладывает собранные группы по порядку из настроек. Сортировка
+/// устойчивая, а неизвестные ключи уходят в конец, поэтому модуль, которого
+/// нет в `module_order`, не потеряется и не встанет в начало.
+fn order_slots(mut slots: Vec<Slot>) -> Vec<Slot> {
+    slots.sort_by_key(|slot| slot.order);
+    slots
+}
+
 impl App {
     pub fn group_width(&mut self, g: &Group) -> f32 {
         let k = SCALE;
@@ -313,7 +326,7 @@ impl App {
             }
         }
 
-        let mut center: Vec<Group> = Vec::new();
+        let mut center: Vec<Slot> = Vec::new();
         if self.settings.weather
             && let Some(w) = &sys.weather
         {
@@ -322,9 +335,12 @@ impl App {
             c.pad_l = 2.0;
             c.pad_r = 2.0;
             c.hit = Some(Hit::WeatherChip);
-            center.push(Group {
-                cells: vec![c],
-                chip: Some((2.0, 2.0, chip_bg)),
+            center.push(Slot {
+                order: self.settings.order_index("weather"),
+                group: Group {
+                    cells: vec![c],
+                    chip: Some((2.0, 2.0, chip_bg)),
+                },
             });
         }
         if self.settings.webcam {
@@ -336,9 +352,12 @@ impl App {
             let mut c = Cell::new(I_WEBCAM.to_string(), webcam_color);
             c.pad_l = 2.0;
             c.pad_r = 2.0;
-            center.push(Group {
-                cells: vec![c],
-                chip: Some((2.0, 2.0, webcam_bg)),
+            center.push(Slot {
+                order: self.settings.order_index("webcam"),
+                group: Group {
+                    cells: vec![c],
+                    chip: Some((2.0, 2.0, webcam_bg)),
+                },
             });
         }
         if self.settings.clock {
@@ -346,11 +365,16 @@ impl App {
             c.pad_l = 3.0;
             c.pad_r = 3.0;
             c.hit = Some(Hit::ClockChip);
-            center.push(Group {
-                cells: vec![c],
-                chip: Some((2.0, 2.0, chip_bg)),
+            center.push(Slot {
+                order: self.settings.order_index("clock"),
+                group: Group {
+                    cells: vec![c],
+                    chip: Some((2.0, 2.0, chip_bg)),
+                },
             });
         }
+        let center = order_slots(center);
+        let center: Vec<Group> = center.into_iter().map(|slot| slot.group).collect();
 
         let mut widths: Vec<f32> = Vec::new();
         for g in &center {
@@ -365,12 +389,15 @@ impl App {
             x += w + center_gap;
         }
 
-        let mut right: Vec<Group> = Vec::new();
+        let mut right: Vec<Slot> = Vec::new();
         if self.settings.recorder && sys.recorder_on {
             let c = Cell::new(format!("Rec {I_REC}"), p.text);
-            right.push(Group {
-                cells: vec![c],
-                chip: None,
+            right.push(Slot {
+                order: self.settings.order_index("recorder"),
+                group: Group {
+                    cells: vec![c],
+                    chip: None,
+                },
             });
         }
         if self.settings.battery
@@ -415,9 +442,12 @@ impl App {
                 tc.pad_r = 0.0;
                 cells.push(tc);
             }
-            right.push(Group {
-                cells,
-                chip: Some((8.0, 8.0, bg)),
+            right.push(Slot {
+                order: self.settings.order_index("battery"),
+                group: Group {
+                    cells,
+                    chip: Some((8.0, 8.0, bg)),
+                },
             });
         }
 
@@ -459,9 +489,12 @@ impl App {
                 cells.push(ram);
                 cells
             };
-            right.push(Group {
-                cells,
-                chip: Some((5.0, 5.0, chip_bg)),
+            right.push(Slot {
+                order: self.settings.order_index("system"),
+                group: Group {
+                    cells,
+                    chip: Some((5.0, 5.0, chip_bg)),
+                },
             });
         }
 
@@ -491,9 +524,12 @@ impl App {
                 c.hit = Some(Hit::MicChip);
                 c
             };
-            right.push(Group {
-                cells: vec![vol, mic],
-                chip: Some((5.0, 5.0, chip_bg)),
+            right.push(Slot {
+                order: self.settings.order_index("audio"),
+                group: Group {
+                    cells: vec![vol, mic],
+                    chip: Some((5.0, 5.0, chip_bg)),
+                },
             });
         }
 
@@ -525,9 +561,12 @@ impl App {
             let bt_pad = ((net_slot - self.text_width(&bt.text, bt.size) / k) / 2.0).max(2.0);
             bt.pad_l = bt_pad;
             bt.pad_r = bt_pad;
-            right.push(Group {
-                cells: vec![wifi, bt],
-                chip: Some((5.0, 5.0, chip_bg)),
+            right.push(Slot {
+                order: self.settings.order_index("network"),
+                group: Group {
+                    cells: vec![wifi, bt],
+                    chip: Some((5.0, 5.0, chip_bg)),
+                },
             });
         }
 
@@ -535,9 +574,12 @@ impl App {
             let mut c = Cell::new("DND".to_string(), p.base);
             c.pad_l = 0.0;
             c.pad_r = 0.0;
-            right.push(Group {
-                cells: vec![c],
-                chip: Some((3.0, 3.0, p.error)),
+            right.push(Slot {
+                order: self.settings.order_index("dnd"),
+                group: Group {
+                    cells: vec![c],
+                    chip: Some((3.0, 3.0, p.error)),
+                },
             });
         }
 
@@ -545,10 +587,16 @@ impl App {
         control.pad_l = 4.0;
         control.pad_r = 4.0;
         control.hit = Some(Hit::ControlChip);
-        right.push(Group {
-            cells: vec![control],
-            chip: Some((4.0, 4.0, chip_bg)),
+        right.push(Slot {
+            order: usize::MAX,
+            group: Group {
+                cells: vec![control],
+                chip: Some((4.0, 4.0, chip_bg)),
+            },
         });
+
+        let right = order_slots(right);
+        let right: Vec<Group> = right.into_iter().map(|slot| slot.group).collect();
 
         let mut rwidths: Vec<f32> = Vec::new();
         for g in &right {
@@ -568,8 +616,23 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::low_battery_style;
+    use super::{Cell, Group, Slot, low_battery_style, order_slots};
     use crate::hud::palette::Palette;
+    use crate::hud::settings::{self, Settings};
+
+    fn slot(key: &str, settings: &Settings, label: &str) -> Slot {
+        Slot {
+            order: settings.order_index(key),
+            group: Group {
+                cells: vec![Cell::new(label.to_string(), settings_default_color())],
+                chip: None,
+            },
+        }
+    }
+
+    fn settings_default_color() -> crate::hud::palette::Rgba {
+        Palette::default().text
+    }
 
     #[test]
     fn low_battery_keeps_the_normal_chip_background() {
@@ -581,5 +644,153 @@ mod tests {
         assert_eq!(text, palette.error);
         assert_eq!(background, chip_bg);
         assert_ne!(background, palette.error);
+    }
+
+    #[test]
+    fn right_zone_follows_module_order() {
+        let settings = Settings {
+            // Порядок, обратный заводскому: код собирает группы сверху вниз,
+            // а панель обязана показать их по настройкам.
+            module_order: settings::normalize_module_order(&[
+                "dnd".to_string(),
+                "network".to_string(),
+                "audio".to_string(),
+                "system".to_string(),
+                "battery".to_string(),
+                "recorder".to_string(),
+                "clock".to_string(),
+                "webcam".to_string(),
+                "weather".to_string(),
+                "tray".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let slots = order_slots(vec![
+            slot("recorder", &settings, "Rec"),
+            slot("battery", &settings, "Bat"),
+            slot("dnd", &settings, "DND"),
+        ]);
+        let labels: Vec<&str> = slots
+            .iter()
+            .map(|slot| slot.group.cells[0].text.as_str())
+            .collect();
+
+        assert_eq!(labels, vec!["DND", "Bat", "Rec"]);
+    }
+
+    #[test]
+    fn module_missing_from_order_goes_last_without_being_dropped() {
+        let settings = Settings {
+            module_order: vec!["clock".to_string(), "weather".to_string()],
+            ..Default::default()
+        };
+
+        let known = settings.order_index("clock");
+        let missing = settings.order_index("network");
+
+        assert!(missing > known, "неизвестный ключ должен уйти в конец");
+    }
+
+    #[test]
+    fn duplicate_keys_in_order_do_not_duplicate_a_module() {
+        let settings = Settings::default();
+
+        let first = settings.order_index("audio");
+        let second = settings.order_index("audio");
+
+        assert_eq!(
+            first, second,
+            "у ключа один индекс, а не по одному на вхождение"
+        );
+        assert_eq!(
+            settings
+                .module_order
+                .iter()
+                .filter(|key| *key == "audio")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn control_button_is_not_a_module_and_stays_last() {
+        // Порядок, при котором dnd(0) идёт раньше recorder(4). Если бы сортировки
+        // не было, порядок вставки дал бы другой результат.
+        let settings = Settings {
+            module_order: settings::normalize_module_order(&[
+                "dnd".to_string(),
+                "tray".to_string(),
+                "weather".to_string(),
+                "webcam".to_string(),
+                "clock".to_string(),
+                "battery".to_string(),
+                "system".to_string(),
+                "audio".to_string(),
+                "network".to_string(),
+                "recorder".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let slots = order_slots(vec![
+            slot("recorder", &settings, "Rec"),
+            slot("dnd", &settings, "DND"),
+            Slot {
+                order: usize::MAX,
+                group: Group {
+                    cells: vec![Cell::new("⚙".to_string(), settings_default_color())],
+                    chip: None,
+                },
+            },
+        ]);
+        let labels: Vec<&str> = slots
+            .iter()
+            .map(|slot| slot.group.cells[0].text.as_str())
+            .collect();
+
+        assert_eq!(labels, vec!["DND", "Rec", "⚙"]);
+    }
+
+    /// Сортировка обязана быть устойчивой к порядку вставки: тест специально
+    /// переставляет группы дважды и ждёт один и тот же результат.
+    #[test]
+    fn sorting_is_independent_of_insertion_order() {
+        let settings = Settings {
+            module_order: settings::normalize_module_order(&[
+                "dnd".to_string(),
+                "audio".to_string(),
+                "battery".to_string(),
+                "network".to_string(),
+                "system".to_string(),
+                "recorder".to_string(),
+                "clock".to_string(),
+                "webcam".to_string(),
+                "weather".to_string(),
+                "tray".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let forwards = order_slots(vec![
+            slot("recorder", &settings, "Rec"),
+            slot("battery", &settings, "Bat"),
+            slot("dnd", &settings, "DND"),
+        ]);
+        let backwards = order_slots(vec![
+            slot("dnd", &settings, "DND"),
+            slot("battery", &settings, "Bat"),
+            slot("recorder", &settings, "Rec"),
+        ]);
+
+        fn labels(slots: &[Slot]) -> Vec<String> {
+            slots
+                .iter()
+                .map(|slot| slot.group.cells[0].text.clone())
+                .collect()
+        }
+
+        assert_eq!(labels(&forwards), vec!["DND", "Bat", "Rec"]);
+        assert_eq!(labels(&forwards), labels(&backwards));
     }
 }

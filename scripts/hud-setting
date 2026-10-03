@@ -13,6 +13,7 @@ config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
 state_path = config / "hudbar/settings.json"
 legacy_state_path = config / "hud-settings/settings.json"
 defaults = {
+    "language": "ru",
     "appearance": {"theme": "pixel"},
     "hudbar": {
         "height": 27, "tray": True, "weather": True, "clock": True,
@@ -21,6 +22,9 @@ defaults = {
     },
     "notifications": {"line_height": 18, "font_size": 13, "position": "top-right"},
 }
+MODULE_KEYS = [
+    "tray", "weather", "webcam", "clock", "recorder", "battery", "system", "audio", "network", "dnd",
+]
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -43,6 +47,12 @@ def load_state() -> dict:
             state = {}
     if "hudbar" not in state:
         state = {"hudbar": state}
+    state.setdefault("language", defaults["language"])
+    if state["language"] not in {"ru", "en"}:
+        state["language"] = defaults["language"]
+    order = state.get("module_order", MODULE_KEYS)
+    state["module_order"] = [key for key in order if key in MODULE_KEYS]
+    state["module_order"] += [key for key in MODULE_KEYS if key not in state["module_order"]]
     try:
         legacy = json.loads(legacy_state_path.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
@@ -104,6 +114,22 @@ def main() -> int:
     if command == "export":
         print(json.dumps(state, indent=2, ensure_ascii=False))
         return 0
+    if command == "language" and len(sys.argv) == 3 and sys.argv[2] in {"ru", "en"}:
+        state["language"] = sys.argv[2]
+        save_state(state)
+        return 0
+    if command == "module-move" and len(sys.argv) == 4 and sys.argv[2] in {"up", "down"}:
+        key = sys.argv[3]
+        order = state["module_order"]
+        if key not in order:
+            return 2
+        index = order.index(key)
+        target = index + (1 if sys.argv[2] == "down" else -1)
+        if 0 <= target < len(order):
+            order[index], order[target] = order[target], order[index]
+            save_state(state)
+            restart_hudbar()
+        return 0
     if command == "theme" and len(sys.argv) == 3 and sys.argv[2] in {"pixel", "normal"}:
         subprocess.run([str(home / ".local/bin/hud-theme"), sys.argv[2]], check=True)
         return 0
@@ -133,10 +159,15 @@ def main() -> int:
         subprocess.run([str(home / ".local/bin/wall.sh")], check=False)
         return 0
     elif command == "reset":
+        # Сброс возвращает заводские значения, но НЕ меняет тему молча:
+        # текущая тема остаётся, иначе reset неожиданно ломал бы шрифты.
+        current = load_state()
         state = json.loads(json.dumps(defaults))
+        theme = current.get("appearance", {}).get("theme")
+        if theme in {"pixel", "normal"}:
+            state["appearance"]["theme"] = theme
         save_state(state)
         patch_dunst(state)
-        subprocess.run([str(home / ".local/bin/hud-theme"), "pixel"], check=True)
         return 0
     else:
         print("unknown command or invalid value", file=sys.stderr)

@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960">
+  <defs>
+    <linearGradient id="bg" x2="0" y2="1"><stop stop-color="#171b25"/><stop offset="1" stop-color="#11151d"/></linearGradient>
+    <linearGradient id="surface" x2="1" y2="1"><stop stop-color="#202632"/><stop offset="1" stop-color="#1a202a"/></linearGradient>
+    <linearGradient id="selected" x2="1"><stop stop-color="#a7c8ff" stop-opacity=".17"/><stop offset="1" stop-color="#a7c8ff" stop-opacity=".035"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feGaussianBlur stdDeviation="22"/></filter>
+    <style>
+      .mono{font-family:'JetBrains Mono','DejaVu Sans Mono',monospace}
+      .title{font-size:25px;font-weight:600;fill:#e4e8f2;letter-spacing:.1px}
+      .body{font-size:15px;fill:#dce1ed}
+      .muted{font-size:13px;fill:#969eaf}
+      .tiny{font-size:11px;fill:#858e9f;letter-spacing:.55px}
+      .line{stroke:#343c4c;stroke-width:1}
+    </style>
+  </defs>
+  <rect width="1440" height="960" fill="#090c11"/>
+  <ellipse cx="740" cy="487" rx="535" ry="380" fill="#6b91d0" opacity=".08" filter="url(#shadow)"/>
+  <!-- Window frame -->
+  <rect x="198" y="100" width="1044" height="760" rx="14" fill="#0d1118" stroke="#4e5b70" stroke-width="1.5"/>
+  <path d="M212 100h1016" stroke="#a7c8ff" stroke-width="2" opacity=".78"/>
+  <rect x="200" y="102" width="1040" height="756" rx="13" fill="url(#bg)"/>
+  <!-- Header -->
+  <text x="232" y="142" class="mono tiny" fill="#a7c8ff">HUD / CONTROL CENTER</text>
+  <text x="232" y="179" class="mono title" font-size="22">СИСТЕМА</text>
+  <g transform="translate(1000 128)">
+    <rect width="104" height="30" rx="6" fill="#1b2330" stroke="#39485d"/>
+    <circle cx="15" cy="15" r="4" fill="#a7c8ff"/>
+    <text x="28" y="20" class="mono tiny" fill="#dce1ed">NORMAL</text>
+    <rect x="116" width="92" height="30" rx="6" fill="#1b2330" stroke="#39485d"/>
+    <text x="130" y="20" class="mono tiny" fill="#dce1ed">РУС  ▾</text>
+  </g>
+  <line x1="224" y1="202" x2="1216" y2="202" class="line"/>
+  <!-- Sidebar -->
+  <rect x="216" y="216" width="206" height="576" rx="9" fill="#151a23" stroke="#2b3341"/>
+  <text x="238" y="251" class="mono tiny">РАЗДЕЛЫ</text>
+  <g class="mono body">
+    <rect x="228" y="270" width="182" height="45" rx="6" fill="url(#selected)" stroke="#526b90"/>
+    <rect x="228" y="270" width="3" height="45" rx="1.5" fill="#a7c8ff"/>
+    <text x="248" y="298" fill="#e5ecfa">⌂</text><text x="274" y="298" fill="#dce8ff">Обзор</text>
+    <text x="248" y="351" fill="#8f9aad">▤</text><text x="274" y="351" fill="#c1c7d4">Панель</text>
+    <text x="248" y="404" fill="#8f9aad">◈</text><text x="274" y="404" fill="#c1c7d4">Внешний вид</text>
+    <text x="248" y="457" fill="#8f9aad">◌</text><text x="274" y="457" fill="#c1c7d4">Уведомления</text>
+    <text x="248" y="510" fill="#8f9aad">⌘</text><text x="274" y="510" fill="#c1c7d4">Управление</text>
+  </g>
+  <line x1="236" y1="548" x2="396" y2="548" class="line"/>
+  <text x="240" y="580" class="mono tiny">СОСТОЯНИЕ</text>
+  <circle cx="247" cy="608" r="4" fill="#a7c8ff"/>
+  <text x="260" y="613" class="mono muted">HUDbar активен</text>
+  <text x="240" y="648" class="mono tiny">ВЕРСИЯ 0.2.0</text>
+  <!-- Main title -->
+  <text x="456" y="250" class="mono title">Рабочий стол</text>
+  <text x="456" y="276" class="mono muted">Состояние и быстрые параметры HUDbar</text>
+  <g transform="translate(1087 232)">
+    <rect width="104" height="29" rx="14.5" fill="#192630" stroke="#405366"/>
+    <circle cx="17" cy="14.5" r="4" fill="#a7c8ff"/>
+    <text x="30" y="19" class="mono tiny" fill="#c5d6ef">ПРИМЕНЕНО</text>
+  </g>
+  <!-- status panels -->
+  <g>
+    <rect x="456" y="302" width="346" height="116" rx="8" fill="url(#surface)" stroke="#343d4c"/>
+    <text x="478" y="331" class="mono tiny">ОФОРМЛЕНИЕ</text>
+    <text x="478" y="370" class="mono" font-size="23" fill="#e6eaf4">Обычный</text>
+    <text x="478" y="396" class="mono muted">JetBrainsMono Nerd Font</text>
+    <rect x="754" y="338" width="27" height="27" rx="6" fill="#202a39" stroke="#52627a"/>
+    <text x="761" y="358" class="mono body" fill="#a7c8ff">↗</text>
+    <rect x="818" y="302" width="373" height="116" rx="8" fill="url(#surface)" stroke="#343d4c"/>
+    <text x="840" y="331" class="mono tiny">АКТИВНЫЕ МОДУЛИ</text>
+    <text x="840" y="379" class="mono" font-size="34" fill="#e6eaf4">10<tspan font-size="17" fill="#8993a4"> / 10</tspan></text>
+    <g transform="translate(1000 369)">
+      <rect width="164" height="4" rx="2" fill="#303847"/>
+      <rect width="164" height="4" rx="2" fill="#a7c8ff"/>
+      <circle cx="164" cy="2" r="5" fill="#d8e7ff"/>
+    </g>
+  </g>
+  <!-- section: height -->
+  <text x="456" y="462" class="mono" font-size="16" fill="#dce1ed">Высота панели</text>
+  <text x="456" y="484" class="mono muted">Размер верхней строки рабочего стола</text>
+  <rect x="456" y="506" width="735" height="70" rx="8" fill="#171d27" stroke="#303948"/>
+  <line x1="482" y1="541" x2="1041" y2="541" stroke="#313a49" stroke-width="5" stroke-linecap="round"/>
+  <line x1="482" y1="541" x2="639" y2="541" stroke="#a7c8ff" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="639" cy="541" r="9" fill="#dce9ff" stroke="#a7c8ff" stroke-width="3"/>
+  <text x="1070" y="547" class="mono" font-size="20" fill="#e4e9f3">27</text>
+  <text x="1100" y="547" class="mono muted">px</text>
+  <text x="482" y="563" class="mono tiny">24</text><text x="1015" y="563" class="mono tiny">48</text>
+  <!-- quick toggles -->
+  <text x="456" y="620" class="mono" font-size="16" fill="#dce1ed">Быстрые переключатели</text>
+  <text x="1003" y="620" class="mono tiny">НАСТРОИТЬ В ПАНЕЛИ  →</text>
+  <g class="mono body">
+    <rect x="456" y="638" width="228" height="57" rx="7" fill="#1b222d" stroke="#343d4c"/>
+    <text x="474" y="673" fill="#a7c8ff">◉</text><text x="500" y="673">Системный трей</text>
+    <rect x="658" y="654" width="36" height="20" rx="10" fill="#a7c8ff"/><circle cx="683" cy="664" r="7" fill="#182333"/>
+    <rect x="699" y="638" width="228" height="57" rx="7" fill="#1b222d" stroke="#343d4c"/>
+    <text x="717" y="673" fill="#a7c8ff">◉</text><text x="743" y="673">Погода</text>
+    <rect x="901" y="654" width="36" height="20" rx="10" fill="#a7c8ff"/><circle cx="926" cy="664" r="7" fill="#182333"/>
+    <rect x="942" y="638" width="249" height="57" rx="7" fill="#1b222d" stroke="#343d4c"/>
+    <text x="960" y="673" fill="#a7c8ff">◉</text><text x="986" y="673">Не беспокоить</text>
+    <rect x="1165" y="654" width="36" height="20" rx="10" fill="#a7c8ff"/><circle cx="1190" cy="664" r="7" fill="#182333"/>
+  </g>
+  <!-- footer -->
+  <line x1="224" y1="814" x2="1216" y2="814" class="line"/>
+  <text x="234" y="839" class="mono tiny">↑↓ НАВИГАЦИЯ</text>
+  <text x="427" y="839" class="mono tiny">ENTER ОТКРЫТЬ</text>
+  <text x="621" y="839" class="mono tiny">SPACE ПЕРЕКЛЮЧИТЬ</text>
+  <text x="951" y="839" class="mono tiny">ESC ЗАКРЫТЬ</text>
+  <rect x="1101" y="821" width="102" height="27" rx="6" fill="#202733" stroke="#394354"/>
+  <text x="1129" y="839" class="mono tiny" fill="#cbd2df">ЗАКРЫТЬ</text>
+</svg>
