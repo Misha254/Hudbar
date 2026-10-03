@@ -822,13 +822,9 @@ pub fn module_name_rect(module: Module, line: usize) -> Rect {
     Rect::new(row.x + MODULE_PAD_X, row.y, (row.w - tail).max(40.0), row.h)
 }
 
-/// Ширина блока кнопок ▲▼ вместе с их полями.
+/// Ширина блока кнопок ▲▼: обе кнопки и промежуток между ними.
 pub fn move_buttons_width() -> f32 {
-    if Module::ALL.iter().all(|module| module.movable()) {
-        MOVE_BTN_W * 2.0 + MOVE_BTN_GAP
-    } else {
-        MOVE_BTN_W * 2.0 + MOVE_BTN_GAP
-    }
+    MOVE_BTN_W * 2.0 + MOVE_BTN_GAP
 }
 
 /// Переключатель вкл/выкл: между названием и кнопками ▲▼.
@@ -1052,11 +1048,37 @@ pub fn rows_for(
 }
 
 /// Горячая клавиша из конфига niri. Окно только показывает её, поэтому структура
-/// простая: сочетание и расшифровка.
+/// простая: сочетания и расшифровка. Одно действие может быть навешено на
+/// несколько клавиш — тогда они собраны в одной строке через «/».
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hotkey {
     pub keys: String,
     pub desc: String,
+}
+
+/// Склеивает бинды одного действия в строки: клавиши через «/», порядок как в
+/// `binds.kdl`. Разные действия сохраняются раздельно и в исходном порядке.
+pub fn merge_hotkeys(keys: &[String], descs: &[String]) -> Vec<Hotkey> {
+    let mut rows: Vec<Hotkey> = Vec::new();
+    for (key, desc) in keys.iter().zip(descs) {
+        let desc = desc.trim();
+        if desc.is_empty() {
+            continue;
+        }
+        match rows.iter_mut().find(|row| row.desc == desc) {
+            Some(row) => {
+                if !row.keys.split("/").any(|part| part == key) {
+                    row.keys.push('/');
+                    row.keys.push_str(key);
+                }
+            }
+            None => rows.push(Hotkey {
+                keys: key.clone(),
+                desc: desc.to_string(),
+            }),
+        }
+    }
+    rows
 }
 
 /// Раздел «Обзор»: короткая сводка и переходы в разделы. Контролов здесь нет —
@@ -1344,6 +1366,64 @@ mod tests {
 
     fn controls_of(rows: &[Row]) -> Vec<Control> {
         controls(rows)
+    }
+
+    #[test]
+    fn hotkeys_with_the_same_action_merge_into_one_row() {
+        let keys = [
+            "super+Shift+Slash".to_string(),
+            "KP_Up".to_string(),
+            "KP_8".to_string(),
+            "super+W".to_string(),
+            "Mod+d".to_string(),
+            "Mod+D".to_string(),
+        ];
+        let descs = [
+            "Показать список горячих клавиш".to_string(),
+            "Показать список горячих клавиш".to_string(),
+            "Показать список горячих клавиш".to_string(),
+            "Обзор окон".to_string(),
+            "Калькулятор".to_string(),
+            "Калькулятор".to_string(),
+        ];
+
+        let rows = merge_hotkeys(&keys, &descs);
+
+        assert_eq!(rows.len(), 3, "три действия, не шесть биндов");
+        assert_eq!(
+            rows[0].keys, "super+Shift+Slash/KP_Up/KP_8",
+            "клавиши одного действия склеены через «/»"
+        );
+        assert_eq!(rows[1].desc, "Обзор окон");
+        assert_eq!(rows[2].keys, "Mod+d/Mod+D");
+    }
+
+    #[test]
+    fn merged_hotkeys_keep_the_order_of_the_config_file() {
+        let keys = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let descs = vec![
+            "Первое".to_string(),
+            "Второе".to_string(),
+            "Первое".to_string(),
+        ];
+
+        let rows = merge_hotkeys(&keys, &descs);
+
+        assert_eq!(
+            rows.iter().map(|r| r.desc.as_str()).collect::<Vec<_>>(),
+            vec!["Первое", "Второе"],
+            "порядок по первому появлению действия"
+        );
+    }
+
+    #[test]
+    fn empty_descriptions_are_skipped() {
+        let rows = merge_hotkeys(
+            &["x".to_string(), "y".to_string()],
+            &["".to_string(), "Пусто".to_string()],
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].desc, "Пусто");
     }
 
     #[test]

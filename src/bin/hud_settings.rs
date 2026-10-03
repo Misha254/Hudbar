@@ -176,13 +176,10 @@ fn stamp(path: &std::path::Path) -> Option<SystemTime> {
 /// Горячие клавиши из `~/.config/niri/binds.kdl` для раздела «Управление».
 /// Окно их только показывает: править бинды здесь нельзя.
 fn load_hotkeys() -> Vec<Hotkey> {
-    bind_data::load_niri()
-        .into_iter()
-        .map(|entry| Hotkey {
-            keys: entry.key,
-            desc: entry.desc,
-        })
-        .collect()
+    let entries = bind_data::load_niri();
+    let keys: Vec<String> = entries.iter().map(|entry| entry.key.clone()).collect();
+    let descs: Vec<String> = entries.iter().map(|entry| entry.desc.clone()).collect();
+    settings_ui::merge_hotkeys(&keys, &descs)
 }
 
 fn restart_hudbar() -> Result<(), String> {
@@ -1249,7 +1246,7 @@ impl SettingsApp {
         // 1. Название. Длинные вроде «Не беспокоить» умещаются целиком:
         //    ширина полосы задана от содержимого колонки, а не наоборот.
         let name = module.label();
-        self.painter.paint(
+        self.painter.paint_boxed(
             pixmap,
             name,
             s.micro,
@@ -1319,20 +1316,27 @@ impl SettingsApp {
             if self.pixel_mode() { 0.0 } else { 6.0 * k },
             p.idle_panel,
         );
-        self.painter.paint(
+        // Обе части обрезаются по измеренной ширине: длинное сочетание или
+        // расшифровка не должны вылезать за границу колонки.
+        // Полоса клавиш фиксированной доли строки: длинное сочетание и длинная
+        // расшифровка обе обрезаются по измеренной ширине и не выходят за колонку.
+        let keys_w = rect.w * 0.42;
+        let keys_x = rect.x + 10.0;
+        self.painter.paint_boxed(
             pixmap,
             keys,
             s.micro,
             p.accent,
-            Rect::new(rect.x + 10.0, rect.y, 210.0, rect.h),
+            Rect::new(keys_x, rect.y, keys_w, rect.h),
             Align::Start,
         );
-        self.painter.paint(
+        let desc_x = keys_x + keys_w + 10.0;
+        self.painter.paint_boxed(
             pixmap,
             desc,
             s.row,
             p.text,
-            Rect::new(rect.x + 228.0, rect.y, rect.w - 238.0, rect.h),
+            Rect::new(desc_x, rect.y, rect.right() - desc_x - 10.0, rect.h),
             Align::Start,
         );
     }
