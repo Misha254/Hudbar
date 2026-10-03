@@ -15,7 +15,10 @@ pub mod dunst;
 pub mod log;
 pub mod palette;
 pub mod settings;
+// Рекурсивный список файлов обоев из ~/wallpapers; окно подключит его.
 pub mod tray;
+#[allow(dead_code)]
+pub mod wallpaper;
 
 pub mod app;
 

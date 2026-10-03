@@ -55,6 +55,9 @@ mod settings;
 mod settings_ui;
 #[path = "../hud/text.rs"]
 mod text;
+#[allow(dead_code)]
+#[path = "../hud/wallpaper.rs"]
+mod wallpaper;
 
 use config::Config;
 use settings_ui::{Control, Focus, Hotkey, Module, Nav, NotificationPosition, Rect, Row, Section};
@@ -241,31 +244,12 @@ fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
     }
 }
 
-/// Файлы обоев из `~/wallpapers`. Окно само листает список: rofi с его
-/// превью тут не нужен, а выбор остаётся в одном окне.
+/// Файлы обоев из `~/wallpapers` — рекурсивно, по четырём расширениям и с
+/// сортировкой по пути. Обход и правила живут в `hud/wallpaper.rs`, чтобы их
+/// можно было покрыть тестами; rofi с превью тут не нужен, список листается
+/// в самом окне.
 fn load_wallpapers() -> Vec<String> {
-    let mut files = Vec::new();
-    let mut stack = vec![home().join("wallpapers")];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|ext| {
-                matches!(
-                    ext.to_string_lossy().as_ref(),
-                    "jpg" | "jpeg" | "png" | "webp" | "gif"
-                )
-            }) {
-                files.push(path.to_string_lossy().into_owned());
-            }
-        }
-    }
-    files.sort();
-    files
+    wallpaper::list()
 }
 
 /// Имя файла без пути: в списке обоев полный путь занимает всю строку.
