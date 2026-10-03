@@ -56,6 +56,12 @@ pub mod strings {
     pub const HINT_OPEN: &str = "ENTER ОТКРЫТЬ";
     pub const HINT_BACK: &str = "← НАЗАД";
     pub const HINT_CLOSE: &str = "ESC ЗАКРЫТЬ";
+    /// Короткие подсказки: в пиксельном шрифте полные не влезают, и вместо
+    /// наезда на счётчик подвал берёт эти. Клавиша остаётся, пропадает слово.
+    pub const HINT_SELECT_SHORT: &str = "↑↓";
+    pub const HINT_OPEN_SHORT: &str = "ENTER";
+    pub const HINT_BACK_SHORT: &str = "←";
+    pub const HINT_CLOSE_SHORT: &str = "ESC";
     /// Статус после действия.
     pub const STATUS_APPLIED: &str = "ПРИМЕНЕНО";
     pub const STATUS_FAILED: &str = "ОШИБКА";
@@ -238,7 +244,7 @@ pub fn demo_tree() -> Vec<Node> {
                     fake::language,
                     fake::set_language,
                 ),
-                Node::picker(settings_icons::WALLPAPER, "Обои", "wallpaper"),
+                Node::picker(settings_icons::PICTURE, "Обои", "wallpaper"),
                 Node::choice(
                     settings_icons::SCHEME,
                     "Схема matugen",

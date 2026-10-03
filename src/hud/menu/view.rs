@@ -9,6 +9,17 @@
 //! `UiPalette`. Новых hex здесь нет: всё, что не приходит из палитры, берётся
 //! через `mix`, иначе меню перестало бы следовать за matugen.
 //!
+//! Три правила, которые видно на снимках и которые поэтому вынесены в
+//! функции, а не размазаны по коду:
+//!
+//! * выбранная строка светлее карточки. `surface_hover` для этого не годится
+//!   — он темнее панели, и выделение проваливалось бы в фон;
+//! * подсветка и полоса отступают от рамки карточки на `CARD_INSET`, иначе
+//!   заливка съедала бы hairline по краю;
+//! * по вертикали всё центрируется одним расчётом `center_band`, а базовая
+//!   линия берётся в `text.rs` по измеренным пикселям глифов, а не по
+//!   константе размера шрифта.
+//!
 //! Строки рисует тот же `TextPainter`, что и окно настроек, а глифы —
 //! отдельной копией painter с шрифтом Nerd Font: в Pixel основной шрифт —
 //! Minecraft Rus, и иконок в нём нет.
@@ -28,8 +39,18 @@ use super::strings;
 /// Ширина карточки. Фиксированная: подменю того же меню не должны менять
 /// размер окна при переходе.
 pub const CARD_W: f32 = 520.0;
-/// Высота строки списка.
+/// Высота строки списка в обычном режиме.
 pub const ROW_H: f32 = 40.0;
+/// Высота строки в режиме поиска: две строки текста плюс зазор.
+pub const ROW_H_SEARCH: f32 = 52.0;
+/// Зазор между названием и путём в строке поиска.
+pub const CAPTION_GAP: f32 = 3.0;
+/// Отступ подсветки выбранной строки от края карточки. Равен толщине
+/// hairline: иначе заливка ложилась бы прямо на рамку и рвала её.
+pub const CARD_INSET: f32 = 1.0;
+/// Доля акцента в фоне выбранной строки. Малая: фон должен наметиться, а не
+/// стать второй подсветкой.
+pub const SELECTED_MIX: f32 = 0.14;
 /// Минимум строк в карточке. Ниже карточка прыгает при каждом нажатии.
 pub const MIN_ROWS: usize = 5;
 /// Максимум строк: дальше список уже нужно прокручивать.
@@ -52,23 +73,93 @@ pub const SEL_BAR: f32 = 3.0;
 pub const TOGGLE_D: f32 = 16.0;
 /// Диаметр миниатюры пикера.
 pub const THUMB_D: f32 = 28.0;
+/// Ширина зоны значения справа.
+pub const VALUE_W: f32 = 168.0;
+/// Ширина зоны шеврона.
+pub const CHEVRON_W: f32 = 16.0;
 /// Плотность затемнения вокруг карточки.
 pub const SCRIM: f32 = 0.72;
+
+/// Режим ли поиск: в нём строки двухстрочные и выше. Флаг один, а не вывод
+/// из `caption`: путь есть только у найденной строки, а режим задаёт запрос.
+pub fn search_mode(frame: &Frame) -> bool {
+    !frame.query.is_empty()
+}
+
+/// Высота строки в текущем режиме.
+pub fn row_height(search: bool) -> f32 {
+    if search { ROW_H_SEARCH } else { ROW_H }
+}
+
+/// Высота полосы, внутри которой центрируется всё содержимое строки. В
+/// поисковой строке это две строки текста, в обычной — одна.
+pub fn row_band(view: &MenuView<'_>) -> f32 {
+    let single = view.scale.label * 2.0;
+    if view.scale.label + view.scale.caption + CAPTION_GAP > single {
+        view.scale.label + view.scale.caption + CAPTION_GAP
+    } else {
+        single
+    }
+}
 
 /// Сколько строк показывает карточка: от `MIN_ROWS` до `MAX_ROWS`.
 pub fn rows_shown(count: usize) -> usize {
     count.clamp(MIN_ROWS, MAX_ROWS)
 }
 
-/// Высота карточки для указанного числа строк.
-pub fn card_height(rows: usize) -> f32 {
-    HEADER_H + rows_shown(rows) as f32 * ROW_H + FOOTER_H
+/// Высота карточки: строки считаются по высоте своего режима, иначе поиск
+/// либо обрезался, либо оставлял пустое поле.
+pub fn card_height_for(rows: usize, search: bool) -> f32 {
+    HEADER_H + rows_shown(rows) as f32 * row_height(search) + FOOTER_H
 }
 
-/// Прямоугольник карточки по центру кадра. Возвращает и он сам, и то, что
-/// осталось вокруг: затемнение рисуется по всему кадру.
-pub fn card_rect(frame_w: f32, frame_h: f32, rows: usize) -> Rect {
-    let height = card_height(rows);
+/// Высота карточки в обычном режиме.
+pub fn card_height(rows: usize) -> f32 {
+    card_height_for(rows, false)
+}
+
+/// Фон выбранной строки: смесь поверхности с акцентом. Проверено на обеих
+/// темах — `luminance` результата выше, чем у самой карточки.
+pub fn selected_background(ui: UiPalette) -> palette::Rgba {
+    mix(ui.surface, ui.accent, SELECTED_MIX)
+}
+
+/// Относительная яркость цвета: 0 — чёрный, 1 — белый. Нужна тесту «фон
+/// выбранной строки светлее карточки» в обеих темах.
+pub fn luminance(color: palette::Rgba) -> f32 {
+    (0.2126 * color.0 as f32 + 0.7152 * color.1 as f32 + 0.0722 * color.2 as f32) / 255.0
+}
+
+/// Прямоугольник подсветки выбранной строки: та же полоса списка, но с отступом
+/// от краёв карточки, чтобы hairline остался целым.
+pub fn highlight_rect(row: Rect) -> Rect {
+    Rect::new(
+        row.x + CARD_INSET,
+        row.y,
+        row.w - CARD_INSET * 2.0,
+        row.h,
+    )
+}
+
+/// Прямоугольник акцентной полосы выбранной строки — та же подсветка, но
+/// полоса шириной `SEL_BAR` от её левого края.
+pub fn marker_rect(row: Rect) -> Rect {
+    let inner = highlight_rect(row);
+    Rect::new(inner.x, inner.y, SEL_BAR, inner.h)
+}
+
+/// Полоса высотой `height`, отцентрованная по вертикали внутри `rect`.
+/// Единственный расчёт вертикального центра: иконка, название, значение и
+/// подпись идут через него, поэтому не могут разойтись на пиксель.
+pub fn center_band(rect: Rect, height: f32) -> Rect {
+    let height = height.min(rect.h);
+    Rect::new(rect.x, rect.y + (rect.h - height) / 2.0, rect.w, height)
+}
+
+/// Прямоугольник карточки по центру кадра. Затемнение рисуется по всему
+/// кадру, а карточка — по этому прямоугольнику.
+pub fn card_rect(frame_w: f32, frame_h: f32, rows: usize, search: bool) -> Rect {
+    let height = card_height_for(rows, search);
     Rect::new(
         (frame_w - CARD_W) / 2.0,
         (frame_h - height) / 2.0,
@@ -122,26 +213,19 @@ impl<'a> MenuView<'a> {
             radius(self.pixel, radii::LG) * SCALE,
             self.ui.panel,
         );
-        let hairline = self.ui.border;
         stroke_rect(
             self.pixmap,
             rect.x * SCALE,
             rect.y * SCALE,
             rect.w * SCALE,
             rect.h * SCALE,
-            hairline,
+            self.ui.border,
             SCALE,
         );
     }
 
-    /// Текст в полосе. Обёртка нужна, чтобы цвет и выравнивание выбирались
-    /// в одном месте, а `paint` вызывался с одним аргументом.
-    fn text(&mut self, value: &str, size: f32, color: palette::Rgba, rect: Rect, align: Align) {
-        self.painter
-            .paint(self.pixmap, value, size, color, rect, align);
-    }
-
     /// Текст с многоточием: длинные значения не должны наезжать на иконки.
+    /// Базовая линия считается внутри `text.rs` по измеренным пикселям.
     fn text_clipped(
         &mut self,
         value: &str,
@@ -159,44 +243,39 @@ impl<'a> MenuView<'a> {
         self.icons
             .paint(self.pixmap, value, size, color, rect, Align::Center);
     }
+
+    /// Заливка кругом по центру прямоугольника. Радиус всегда половина
+    /// стороны: круг — это форма миниатюры и кружка, а не скругление угла,
+    /// поэтому тема на него не влияет.
+    fn disc(&mut self, rect: Rect, color: palette::Rgba) {
+        let r = rect.w.min(rect.h) / 2.0;
+        let cx = rect.x + rect.w / 2.0;
+        let cy = rect.y + rect.h / 2.0;
+        fill_round_rect(
+            self.pixmap,
+            (cx - r) * SCALE,
+            (cy - r) * SCALE,
+            r * 2.0 * SCALE,
+            r * 2.0 * SCALE,
+            r * SCALE,
+            color,
+        );
+    }
 }
 
 /// Рисует меню целиком и возвращает прямоугольник карточки.
 pub fn render(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
     let surface = Rect::new(0.0, 0.0, frame_w(view), frame_h(view));
+    let search = search_mode(frame);
     let rows = rows_shown(frame.items.len());
-    let card = card_rect(surface.w, surface.h, rows);
+    let row_h = row_height(search);
+    let card = card_rect(surface.w, surface.h, rows, search);
     view.scrim(surface.w, surface.h);
     view.card(card);
     header(view, card, frame);
-    rows_view(view, card, frame, rows);
+    rows_view(view, card, frame, rows, row_h);
     footer(view, card, frame);
     card
-}
-
-/// Кольцо вокруг выключенного тумблера: внешний круг цветом рамки, внутренний
-/// цветом карточки. Обводки окружности среди примитивов нет, а квадратный
-/// «кружок» выдавал бы тумблер за чекбокс.
-fn ring(view: &mut MenuView<'_>, rect: Rect, color: palette::Rgba) {
-    fill_round_rect(
-        view.pixmap,
-        rect.x * SCALE,
-        rect.y * SCALE,
-        rect.w * SCALE,
-        rect.h * SCALE,
-        radius(view.pixel, rect.w / 2.0) * SCALE,
-        color,
-    );
-    let line = 1.0;
-    fill_round_rect(
-        view.pixmap,
-        (rect.x + line) * SCALE,
-        (rect.y + line) * SCALE,
-        (rect.w - line * 2.0) * SCALE,
-        (rect.h - line * 2.0) * SCALE,
-        radius(view.pixel, (rect.w - line * 2.0) / 2.0) * SCALE,
-        view.ui.panel,
-    );
 }
 
 /// Ширина кадра: логические пиксели из буфера.
@@ -209,15 +288,30 @@ fn frame_h(view: &MenuView<'_>) -> f32 {
     view.pixmap.height() as f32 / SCALE
 }
 
+/// Кольцо вокруг выключенного тумблера: внешний круг цветом рамки, внутренний
+/// цветом карточки. Обводки окружности среди примитивов нет, а квадратный
+/// «кружок» выдавал бы тумблер за чекбокс.
+fn ring(view: &mut MenuView<'_>, rect: Rect, color: palette::Rgba) {
+    view.disc(rect, color);
+    let line = 1.0;
+    view.disc(
+        Rect::new(
+            rect.x + line,
+            rect.y + line,
+            rect.w - line * 2.0,
+            rect.h - line * 2.0,
+        ),
+        view.ui.panel,
+    );
+}
+
 /// Крошки «HUD › Стиль» слева и поле поиска справа. Поле не мигает: рамка в
 /// фокусе всегда видна, потому что меню работает только с клавиатуры.
 fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
     let header_rect = Rect::new(card.x, card.y, card.w, HEADER_H);
     if !frame.trail.is_empty() {
-        // Крошки рисуются одним текстом, но последний уровень ярче. Поэтому
-        // он выравнивается по правому краю своей части, а предыдущие
-        // набираются вручную: измерение каждого глифа дороже, а строка всегда
-        // одна и та же.
+        // Крошки рисуются двумя текстами: последний уровень ярче, поэтому он
+        // меряется отдельно и ставится за своим префиксом.
         let last = frame.trail.last().expect("крошки не пусты").to_string();
         let prefix = frame
             .trail
@@ -237,13 +331,19 @@ fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
             HEADER_H,
         );
         if prefix_text.is_empty() {
-            view.text_clipped(&last, view.scale.label, view.ui.text, crumbs, Align::Start);
+            view.text_clipped(
+                &last,
+                view.scale.label,
+                view.ui.text,
+                center_band(crumbs, view.scale.label * 2.0),
+                Align::Start,
+            );
         } else {
             view.text_clipped(
                 &prefix_text,
                 view.scale.label,
                 view.ui.muted,
-                crumbs,
+                center_band(crumbs, view.scale.label * 2.0),
                 Align::Start,
             );
             let width = view.painter.text_width(&prefix_text, view.scale.label);
@@ -251,11 +351,14 @@ fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
                 &last,
                 view.scale.label,
                 view.ui.accent,
-                Rect::new(
-                    crumbs.x + width + spacing::XS,
-                    crumbs.y,
-                    (crumbs.w - width).max(0.0),
-                    crumbs.h,
+                center_band(
+                    Rect::new(
+                        crumbs.x + width + spacing::XS,
+                        crumbs.y,
+                        (crumbs.w - width).max(0.0),
+                        crumbs.h,
+                    ),
+                    view.scale.label * 2.0,
                 ),
                 Align::Start,
             );
@@ -272,12 +375,6 @@ fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
         SEARCH_W,
         SEARCH_H,
     );
-    let focused = true;
-    let border = if focused {
-        view.ui.border_focus
-    } else {
-        view.ui.border_subtle
-    };
     fill_round_rect(
         view.pixmap,
         rect.x * SCALE,
@@ -293,15 +390,17 @@ fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
         rect.y * SCALE,
         rect.w * SCALE,
         rect.h * SCALE,
-        border,
+        view.ui.border_focus,
         SCALE,
     );
-    let glyph_rect = Rect::new(rect.x + spacing::SM, rect.y, ICON, rect.h);
     view.glyph(
         settings_icons::SEARCH,
         view.scale.caption,
         view.ui.muted,
-        glyph_rect,
+        center_band(
+            Rect::new(rect.x + spacing::SM, rect.y, ICON, rect.h),
+            view.scale.label * 2.0,
+        ),
     );
 
     let clear = !frame.query.is_empty();
@@ -310,7 +409,10 @@ fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
         - (spacing::SM + ICON + spacing::SM)
         - spacing::SM
         - if clear { ICON + spacing::XS } else { 0.0 };
-    let text_rect = Rect::new(text_x, rect.y, text_w.max(0.0), rect.h);
+    let text_rect = center_band(
+        Rect::new(text_x, rect.y, text_w.max(0.0), rect.h),
+        view.scale.label * 2.0,
+    );
     if frame.query.is_empty() {
         view.text_clipped(
             strings::SEARCH_PLACEHOLDER,
@@ -346,20 +448,22 @@ fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
         );
     }
     if clear {
-        let cross = Rect::new(rect.right() - spacing::SM - ICON, rect.y, ICON, rect.h);
         view.glyph(
             settings_icons::TIMES,
             view.scale.caption,
             view.ui.muted,
-            cross,
+            center_band(
+                Rect::new(rect.right() - spacing::SM - ICON, rect.y, ICON, rect.h),
+                view.scale.label * 2.0,
+            ),
         );
     }
 }
 
-/// Список строк: выбранная подсвечена и отмечена полосой, у каждой строки
-/// hairline снизу.
-fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize) {
-    let list = Rect::new(card.x, card.y + HEADER_H, card.w, rows as f32 * ROW_H);
+/// Список строк: выбранная подсвечена и отмечена полосой, между строками
+/// hairline.
+fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize, row_h: f32) {
+    let list = Rect::new(card.x, card.y + HEADER_H, card.w, rows as f32 * row_h);
     let start = frame
         .items
         .iter()
@@ -369,7 +473,7 @@ fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize) {
         .collect::<Vec<_>>();
     let selected_row = frame.top + frame.selected;
     for (index, (position, item)) in start.iter().enumerate() {
-        let rect = Rect::new(list.x, list.y + index as f32 * ROW_H, list.w, ROW_H);
+        let rect = Rect::new(list.x, list.y + index as f32 * row_h, list.w, row_h);
         // Разделитель рисуется над строкой, а не под ней: под последней
         // строкой снизу уже подвал, а над первой лишней линии быть не
         // должно — поэтому у первой видимой строки разделителя нет.
@@ -387,12 +491,11 @@ fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize) {
         row(view, rect, item, *position == selected_row);
     }
     if frame.items.is_empty() {
-        let empty = Rect::new(card.x, list.y, card.w, list.h);
         view.text_clipped(
             strings::NOTHING_FOUND,
             view.scale.label,
             view.ui.muted,
-            empty,
+            list,
             Align::Center,
         );
     }
@@ -401,21 +504,24 @@ fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize) {
 /// Одна строка: иконка, название, значение справа и индикатор поведения.
 fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool) {
     if selected {
+        // Подсветка и полоса отступают от краёв карточки на CARD_INSET:
+        // заливка от самого края ложилась бы на hairline рамки.
+        let inner = highlight_rect(rect);
         fill_rect(
             view.pixmap,
-            rect.x * SCALE,
-            rect.y * SCALE,
-            rect.w * SCALE,
-            rect.h * SCALE,
-            view.ui.surface_hover,
+            inner.x * SCALE,
+            inner.y * SCALE,
+            inner.w * SCALE,
+            inner.h * SCALE,
+            selected_background(view.ui),
         );
-        let bar = Rect::new(rect.x, rect.y, SEL_BAR, rect.h);
+        let marker = marker_rect(rect);
         fill_rect(
             view.pixmap,
-            bar.x * SCALE,
-            bar.y * SCALE,
-            bar.w * SCALE,
-            bar.h * SCALE,
+            marker.x * SCALE,
+            marker.y * SCALE,
+            marker.w * SCALE,
+            marker.h * SCALE,
             view.ui.accent,
         );
     }
@@ -430,56 +536,72 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool) {
         view.ui.text
     };
     let two_line = !item.single_line();
-    // В двухстрочном режиме (поиск) подпись снизу, иначе всё по центру полосы.
-    let label_h = if two_line { ROW_H / 2.0 } else { ROW_H };
-    let label_rect = Rect::new(
-        rect.x + PAD + ICON + spacing::MD,
-        rect.y,
-        rect.w - PAD * 2.0 - ICON - spacing::MD,
-        label_h,
-    );
+    let icon_x = rect.x + PAD;
+    let label_x = icon_x + ICON + spacing::MD;
+    let right = rect.right() - PAD;
+    // Ширина зоны названия: до значения или до шеврона, чтобы длинное имя не
+    // наезжало на правую часть.
+    let trailing = match item.kind {
+        super::item::ItemKind::Submenu | super::item::ItemKind::Leaf => CHEVRON_W,
+        super::item::ItemKind::Picker(_) => THUMB_D + CHEVRON_W + spacing::SM,
+        _ => CHEVRON_W + VALUE_W + spacing::SM,
+    };
+    let label_w = (right - trailing - label_x).max(0.0);
+    let label_rect = Rect::new(label_x, rect.y, label_w, rect.h);
     if !item.icon.is_empty() {
-        let icon_rect = Rect::new(rect.x + PAD, rect.y, ICON, label_h);
+        let icon_rect = center_band(Rect::new(icon_x, rect.y, ICON, rect.h), row_band(view));
         view.glyph(item.icon, view.scale.label, icon_color, icon_rect);
     }
-    view.text_clipped(
-        &item.title,
-        view.scale.label,
-        text_color,
-        label_rect,
-        Align::Start,
-    );
-    if let Some(caption) = item.caption.as_deref() {
-        let caption_rect = Rect::new(
-            label_rect.x,
-            rect.y + label_h,
-            label_rect.w,
-            ROW_H - label_h,
-        );
-        view.text_clipped(
-            caption,
-            view.scale.caption,
-            view.ui.muted,
-            caption_rect,
-            Align::Start,
-        );
+    match item.caption.as_deref() {
+        Some(caption) => {
+            // Две строки: блок из названия и пути центрируется по строке, а
+            // между ними ровно CAPTION_GAP.
+            let block = (view.scale.label + view.scale.caption + CAPTION_GAP).max(1.0);
+            let band = center_band(label_rect, block);
+            view.text_clipped(
+                &item.title,
+                view.scale.label,
+                text_color,
+                Rect::new(band.x, band.y, band.w, view.scale.label + CAPTION_GAP),
+                Align::Start,
+            );
+            view.text_clipped(
+                caption,
+                view.scale.caption,
+                view.ui.muted,
+                Rect::new(
+                    band.x,
+                    band.y + view.scale.label + CAPTION_GAP,
+                    band.w,
+                    view.scale.caption,
+                ),
+                Align::Start,
+            );
+        }
+        None => {
+            view.text_clipped(
+                &item.title,
+                view.scale.label,
+                text_color,
+                center_band(label_rect, view.scale.label * 2.0),
+                Align::Start,
+            );
+        }
     }
-    // Справа: круг тумблера, миниатюра пикера, значение или шеврон подменю.
+    indicator(view, rect, item, two_line);
+}
+
+/// Правая часть строки: круг тумблера, круглая миниатюра пикера, значение или
+/// шеврон подменю. Всё центрируется по той же оси, что и название.
+fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool) {
     let right = rect.right() - PAD;
     if item.kind.is_toggle() {
-        let on = item.value == "вкл";
-        let d = TOGGLE_D;
-        let dot = Rect::new(right - d, rect.y + (rect.h - d) / 2.0, d, d);
-        if on {
-            fill_round_rect(
-                view.pixmap,
-                dot.x * SCALE,
-                dot.y * SCALE,
-                dot.w * SCALE,
-                dot.h * SCALE,
-                radius(view.pixel, d / 2.0) * SCALE,
-                view.ui.accent,
-            );
+        let dot = center_band(
+            Rect::new(right - TOGGLE_D, rect.y, TOGGLE_D, rect.h),
+            TOGGLE_D,
+        );
+        if item.value == "вкл" {
+            view.disc(dot, view.ui.accent);
         } else {
             ring(view, dot, mix(view.ui.base, view.ui.border, 0.6));
         }
@@ -487,20 +609,18 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool) {
     }
     if item.kind.is_picker() {
         // Заглушка миниатюры: настоящая картинка придёт в M4, когда будет
-        // источник превью. Форма уже та же — круг 28 px, и шеврон справа от
-        // него остаётся: пункт открывает выбор.
-        let d = THUMB_D;
-        let thumb = Rect::new(right - 16.0 - d, rect.y + (rect.h - d) / 2.0, d, d);
-        let fill = mix(view.ui.accent, view.ui.base, 0.45);
-        fill_round_rect(
-            view.pixmap,
-            thumb.x * SCALE,
-            thumb.y * SCALE,
-            thumb.w * SCALE,
-            thumb.h * SCALE,
-            radius(view.pixel, d / 2.0) * SCALE,
-            fill,
+        // источник превью. Форма уже та же — круг 28 px с hairline, и шеврон
+        // справа остаётся: пункт открывает выбор.
+        let thumb = center_band(
+            Rect::new(
+                right - CHEVRON_W - THUMB_D,
+                rect.y,
+                THUMB_D,
+                rect.h,
+            ),
+            THUMB_D,
         );
+        view.disc(thumb, mix(view.ui.accent, view.ui.base, 0.45));
         stroke_rect(
             view.pixmap,
             thumb.x * SCALE,
@@ -510,40 +630,42 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool) {
             view.ui.border_subtle,
             SCALE,
         );
-        let chevron_rect = Rect::new(right - 16.0, rect.y, 16.0, rect.h);
         view.glyph(
             settings_icons::CHEVRON,
             view.scale.caption,
             view.ui.muted,
-            chevron_rect,
+            center_band(
+                Rect::new(right - CHEVRON_W, rect.y, CHEVRON_W, rect.h),
+                row_band(view),
+            ),
         );
         return;
     }
     let chevron = !item.value.is_empty() || item.kind.is_submenu();
     if chevron {
-        let chevron_rect = Rect::new(right - 16.0, rect.y, 16.0, rect.h);
         view.glyph(
             settings_icons::CHEVRON,
             view.scale.caption,
             view.ui.muted,
-            chevron_rect,
+            center_band(
+                Rect::new(right - CHEVRON_W, rect.y, CHEVRON_W, rect.h),
+                row_band(view),
+            ),
         );
     }
     if !item.value.is_empty() {
-        let value_w = 168.0;
-        let value_rect = Rect::new(
-            right - 16.0 - value_w - spacing::SM,
+        let value = Rect::new(
+            right - CHEVRON_W - VALUE_W - spacing::SM,
             rect.y,
-            value_w,
-            label_h,
+            VALUE_W,
+            rect.h,
         );
-        view.text_clipped(
-            &item.value,
-            view.scale.label,
-            view.ui.muted,
-            value_rect,
-            Align::End,
-        );
+        let band = if two_line {
+            center_band(value, view.scale.label + view.scale.caption + CAPTION_GAP)
+        } else {
+            center_band(value, view.scale.label * 2.0)
+        };
+        view.text_clipped(&item.value, view.scale.label, view.ui.muted, band, Align::End);
     }
 }
 
@@ -559,91 +681,105 @@ fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
         line.h * SCALE,
         view.ui.border_subtle,
     );
-    // Подсказки раскладываются по колонкам с зазором из токена, а не
-    // склеиваются пробелами: в пиксельном шрифте пробел уже, и слипшиеся
-    // подсказки не читаются.
-    let hints = [
-        strings::HINT_SELECT,
-        strings::HINT_OPEN,
-        strings::HINT_BACK,
-        strings::HINT_CLOSE,
-    ];
+    let band = center_band(rect, view.scale.caption * 2.0);
     let counter_w = 96.0;
-    let hints_w = rect.w - PAD * 2.0 - counter_w;
-    let mut x = rect.x + PAD;
-    let limit = rect.x + PAD + hints_w;
+    // Между подсказками и правой частью — обязательный зазор XL. Если полные
+    // подсказки не влезают, берутся короткие, а не наезжают на счётчик.
+    let hints_left = rect.x + PAD;
+    let right_edge = rect.right() - PAD - counter_w;
+    let (hints, mut x) = layout_hints(view, hints_left, right_edge - spacing::XL);
     for hint in hints {
-        if x >= limit {
-            break;
-        }
         let width = view.painter.text_width(hint, view.scale.caption);
         view.text_clipped(
             hint,
             view.scale.caption,
             view.ui.muted,
-            Rect::new(x, rect.y, width, rect.h),
+            Rect::new(x, band.y, width, band.h),
             Align::Start,
         );
-        x += width + spacing::XL;
+        x += width + spacing::LG;
     }
-    let right = Rect::new(rect.right() - PAD - counter_w, rect.y, counter_w, rect.h);
+    let right = Rect::new(right_edge, rect.y, counter_w, rect.h);
     match frame.status.as_ref() {
         Some(status) => {
             // В режиме статуса счётчика нет: точка сообщает, что сообщение
             // именно об изменении, а не о позиции в списке.
-            // Успех — чистый акцент, ошибка — приглушённый: два состояния
-            // должны отличаться, иначе «ошибка» выглядит как подтверждение.
-            let dot_color = if status.is_failed() {
+            let color = if status.is_failed() {
                 mix(view.ui.accent, view.ui.muted, 0.5)
             } else {
                 view.ui.accent
             };
-            let dot = Rect::new(right.x, right.y + (right.h - 8.0) / 2.0, 8.0, 8.0);
-            fill_round_rect(
-                view.pixmap,
-                dot.x * SCALE,
-                dot.y * SCALE,
-                dot.w * SCALE,
-                dot.h * SCALE,
-                radius(view.pixel, 4.0) * SCALE,
-                dot_color,
-            );
+            view.disc(center_band(Rect::new(right.x, rect.y, 8.0, rect.h), 8.0), color);
             let label = if status.is_failed() {
                 strings::STATUS_FAILED
             } else {
                 strings::STATUS_APPLIED
             };
-            let label_rect = Rect::new(
-                right.x + 8.0 + spacing::XS,
-                right.y,
-                right.w - 8.0 - spacing::XS,
-                right.h,
-            );
             view.text_clipped(
                 label,
                 view.scale.caption,
                 view.ui.muted,
-                label_rect,
+                center_band(
+                    Rect::new(
+                        right.x + 8.0 + spacing::XS,
+                        rect.y,
+                        right.w - 8.0 - spacing::XS,
+                        rect.h,
+                    ),
+                    view.scale.caption * 2.0,
+                ),
                 Align::Start,
             );
         }
         None => {
             // На пустом списке счётчик был бы «1/0»: читается как ошибка.
             // Там ноль из нуля.
-            let index = if frame.total == 0 {
-                0
-            } else {
-                frame.selected + 1
-            };
+            let index = if frame.total == 0 { 0 } else { frame.selected + 1 };
             let counter = format!("{index}/{}", frame.total);
             view.text_clipped(
                 &counter,
                 view.scale.caption,
                 view.ui.muted,
-                right,
+                center_band(right, view.scale.caption * 2.0),
                 Align::End,
             );
         }
+    }
+}
+
+/// Ширина строки подсказок вместе с зазорами между ними.
+fn hints_width(view: &mut MenuView<'_>, hints: &[&str]) -> f32 {
+    let mut total = 0.0;
+    for (index, hint) in hints.iter().enumerate() {
+        total += view.painter.text_width(hint, view.scale.caption);
+        if index + 1 < hints.len() {
+            total += spacing::LG;
+        }
+    }
+    total
+}
+
+/// Раскладка подсказок подвала: возвращает набор строк и их левую границу.
+/// Полные подписи не влезают в русском Pixel-шрифте, поэтому для них есть
+/// короткие варианты: «ESC» вместо «ESC ЗАКРЫТЬ».
+fn layout_hints<'a>(view: &mut MenuView<'_>, left: f32, limit: f32) -> (Vec<&'a str>, f32) {
+    let full = [
+        strings::HINT_SELECT,
+        strings::HINT_OPEN,
+        strings::HINT_BACK,
+        strings::HINT_CLOSE,
+    ];
+    let short = [
+        strings::HINT_SELECT_SHORT,
+        strings::HINT_OPEN_SHORT,
+        strings::HINT_BACK_SHORT,
+        strings::HINT_CLOSE_SHORT,
+    ];
+    let width = hints_width(view, &full);
+    if left + width <= limit {
+        (full.to_vec(), left)
+    } else {
+        (short.to_vec(), left)
     }
 }
 
@@ -665,6 +801,15 @@ pub fn font_name(pixel: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::state::Status;
+
+    fn palette_for(pixel: bool) -> UiPalette {
+        theme(pixel, palette::Palette::default()).0
+    }
+
+    fn card(rows: usize) -> Rect {
+        card_rect(1200.0, 800.0, rows, false)
+    }
 
     #[test]
     fn card_is_at_least_five_rows_tall() {
@@ -679,36 +824,172 @@ mod tests {
     }
 
     #[test]
-    fn rows_shown_is_clamped() {
-        assert_eq!(rows_shown(1), MIN_ROWS);
-        assert_eq!(rows_shown(7), 7);
-        assert_eq!(rows_shown(99), MAX_ROWS);
+    fn search_rows_are_taller_than_plain_ones() {
+        assert_eq!(row_height(true), ROW_H_SEARCH);
+        assert_eq!(row_height(false), ROW_H);
+        assert_eq!(ROW_H_SEARCH, 52.0, "по макету");
+    }
+
+    /// Высота карточки считается по высоте строки своего режима: иначе в
+    /// поиске строки либо обрезались, либо под ними зияла пустота.
+    #[test]
+    fn card_height_uses_the_height_of_its_mode() {
+        let plain = card_height_for(5, false);
+        let search = card_height_for(5, true);
+        assert_eq!(plain, HEADER_H + 5.0 * ROW_H + FOOTER_H);
+        assert_eq!(search, HEADER_H + 5.0 * ROW_H_SEARCH + FOOTER_H);
+        assert_eq!(
+            search - plain,
+            5.0 * (ROW_H_SEARCH - ROW_H),
+            "разница ровно в пяти строках"
+        );
+        assert!(search > plain);
     }
 
     #[test]
-    fn card_sits_in_the_middle_of_the_frame() {
-        let rect = card_rect(1000.0, 700.0, 6);
-        assert_eq!(rect.x, (1000.0 - CARD_W) / 2.0);
-        assert_eq!(rect.w, CARD_W);
-        assert_eq!(
-            rect.y,
-            (700.0 - rect.h) / 2.0,
-            "карточка центрируется по вертикали"
+    fn card_rect_is_centered_for_both_modes() {
+        for search in [false, true] {
+            let rect = card_rect(1000.0, 700.0, 6, search);
+            assert_eq!(rect.x, (1000.0 - CARD_W) / 2.0);
+            assert_eq!(rect.w, CARD_W);
+            assert_eq!(rect.h, card_height_for(6, search));
+            assert_eq!(rect.y, (700.0 - rect.h) / 2.0);
+        }
+    }
+
+    /// Фон выбранной строки обязан быть светлее карточки в обеих темах:
+    /// `surface_hover` темнее панели, и выделение проваливалось бы в фон.
+    #[test]
+    fn selected_row_is_lighter_than_the_card() {
+        for pixel in [false, true] {
+            let ui = palette_for(pixel);
+            let selected = selected_background(ui);
+            assert!(
+                luminance(selected) > luminance(ui.surface),
+                "pixel={pixel}: фон выбранной строки {} не светлее карточки {}",
+                luminance(selected),
+                luminance(ui.surface)
+            );
+            assert!(
+                luminance(ui.surface_hover) < luminance(ui.surface),
+                "pixel={pixel}: surface_hover светлее карточки, подсветку можно было бы оставить"
+            );
+        }
+    }
+
+    /// Подсветка и полоса не должны наезжать на hairline рамки карточки.
+    #[test]
+    fn highlight_stays_inside_the_card_border() {
+        let rect = card(8);
+        let first = Rect::new(rect.x, rect.y + HEADER_H, rect.w, ROW_H);
+        let middle = Rect::new(rect.x, rect.y + HEADER_H + ROW_H * 3.0, rect.w, ROW_H);
+        for row in [first, middle] {
+            let inner = highlight_rect(row);
+            assert!(inner.x >= rect.x + CARD_INSET, "подсветка залезает на рамку");
+            assert!(
+                inner.right() <= rect.right() - CARD_INSET,
+                "подсветка перекрывает правую рамку"
+            );
+            let marker = marker_rect(row);
+            assert!(marker.x >= rect.x + CARD_INSET);
+            assert_eq!(marker.w, SEL_BAR);
+            assert_eq!(marker.h, row.h, "полоса на всю высоту строки");
+            assert!(marker.right() <= inner.right(), "полоса шире подсветки");
+        }
+    }
+
+    #[test]
+    fn marker_is_three_pixels_and_inset_by_one() {
+        let rect = card(6);
+        let row = Rect::new(rect.x, rect.y, rect.w, ROW_H);
+        let marker = marker_rect(row);
+        assert_eq!(marker.w, 3.0);
+        assert_eq!(marker.x, rect.x + 1.0);
+    }
+
+    #[test]
+    fn center_band_centers_vertically() {
+        let rect = Rect::new(10.0, 100.0, 200.0, 40.0);
+        let band = center_band(rect, 20.0);
+        assert_eq!(band.y, 110.0);
+        assert_eq!(band.h, 20.0);
+        assert_eq!(band.x, rect.x);
+        assert_eq!(band.w, rect.w);
+        assert!((band.y + band.h / 2.0 - (rect.y + rect.h / 2.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn center_band_never_grows_past_the_row() {
+        let rect = Rect::new(0.0, 0.0, 10.0, 20.0);
+        let band = center_band(rect, 40.0);
+        assert_eq!(band.h, 20.0);
+        assert_eq!(band.y, 0.0);
+    }
+
+    #[test]
+    fn two_line_block_fits_the_search_row() {
+        let scale = type_scale(false);
+        let block = scale.label + scale.caption + CAPTION_GAP;
+        assert!(
+            block < ROW_H_SEARCH,
+            "две строки с зазором не влезают в строку поиска: {block} > {ROW_H_SEARCH}"
         );
+        assert_eq!(CAPTION_GAP, 3.0, "зазор между строками — 2–3 px по макету");
+        assert!((2.0..=3.0).contains(&CAPTION_GAP));
     }
 
     #[test]
     fn dimensions_stay_on_the_four_pixel_grid() {
-        for value in [CARD_W, ROW_H, HEADER_H, FOOTER_H, SEARCH_H, PAD] {
+        for value in [CARD_W, ROW_H, ROW_H_SEARCH, HEADER_H, FOOTER_H, SEARCH_H, PAD] {
             assert_eq!(
                 value % spacing::XS,
                 0.0,
                 "{value} не кратно четырём: сетка разъедется"
             );
         }
-        // Полоса выделения — единственное исключение: 3 px берутся из
-        // макета, и на сетку они не влияют, а вот 4 px читались бы как
-        // рамка строки.
+        // Отступ подсветки и полоса — единственные исключения: 1 px равна
+        // толщине hairline, а 3 px берутся из макета.
+        assert_eq!(CARD_INSET, 1.0);
         assert_eq!(SEL_BAR, 3.0);
+    }
+
+    /// Подсказки подвала: полные и короткие варианты должны существовать
+    /// оба, иначе Pixel-тема на русском их не покажет.
+    #[test]
+    fn footer_has_short_hint_variants() {
+        for (full, short) in [
+            (strings::HINT_SELECT, strings::HINT_SELECT_SHORT),
+            (strings::HINT_OPEN, strings::HINT_OPEN_SHORT),
+            (strings::HINT_BACK, strings::HINT_BACK_SHORT),
+            (strings::HINT_CLOSE, strings::HINT_CLOSE_SHORT),
+        ] {
+            assert!(full.len() > short.len(), "короткая подсказка длиннее полной");
+            assert!(short.contains(full.split(' ').next().expect("подсказка не пустая")));
+        }
+        assert_eq!(strings::HINT_CLOSE_SHORT, "ESC");
+    }
+
+    #[test]
+    fn search_mode_is_driven_by_the_query() {
+        let mut frame = Frame {
+            trail: vec!["HUD".to_string()],
+            items: Vec::new(),
+            selected: 0,
+            top: 0,
+            query: String::new(),
+            total: 0,
+            status: None,
+        };
+        assert!(!search_mode(&frame));
+        frame.query = "dnd".to_string();
+        assert!(search_mode(&frame));
+        frame.query.clear();
+        assert!(!search_mode(&frame));
+    }
+
+    #[test]
+    fn failed_status_is_marked() {
+        assert!(Status::Failed("ошибка".to_string()).is_failed());
+        assert!(!Status::Applied("готово".to_string()).is_failed());
     }
 }

@@ -53,6 +53,10 @@ pub const ARROW_DOWN: &str = "\u{f063}";
 /// Луна: «не беспокоить» в меню. У панели тот же пункт рисуется колокольчиком
 /// (`DND`), но в меню луна читается как режим, а не как уведомление.
 pub const DND_MOON: &str = "\u{f186}";
+/// Картинка: иконка «Обои» в меню. У `WALLPAPER` выше кодпойнт `f1bc`, а это
+/// в шрифте `fa-spotify` — Spotify, а не обои. Имя глифа проверено по cmap
+/// JetBrainsMono Nerd Font Propo.
+pub const PICTURE: &str = "\u{f03e}";
 pub const DOT: &str = "\u{f192}";
 
 /// Служебные: галочка, стрелки перестановки и настоящий минус U+2212.
@@ -70,7 +74,7 @@ pub const ALL: [(&str, &str); 20] = [
     ("Внешний вид", APPEARANCE),
     ("Уведомления", NOTIFICATIONS),
     ("Управление", CONTROLS),
-    ("Обои", WALLPAPER),
+    ("Обои", PICTURE),
     ("Трей", TRAY),
     ("Погода", WEATHER),
     ("Вебка", WEBCAM),
@@ -115,7 +119,7 @@ pub const MENU: [(&str, &str); 20] = [
     ("О программе", ABOUT),
     ("Тема", THEME),
     ("Язык", LANGUAGE),
-    ("Обои", WALLPAPER),
+    ("Обои", PICTURE),
     ("Схема", SCHEME),
     ("Шрифт", FONT_ICON),
     ("Терминал", TERMINAL),
