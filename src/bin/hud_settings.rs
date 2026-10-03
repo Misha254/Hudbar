@@ -1281,7 +1281,7 @@ impl SettingsApp {
                     selected,
                     ..
                 } => {
-                    let label = format!("{}/{name}", wallpaper_dir_label(&name));
+                    let label = wallpaper_dir_label(&name);
                     self.draw_wallpaper_file(&mut pixmap, p, rect, &label, selected, s);
                 }
                 Row::Scheme {
