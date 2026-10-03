@@ -450,9 +450,11 @@ pub enum Row {
         rect: Rect,
         selected: bool,
     },
-    /// Кнопка «Применить»: только она запускает `wall.sh --set`.
+    /// Кнопка «Применить»: только она запускает `wall.sh --set`. Пока файл
+    /// не выбран, кнопка неактивна и не берёт фокус.
     WallpaperApply {
         rect: Rect,
+        enabled: bool,
     },
     /// Подпись «Высота панели» и её шкала: не кликаются, кликают кнопки.
     HeightLabel {
@@ -533,7 +535,7 @@ impl Row {
             | Row::WallpaperFile { rect, .. }
             | Row::Scheme { rect, .. }
             | Row::Language { rect }
-            | Row::WallpaperApply { rect } => Some(*rect),
+            | Row::WallpaperApply { rect, .. } => Some(*rect),
             Row::Close { rect } => Some(*rect),
             Row::Move { rect, .. } => Some(*rect),
             Row::ModuleRow { rect, .. } => Some(*rect),
@@ -561,7 +563,9 @@ impl Row {
             Row::Close { .. } => Some(Control::Close),
             Row::WallpaperFile { index, .. } => Some(Control::WallpaperFile(*index)),
             Row::Scheme { index, .. } => Some(Control::Scheme(*index)),
-            Row::WallpaperApply { .. } => Some(Control::WallpaperApply),
+            // Неактивная кнопка не отдаёт контрол: её нельзя ни навести, ни
+            // выбрать, и Space до неё не доходит.
+            Row::WallpaperApply { enabled, .. } if *enabled => Some(Control::WallpaperApply),
             Row::Hotkey { .. } => None,
             _ => None,
         }
@@ -1435,14 +1439,22 @@ fn controls_rows(hotkeys: &[Hotkey], scroll: usize) -> Vec<Row> {
 /// Состояние раздела «Обои»: список файлов, выбранная схема и прокрутка.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Wallpaper {
-    /// Файлы обоев, которые видны сейчас (окно листает список сам).
+    /// Файлы обоев, которые видны сейчас (окно листает список само).
     pub files: Vec<String>,
-    /// Индекс выбранного файла в `files`.
-    pub selected: usize,
+    /// Выбранный файл в `files`. `None` — файл ещё не трогали, поэтому
+    /// «Применить» неактивна: применять нечего.
+    pub selected: Option<usize>,
     /// Смещение списка файлов, когда их больше, чем помещается.
     pub scroll: usize,
     /// Индекс выбранной схемы в `SCHEMES`.
     pub scheme: usize,
+}
+
+impl Wallpaper {
+    /// Выбран ли пригодный файл: индекс есть и он ещё в списке.
+    pub fn can_apply(&self) -> bool {
+        self.selected.is_some_and(|index| index < self.files.len())
+    }
 }
 
 /// Раздел «Обои»: список файлов, схемы matugen и кнопка «Применить».
@@ -1471,7 +1483,7 @@ fn wallpaper_rows(state: &Wallpaper) -> Vec<Row> {
             name: name.clone(),
             index,
             rect: wallpaper_file_rect(offset),
-            selected: index == state.selected,
+            selected: state.selected == Some(index),
         });
     }
     rows.push(Row::Header {
@@ -1492,6 +1504,7 @@ fn wallpaper_rows(state: &Wallpaper) -> Vec<Row> {
     });
     rows.push(Row::WallpaperApply {
         rect: wallpaper_apply_rect(),
+        enabled: state.can_apply(),
     });
     rows
 }
@@ -1652,7 +1665,7 @@ mod tests {
         let count = WALLPAPER_FILES * 2 + 5;
         let mut state = Wallpaper {
             files: (0..count).map(|n| format!("/w/{n}.jpg")).collect(),
-            selected: count - 1,
+            selected: Some(count - 1),
             scroll: 0,
             scheme: 0,
         };
@@ -1680,7 +1693,7 @@ mod tests {
             files: (0..20)
                 .map(|n| format!("/home/mihail/wallpapers/nature/{n}.jpg"))
                 .collect(),
-            selected: 3,
+            selected: Some(3),
             scroll: 0,
             scheme: 2,
         };
@@ -1728,13 +1741,94 @@ mod tests {
         );
     }
 
+    /// Пока файл не выбран, «Применить» нельзя нажать: кнопка без контрола,
+    /// в подсказках статуса она тоже не появляется.
+    #[test]
+    fn apply_button_stays_disabled_until_a_file_is_picked() {
+        let files: Vec<String> = (0..3).map(|n| format!("/w/{n}.jpg")).collect();
+
+        let empty = Wallpaper {
+            files: files.clone(),
+            selected: None,
+            scroll: 0,
+            scheme: 0,
+        };
+        assert!(!empty.can_apply());
+        let rows = rows_for_state(Section::Wallpaper, &Config::default(), &[], 0, &empty);
+        let apply = rows
+            .iter()
+            .find_map(|row| match row {
+                Row::WallpaperApply { rect, enabled } => Some((*rect, *enabled)),
+                _ => None,
+            })
+            .expect("кнопка применения есть");
+        assert!(!apply.1, "кнопка активна без выбранного файла");
+        assert!(
+            !content_controls(&rows).contains(&Control::WallpaperApply),
+            "неактивная кнопка попала в список контролов"
+        );
+
+        // Выбранный файл подсвечен, кнопка ожила.
+        let picked = Wallpaper {
+            selected: Some(1),
+            ..empty
+        };
+        assert!(picked.can_apply());
+        let rows = rows_for_state(Section::Wallpaper, &Config::default(), &[], 0, &picked);
+        assert!(
+            content_controls(&rows).contains(&Control::WallpaperApply),
+            "после выбора файла кнопка должна стать доступной"
+        );
+        let marked: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::WallpaperFile {
+                    index, selected, ..
+                } if *selected => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marked, vec![1], "подсвечен ровно выбранный файл");
+
+        // Индекс вне списка (список перечитали) тоже не даёт применить.
+        let stale = Wallpaper {
+            selected: Some(99),
+            ..picked
+        };
+        assert!(!stale.can_apply());
+    }
+
+    /// Подсветка выбранного файла не зависит от прокрутки: индекс считается
+    /// по всему списку, а не по видимой странице.
+    #[test]
+    fn selected_file_is_marked_on_any_page() {
+        let count = WALLPAPER_FILES * 3;
+        let state = Wallpaper {
+            files: (0..count).map(|n| format!("/w/{n}.jpg")).collect(),
+            selected: Some(count - 1),
+            scroll: count - WALLPAPER_FILES,
+            scheme: 0,
+        };
+        let rows = rows_for_state(Section::Wallpaper, &Config::default(), &[], 0, &state);
+        let marked: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::WallpaperFile {
+                    index, selected, ..
+                } if *selected => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marked, vec![count - 1]);
+    }
+
     #[test]
     fn wallpaper_rows_fit_the_content_area_and_never_overlap() {
         let state = Wallpaper {
             files: (0..WALLPAPER_FILES)
                 .map(|n| format!("/w/{n}.jpg"))
                 .collect(),
-            selected: 0,
+            selected: Some(0),
             scroll: 0,
             scheme: 0,
         };
@@ -1776,7 +1870,7 @@ mod tests {
         let count = WALLPAPER_FILES * 2 + 5;
         let mut state = Wallpaper {
             files: (0..count).map(|n| format!("/w/{n}.jpg")).collect(),
-            selected: 0,
+            selected: Some(0),
             scroll: 0,
             scheme: 0,
         };

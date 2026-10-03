@@ -676,7 +676,7 @@ impl SettingsApp {
     /// Выбор файла обоев: только запоминаем, ничего не применяем.
     fn pick_wallpaper(&mut self, index: usize) {
         if index < self.wallpaper.files.len() {
-            self.wallpaper.selected = index;
+            self.wallpaper.selected = Some(index);
             let name = self.wallpaper.files[index].clone();
             self.status = format!("Выбран файл: {}", file_name(&name));
             self.rebuild_rows();
@@ -703,8 +703,15 @@ impl SettingsApp {
             self.dirty = true;
             return;
         }
-        let Some(file) = self.wallpaper.files.get(self.wallpaper.selected).cloned() else {
-            self.status = "Нет выбранного файла".to_string();
+        // Пока файл не выбран, кнопка неактивна и сюда не доходит. Проверка
+        // остаётся на случай гонки: список перечитывается при сворачивании.
+        let Some(file) = self
+            .wallpaper
+            .selected
+            .and_then(|index| self.wallpaper.files.get(index))
+            .cloned()
+        else {
+            self.status = "Сначала выберите файл обоев".to_string();
             self.dirty = true;
             return;
         };
@@ -752,7 +759,6 @@ impl SettingsApp {
             return;
         }
         let max_scroll = count - page;
-        let selected = self.wallpaper.selected;
         let next = if forward {
             (self.wallpaper.scroll + page).min(max_scroll)
         } else {
@@ -762,11 +768,16 @@ impl SettingsApp {
             return;
         }
         self.wallpaper.scroll = next;
-        // Выделение подтягиваем в видимую часть списка.
-        if selected < next {
-            self.wallpaper.selected = next;
-        } else if selected >= next + page {
-            self.wallpaper.selected = next + page - 1;
+        // Выделение подтягиваем в видимую часть списка. Пока файл не выбран,
+        // листание не выбирает его за пользователя.
+        if let Some(selected) = self.wallpaper.selected {
+            self.wallpaper.selected = Some(if selected < next {
+                next
+            } else if selected >= next + page {
+                next + page - 1
+            } else {
+                selected
+            });
         }
         self.status = format!("Файлов: {} · показано {}-{next}{page}", count, next + 1);
         self.rebuild_rows();
@@ -1266,17 +1277,16 @@ impl SettingsApp {
                     rect,
                     selected,
                 } => self.draw_scheme(&mut pixmap, p, rect, name, index, selected, s, pixel),
-                Row::WallpaperApply { rect } => {
+                Row::WallpaperApply { rect, enabled } => {
                     let control = Control::WallpaperApply;
-                    self.draw_button(
-                        &mut pixmap,
-                        p,
-                        rect,
-                        "Применить обои",
-                        self.hovered(control) || self.focused(control) || self.busy(),
-                        s.row,
-                        pixel,
-                    );
+                    let label = if enabled {
+                        "Применить обои"
+                    } else {
+                        "Сначала выберите файл"
+                    };
+                    let active =
+                        enabled && (self.hovered(control) || self.focused(control) || self.busy());
+                    self.draw_button_disabled(&mut pixmap, p, rect, label, active, s.row, pixel);
                 }
                 Row::Close { rect } => {
                     self.draw_button(
@@ -1770,6 +1780,42 @@ impl SettingsApp {
         );
         self.painter
             .paint(pixmap, label, size, p.text, rect, Align::Center);
+    }
+
+    /// Кнопка, которая сейчас не работает: подпись приглушена, чтобы её
+    /// нельзя было спутать с доступной.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_button_disabled(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        rect: Rect,
+        label: &str,
+        active: bool,
+        size: f32,
+        pixel: bool,
+    ) {
+        let k = SCALE;
+        fill_round_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if pixel { 0.0 } else { 6.0 * k },
+            if active { p.panel } else { p.idle_panel },
+        );
+        stroke_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if active { p.accent } else { p.border },
+            k,
+        );
+        self.painter
+            .paint(pixmap, label, size, p.muted, rect, Align::Center);
     }
 
     fn draw_navigation(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, s: Sizes) {
