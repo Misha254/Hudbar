@@ -1080,12 +1080,10 @@ impl SettingsApp {
                     );
                 }
                 Row::Footer { y } => {
-                    let hints: &[&str] = if self.nav.section == Section::Controls {
-                        &["PgUp/PgDn страницы", "← сайдбар", "Esc закрыть"]
-                    } else {
-                        &settings_ui::HINTS
-                    };
-                    self.draw_footer_hints(&mut pixmap, p, y, s.micro, hints);
+                    let hints = settings_ui::hints(self.nav.section);
+                    let hints: Vec<&str> =
+                        hints.into_iter().filter(|hint| !hint.is_empty()).collect();
+                    self.draw_footer_hints(&mut pixmap, p, y, s.micro, &hints);
                 }
                 Row::Language { rect } => {
                     let label = if self.config.language == settings::Language::Ru {
@@ -1104,22 +1102,11 @@ impl SettingsApp {
                     );
                 }
                 Row::Summary {
-                    label, value, rect, ..
-                } => {
-                    self.draw_summary(&mut pixmap, p, rect, label, &value, s);
-                }
-                Row::Goto { section, rect } => {
-                    let control = Control::Goto(section);
-                    self.draw_button(
-                        &mut pixmap,
-                        p,
-                        rect,
-                        &format!("{}  →", section.label()),
-                        self.hovered(control) || self.focused(control),
-                        s.row,
-                        pixel,
-                    );
-                }
+                    label,
+                    value,
+                    rect,
+                    section,
+                } => self.draw_summary(&mut pixmap, p, rect, label, &value, section, s),
                 Row::Hotkey { keys, desc, rect } => {
                     self.draw_hotkey(&mut pixmap, p, rect, &keys, &desc, s);
                 }
@@ -1189,6 +1176,7 @@ impl SettingsApp {
 
     /// Строка сводки: подпись слева, значение справа. Кликается как ссылка в
     /// раздел, к которому относится значение, — дублировать контролы не нужно.
+    #[allow(clippy::too_many_arguments)]
     fn draw_summary(
         &mut self,
         pixmap: &mut tiny_skia::Pixmap,
@@ -1196,6 +1184,7 @@ impl SettingsApp {
         rect: Rect,
         label: &str,
         value: &str,
+        section: Section,
         s: Sizes,
     ) {
         let k = SCALE;
@@ -1225,13 +1214,34 @@ impl SettingsApp {
             Rect::new(rect.x + 12.0, rect.y, rect.w * 0.5, rect.h),
             Align::Start,
         );
-        self.painter.paint(
+        let control = Control::Goto(section);
+        let active = self.hovered(control) || self.focused(control);
+        if active {
+            stroke_rect(
+                pixmap,
+                rect.x * k,
+                rect.y * k,
+                rect.w * k,
+                rect.h * k,
+                p.accent,
+                k,
+            );
+        }
+        self.painter.paint_boxed(
             pixmap,
             value,
             s.row,
             p.text,
-            Rect::new(rect.x + rect.w * 0.5, rect.y, rect.w * 0.5 - 12.0, rect.h),
+            Rect::new(rect.x + rect.w * 0.5, rect.y, rect.w * 0.5 - 34.0, rect.h),
             Align::End,
+        );
+        self.painter.paint(
+            pixmap,
+            "→",
+            s.row,
+            if active { p.accent } else { p.muted },
+            Rect::new(rect.right() - 28.0, rect.y, 20.0, rect.h),
+            Align::Center,
         );
     }
 

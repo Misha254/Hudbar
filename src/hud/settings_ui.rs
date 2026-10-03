@@ -356,14 +356,23 @@ impl Rect {
     }
 }
 
-/// Подсказки в подвале окна: показываются все, раскладываются равномерно.
-pub const HINTS: [&str; 5] = [
-    "↑↓ раздел",
-    "← сайдбар",
-    "Space применить",
-    "L язык",
-    "Esc закрыть",
-];
+/// Подсказки в подвале. Набор зависит от раздела: в «Управлении» список
+/// листается страницами, а в «Панели» есть перестановка модулей.
+pub const fn hints(section: Section) -> [&'static str; 4] {
+    match section {
+        Section::Overview => ["↑↓ раздел", "← сайдбар", "Enter открыть", "Esc закрыть"],
+        Section::Panel => ["↑↓ модуль", "Shift+↑↓ порядок", "← сайдбар", "Esc закрыть"],
+        Section::Appearance => ["←↑→ выбрать", "Space применить", "L язык", "Esc закрыть"],
+        Section::Notifications => [
+            "←↑→ выбрать",
+            "Space применить",
+            "−/+ размер",
+            "Esc закрыть",
+        ],
+        Section::Controls => ["PgUp/PgDn страницы", "← сайдбар", "Esc закрыть", ""],
+        Section::Wallpaper => ["←↑→ выбрать", "Space применить", "← сайдбар", "Esc закрыть"],
+    }
+}
 
 /// Строка окна: либо элемент, либо заголовок/разделитель/подпись.
 /// Позиции живут здесь же, чтобы рисование и hit-test не разъезжались.
@@ -437,11 +446,6 @@ pub enum Row {
         section: Section,
         rect: Rect,
     },
-    /// Ссылка на раздел из «Обзора» или из «Управления».
-    Goto {
-        section: Section,
-        rect: Rect,
-    },
     /// Горячая клавиша из niri: только чтение, править здесь ничего нельзя.
     Hotkey {
         keys: String,
@@ -481,7 +485,6 @@ impl Row {
             | Row::NotificationLineHeight { rect, .. }
             | Row::NotificationPosition { rect, .. }
             | Row::Summary { rect, .. }
-            | Row::Goto { rect, .. }
             | Row::Hotkey { rect, .. }
             | Row::Language { rect }
             | Row::Close { rect } => Some(*rect),
@@ -505,9 +508,7 @@ impl Row {
             Row::NotificationPosition { position, .. } => {
                 Some(Control::NotificationPosition(*position))
             }
-            Row::Summary { section, .. } | Row::Goto { section, .. } => {
-                Some(Control::Goto(*section))
-            }
+            Row::Summary { section, .. } => Some(Control::Goto(*section)),
             Row::Language { .. } => Some(Control::Language),
             Row::Close { .. } => Some(Control::Close),
             Row::Hotkey { .. } => None,
@@ -573,11 +574,10 @@ const CARD_FONT_Y: f32 = 210.0;
 const CARD_FONT_H: f32 = 20.0;
 const CARD_PAD: f32 = 16.0;
 
-// Раздел «Обзор»: сводка в две колонки и ссылки на разделы.
+// Раздел «Обзор»: только сводка. Список разделов есть в сайдбаре, второй раз
+// перечислять разделы в содержимом незачем.
 const SUMMARY_HEADER_Y: f32 = 132.0;
 const SUMMARY_Y: f32 = 156.0;
-const SECTIONS_HEADER_Y: f32 = 316.0;
-const SECTIONS_Y: f32 = 340.0;
 
 // Раздел «Панель»: три зоны в ряд, у каждой подпись и своя колонка строк.
 const PANEL_HEADER_Y: f32 = 132.0;
@@ -731,16 +731,6 @@ pub fn summary_rect(index: usize) -> Rect {
     Rect::new(
         PAD_X + (index % 2) as f32 * (COL_W + COL_GAP),
         SUMMARY_Y + (index / 2) as f32 * (ROW_H + ITEM_GAP),
-        COL_W,
-        ROW_H,
-    )
-}
-
-/// Ссылка на раздел: список разделов, каждый открывается по клику.
-pub fn goto_rect(index: usize) -> Rect {
-    Rect::new(
-        PAD_X + (index % 2) as f32 * (COL_W + COL_GAP),
-        SECTIONS_Y + (index / 2) as f32 * (ROW_H + ITEM_GAP),
         COL_W,
         ROW_H,
     )
@@ -957,7 +947,6 @@ pub fn debug_rects() -> Vec<Rect> {
     }
     for index in 0..4 {
         rects.push(summary_rect(index));
-        rects.push(goto_rect(index));
     }
     for index in 0..Module::ALL.len() {
         rects.push(module_rect(Zone::Right, index % 6));
@@ -1117,19 +1106,6 @@ fn overview_rows(config: &Config) -> Vec<Row> {
             value,
             section,
             rect: summary_rect(index),
-        });
-    }
-    rows.push(Row::Rule {
-        y: SECTIONS_HEADER_Y - HEADER_H,
-    });
-    rows.push(Row::Header {
-        text: "Разделы",
-        y: SECTIONS_HEADER_Y,
-    });
-    for (index, target) in Section::ALL.into_iter().enumerate() {
-        rows.push(Row::Goto {
-            section: target,
-            rect: goto_rect(index),
         });
     }
     rows
@@ -1725,8 +1701,8 @@ mod tests {
 
     #[test]
     fn every_section_has_its_own_controls_only() {
-        // «Обзор» — только сводка и ссылки: настраивать здесь нечего, поэтому
-        // дублировать контролы других разделов нельзя.
+        // «Обзор» — только сводка: настраивать здесь нечего, а перечисление
+        // разделов второй раз дублировало бы сайдбар.
         let overview_rows = rows_for(Section::Overview, &Config::default(), &[], 0);
         let overview = content_controls(&overview_rows);
         assert!(
@@ -1740,7 +1716,20 @@ mod tests {
             .filter(|row| matches!(row, Row::Summary { .. }))
             .count();
         assert_eq!(summaries, 4, "сводка: тема, модули, высота, язык");
-        assert_eq!(overview.len(), Section::ALL.len() + summaries);
+        assert!(
+            !overview_rows
+                .iter()
+                .any(|row| matches!(row, Row::Header { text, .. } if *text == "Разделы")),
+            "блок «Разделы» в обзоре больше не нужен"
+        );
+        for row in &overview_rows {
+            if let Row::Summary { rect, .. } = row {
+                assert!(
+                    rect.right() <= WIDTH - PAD_R + 0.5,
+                    "сводка вылезла: {rect:?}"
+                );
+            }
+        }
 
         let panel = content_controls(&rows_for(Section::Panel, &Config::default(), &[], 0));
         assert!(
@@ -1749,7 +1738,7 @@ mod tests {
         );
         assert!(
             panel.iter().any(|c| matches!(c, Control::Height(_))),
-            "высота переехала в раздел «Панель»"
+            "высота живёт в разделе «Панель»"
         );
 
         let appearance =
@@ -1768,6 +1757,32 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn footer_hints_fit_the_window_and_match_the_section() {
+        let band = footer_rect();
+        for section in Section::ALL {
+            let hints: Vec<&str> = hints(section)
+                .into_iter()
+                .filter(|hint| !hint.is_empty())
+                .collect();
+            assert!(!hints.is_empty(), "{section:?}: подвал без подсказок");
+            assert!(
+                hints.iter().all(|hint| !hint.contains("Space применить")
+                    || section == Section::Appearance
+                    || section == Section::Notifications
+                    || section == Section::Wallpaper),
+                "{section:?}: «Space применить» тут неуместно"
+            );
+            let widths: Vec<f32> = hints.iter().map(|hint| hint.len() as f32 * 7.0).collect();
+            let sum: f32 = widths.iter().sum();
+            assert!(
+                sum < band.w,
+                "{section:?}: подсказки шире полосы: {sum} > {}",
+                band.w
+            );
+        }
     }
 
     #[test]
@@ -1872,7 +1887,7 @@ mod tests {
     #[test]
     fn footer_hints_fit_the_window() {
         let band = footer_rect();
-        let widths: Vec<f32> = HINTS
+        let widths: Vec<f32> = hints(Section::Overview)
             .iter()
             .map(|hint| hint.chars().count() as f32 * 7.0)
             .collect();
