@@ -682,6 +682,13 @@ impl SettingsApp {
         };
         self.commit(config_io::Patch::Language(next));
     }
+    /// Показ шестерёнки Control Center. Панель читает файл на лету, поэтому
+    /// перезапуск не нужен.
+    fn toggle_control_button(&mut self) {
+        let on = !self.config.control_button;
+        self.commit(config_io::Patch::ControlButton(on));
+    }
+
     /// Выбор файла обоев: только запоминаем, ничего не применяем.
     fn pick_wallpaper(&mut self, index: usize) {
         if index < self.wallpaper.files.len() {
@@ -848,6 +855,7 @@ impl SettingsApp {
             Control::NotificationLineHeight(delta) => self.step_notification_line(delta),
             Control::NotificationPosition(position) => self.set_notification_position(position),
             Control::Goto(target) => self.open_section(target),
+            Control::ControlButton => self.toggle_control_button(),
             Control::WallpaperFile(index) => self.pick_wallpaper(index),
             Control::Scheme(index) => self.pick_scheme(index),
             Control::WallpaperApply => self.apply_wallpaper(),
@@ -1261,6 +1269,12 @@ impl SettingsApp {
                 Row::Hotkey { keys, desc, rect } => {
                     self.draw_hotkey(&mut pixmap, p, rect, &keys, &desc, s);
                 }
+                Row::MissingBind { desc, rect } => {
+                    self.draw_missing_bind(&mut pixmap, p, rect, &desc, s);
+                }
+                Row::ControlButton { rect } => {
+                    self.draw_control_button(&mut pixmap, p, rect, s, pixel);
+                }
                 Row::WallpaperFile {
                     name,
                     rect,
@@ -1350,6 +1364,72 @@ impl SettingsApp {
                 DEBUG_OUTLINE.with_a(0.8),
             );
         }
+    }
+
+    /// Переключатель «Кнопка Control Center»: слева подпись, справа тумблер
+    /// вкл/выкл — тот же вид, что у строки модуля.
+    fn draw_control_button(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        rect: Rect,
+        s: Sizes,
+        pixel: bool,
+    ) {
+        let k = SCALE;
+        let control = Control::ControlButton;
+        let on = self.config.control_button;
+        let active = self.hovered(control) || self.focused(control);
+        if active {
+            fill_round_rect(
+                pixmap,
+                rect.x * k,
+                rect.y * k,
+                rect.w * k,
+                rect.h * k,
+                if self.pixel_mode() { 0.0 } else { 6.0 * k },
+                p.idle_panel,
+            );
+        }
+        self.painter.paint(
+            pixmap,
+            "Кнопка Control Center",
+            s.row,
+            if on { p.text } else { p.muted },
+            Rect::new(rect.x + 10.0, rect.y, rect.w - 60.0, rect.h),
+            Align::Start,
+        );
+        let track = Rect::new(
+            rect.right() - 10.0 - 46.0,
+            rect.y + (rect.h - 18.0) / 2.0,
+            46.0,
+            18.0,
+        );
+        fill_round_rect(
+            pixmap,
+            track.x * k,
+            track.y * k,
+            track.w * k,
+            track.h * k,
+            9.0 * k,
+            if on { p.accent } else { p.border },
+        );
+        let knob = 14.0;
+        let knob_x = if on {
+            track.right() - knob - 2.0
+        } else {
+            track.x + 2.0
+        };
+        fill_round_rect(
+            pixmap,
+            knob_x * k,
+            (track.y + 2.0) * k,
+            knob * k,
+            knob * k,
+            7.0 * k,
+            if on { p.base } else { p.text.with_a(0.7) },
+        );
+        let _ = pixel;
     }
 
     /// Файл обоев в списке: выбранный подсвечивается акцентной рамкой, имя
@@ -1445,6 +1525,44 @@ impl SettingsApp {
                 2.0 * k,
             );
         }
+    }
+
+    /// Действие меню без бинда: пометка «нет клавиши» вместо сочетания.
+    fn draw_missing_bind(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        rect: Rect,
+        desc: &str,
+        s: Sizes,
+    ) {
+        let k = SCALE;
+        fill_round_rect(
+            pixmap,
+            rect.x * k,
+            rect.y * k,
+            rect.w * k,
+            rect.h * k,
+            if self.pixel_mode() { 0.0 } else { 6.0 * k },
+            p.idle_panel,
+        );
+        self.painter.paint_boxed(
+            pixmap,
+            "нет клавиши",
+            s.micro,
+            p.accent,
+            Rect::new(rect.x + 10.0, rect.y, rect.w * 0.42, rect.h),
+            Align::Start,
+        );
+        let keys_x = rect.x + 10.0 + rect.w * 0.42;
+        self.painter.paint_boxed(
+            pixmap,
+            desc,
+            s.row,
+            p.muted,
+            Rect::new(keys_x + 10.0, rect.y, rect.right() - keys_x - 20.0, rect.h),
+            Align::Start,
+        );
     }
 
     /// Строка сводки: подпись слева, значение справа. Кликается как ссылка в

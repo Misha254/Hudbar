@@ -15,6 +15,30 @@ struct Slot {
 /// Раскладывает собранные группы по порядку из настроек. Сортировка
 /// устойчивая, а неизвестные ключи уходят в конец, поэтому модуль, которого
 /// нет в `module_order`, не потеряется и не встанет в начало.
+/// Слот шестерёнки Control Center или `None`, если кнопка выключена в
+/// `settings.json`. Единственное место, где решается судьба кнопки: и
+/// отрисовка, и тесты берут её отсюда.
+fn control_slot(
+    settings: &crate::hud::settings::Settings,
+    color: palette::Rgba,
+    chip_bg: palette::Rgba,
+) -> Option<Slot> {
+    if !settings.control_button {
+        return None;
+    }
+    let mut control = Cell::new("⚙".to_string(), color);
+    control.pad_l = 4.0;
+    control.pad_r = 4.0;
+    control.hit = Some(Hit::ControlChip);
+    Some(Slot {
+        order: usize::MAX,
+        group: Group {
+            cells: vec![control],
+            chip: Some((4.0, 4.0, chip_bg)),
+        },
+    })
+}
+
 fn order_slots(mut slots: Vec<Slot>) -> Vec<Slot> {
     slots.sort_by_key(|slot| slot.order);
     slots
@@ -583,17 +607,10 @@ impl App {
             });
         }
 
-        let mut control = Cell::new("⚙".to_string(), p.primary);
-        control.pad_l = 4.0;
-        control.pad_r = 4.0;
-        control.hit = Some(Hit::ControlChip);
-        right.push(Slot {
-            order: usize::MAX,
-            group: Group {
-                cells: vec![control],
-                chip: Some((4.0, 4.0, chip_bg)),
-            },
-        });
+        // Шестерёнка всегда последняя и появляется, только если её не выключили.
+        if let Some(slot) = control_slot(&self.settings, p.primary, chip_bg) {
+            right.push(slot);
+        }
 
         let right = order_slots(right);
         let right: Vec<Group> = right.into_iter().map(|slot| slot.group).collect();
@@ -616,7 +633,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cell, Group, Slot, low_battery_style, order_slots};
+    use super::{Cell, Group, Slot, control_slot, low_battery_style, order_slots};
     use crate::hud::palette::Palette;
     use crate::hud::settings::{self, Settings};
 
@@ -733,23 +750,59 @@ mod tests {
             ..Default::default()
         };
 
-        let slots = order_slots(vec![
+        let color = settings_default_color();
+        let mut slots = vec![
             slot("recorder", &settings, "Rec"),
             slot("dnd", &settings, "DND"),
-            Slot {
-                order: usize::MAX,
-                group: Group {
-                    cells: vec![Cell::new("⚙".to_string(), settings_default_color())],
-                    chip: None,
-                },
-            },
-        ]);
+        ];
+        slots.extend(control_slot(&settings, color, color));
+        let slots = order_slots(slots);
         let labels: Vec<&str> = slots
             .iter()
             .map(|slot| slot.group.cells[0].text.as_str())
             .collect();
 
         assert_eq!(labels, vec!["DND", "Rec", "⚙"]);
+    }
+
+    /// Выключенная кнопка Control Center не должна попадать в слоты панели:
+    /// ни рисоваться, ни участвовать в hit-test.
+    #[test]
+    fn control_button_is_absent_when_switched_off() {
+        let settings = Settings {
+            control_button: false,
+            ..Default::default()
+        };
+
+        let color = settings_default_color();
+        let mut slots = Vec::new();
+        slots.extend(control_slot(&settings, color, color));
+        let slots = order_slots(slots);
+
+        assert!(
+            slots.is_empty(),
+            "при control_button=false кнопки не должно быть среди слотов: {:?}",
+            slots.len()
+        );
+        assert!(
+            !slots
+                .iter()
+                .any(|slot| slot.group.cells.iter().any(|cell| cell.text == "⚙")),
+            "шестерёнка не должна оставаться в слотах"
+        );
+    }
+
+    #[test]
+    fn control_button_defaults_to_visible() {
+        assert!(
+            Settings::default().control_button,
+            "кнопка Control Center включена по умолчанию"
+        );
+        let without_key = crate::hud::settings::parse("{}");
+        assert!(
+            without_key.control_button,
+            "отсутствующий ключ не должен выключать кнопку"
+        );
     }
 
     /// Сортировка обязана быть устойчивой к порядку вставки: тест специально

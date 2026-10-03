@@ -122,6 +122,7 @@ pub fn merge(config: &Config, base: Option<&Value>) -> Value {
 
     let bar = section(&mut root, "hudbar");
     bar.insert("height".into(), Value::from(config.height));
+    bar.insert("control_button".into(), Value::Bool(config.control_button));
     for module in Module::ALL {
         bar.insert(
             module.key().to_string(),
@@ -153,6 +154,8 @@ pub enum Patch {
     },
     /// Корень `module_order` — порядок и состав зон.
     ModuleOrder(Vec<String>),
+    /// `hudbar.control_button` — шестерёнка Control Center на панели.
+    ControlButton(bool),
     Height(u32),
     Language(Language),
     Theme(Theme),
@@ -171,6 +174,12 @@ impl Patch {
                 format!("{}: {}", module.key(), if *on { "вкл" } else { "выкл" })
             }
             Patch::ModuleOrder(_) => "порядок модулей".to_string(),
+            Patch::ControlButton(on) => {
+                format!(
+                    "кнопка Control Center: {}",
+                    if *on { "вкл" } else { "выкл" }
+                )
+            }
             Patch::Height(height) => format!("высота: {height} px"),
             Patch::Language(language) => format!("язык: {}", language.key()),
             Patch::Theme(theme) => format!("тема: {}", theme.key()),
@@ -202,6 +211,15 @@ impl Patch {
                     return false;
                 }
                 put_root(root, "module_order", value);
+                true
+            }
+            Patch::ControlButton(on) => {
+                let bar = section(root, "hudbar");
+                let value = Value::Bool(*on);
+                if bar.get("control_button") == Some(&value) {
+                    return false;
+                }
+                bar.insert("control_button".to_string(), value);
                 true
             }
             Patch::Height(height) => {

@@ -197,6 +197,8 @@ pub struct Settings {
     pub audio: bool,
     pub network: bool,
     pub dnd: bool,
+    /// Показывать ли шестерёнку Control Center на панели.
+    pub control_button: bool,
     pub theme: Option<String>,
     pub font_size: u32,
     pub line_height: u32,
@@ -264,6 +266,7 @@ impl Default for Settings {
             audio: true,
             network: true,
             dnd: true,
+            control_button: true,
             theme: None,
             font_size: 13,
             line_height: 15,
@@ -343,6 +346,8 @@ fn parse_into(settings: &mut Settings, content: &str) {
     settings.audio = get_bool(object, "audio", settings.audio);
     settings.network = get_bool(object, "network", settings.network);
     settings.dnd = get_bool(object, "dnd", settings.dnd);
+    // По умолчанию кнопка есть: выключать её нужно явно.
+    settings.control_button = get_bool(object, "control_button", true);
 
     if let Some(notes) = value.get("notifications").and_then(Value::as_object) {
         if let Some(size) = notes.get("font_size").and_then(Value::as_u64) {

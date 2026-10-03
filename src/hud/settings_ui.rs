@@ -309,6 +309,7 @@ pub fn theme_card(pixel: bool) -> (&'static str, &'static str, &'static str) {
 }
 
 /// Интерактивный элемент окна.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Control {
     Nav(Section),
@@ -325,6 +326,8 @@ pub enum Control {
     NotificationFont(i32),
     NotificationLineHeight(i32),
     NotificationPosition(NotificationPosition),
+    /// Показ шестерёнки Control Center на панели.
+    ControlButton,
     /// Переход в другой раздел из «Обзора».
     Goto(Section),
     /// Выбор файла обоев по индексу в списке: имя хранит окно, а не Control,
@@ -421,6 +424,10 @@ pub enum Row {
         line: usize,
         rect: Rect,
     },
+    /// Переключатель «Кнопка Control Center» в разделе «Панель».
+    ControlButton {
+        rect: Rect,
+    },
     /// Кнопка перестановки модуля внутри зоны: `dir` — −1 вверх, +1 вниз.
     Move {
         module: Module,
@@ -482,6 +489,11 @@ pub enum Row {
         desc: String,
         rect: Rect,
     },
+    /// Действие меню Control Center, на которое в niri нет бинда.
+    MissingBind {
+        desc: String,
+        rect: Rect,
+    },
     Close {
         rect: Rect,
     },
@@ -516,6 +528,8 @@ impl Row {
             | Row::NotificationPosition { rect, .. }
             | Row::Summary { rect, .. }
             | Row::Hotkey { rect, .. }
+            | Row::MissingBind { rect, .. }
+            | Row::ControlButton { rect }
             | Row::WallpaperFile { rect, .. }
             | Row::Scheme { rect, .. }
             | Row::Language { rect }
@@ -533,6 +547,7 @@ impl Row {
             Row::Theme { pixel, .. } => Some(Control::Theme(*pixel)),
             Row::Toggle { module, .. } => Some(Control::Toggle(*module)),
             Row::ModuleRow { module, .. } => Some(Control::Switch(*module)),
+            Row::ControlButton { .. } => Some(Control::ControlButton),
             Row::Move { module, dir, .. } => Some(Control::Move(*module, *dir)),
             Row::Height { dir, .. } => Some(Control::Height(*dir)),
             Row::HeightLabel { .. } => Some(Control::HeightSlider),
@@ -633,9 +648,10 @@ const MOVE_BTN_GAP: f32 = 4.0;
 const MODULE_SWITCH_W: f32 = 34.0;
 /// Внутренние отступы полосы модуля слева и справа.
 const MODULE_PAD_X: f32 = 6.0;
-const RULE_HEIGHT_Y: f32 = 440.0;
-const HEIGHT_HEADER_Y: f32 = 470.0;
-const HEIGHT_ROW_Y: f32 = 490.0;
+const CONTROL_BUTTON_Y: f32 = 420.0;
+const RULE_HEIGHT_Y: f32 = 476.0;
+const HEIGHT_HEADER_Y: f32 = 506.0;
+const HEIGHT_ROW_Y: f32 = 526.0;
 const HEIGHT_ROW_H: f32 = 40.0;
 
 // Раздел «Внешний вид»: две карточки тем и переключатель языка.
@@ -938,6 +954,11 @@ pub fn move_rect(module: Module, line: usize, up: bool) -> Rect {
     )
 }
 
+/// Переключатель шестерёнки Control Center в разделе «Панель».
+pub fn control_button_rect() -> Rect {
+    Rect::new(PAD_X, CONTROL_BUTTON_Y, COL_W, ROW_H)
+}
+
 /// Полоса строки высоты панели: слайдер, значение, подпись и кнопки шага.
 pub fn height_row_rect() -> Rect {
     Rect::new(PAD_X, HEIGHT_ROW_Y, WIDTH - PAD_X - PAD_R, HEIGHT_ROW_H)
@@ -1149,6 +1170,55 @@ pub struct Hotkey {
     pub desc: String,
 }
 
+/// Действия меню Control Center. Список взят из `panels.rs::control_rows`, и
+/// по нему же проверяется, что у действия есть горячая клавиша.
+pub const CONTROL_ACTIONS: [&str; 9] = [
+    "Wi-Fi",
+    "Bluetooth",
+    "DND",
+    "Звук",
+    "Микрофон",
+    "Настройки HUD",
+    "Обои",
+    "Питание",
+    "Блокировка",
+];
+
+/// Слова, по которым бинд niri считается нужным этому действию.
+fn action_words(action: &str) -> Vec<&'static str> {
+    match action {
+        "Wi-Fi" => vec!["wifi", "wi-fi", "сеть"],
+        "Bluetooth" => vec!["bluetooth", "bt"],
+        "DND" => vec!["dnd", "не беспокоить", "беспокоить"],
+        "Звук" => vec!["звук", "volume", "громкость"],
+        "Микрофон" => vec!["микрофон", "mic"],
+        "Настройки HUD" => vec!["hud", "настройки hud"],
+        "Обои" => vec!["обои", "wallpaper", "wall"],
+        "Питание" => vec!["питание", "power", "power menu"],
+        "Блокировка" => vec!["блокировка", "lock"],
+        _ => Vec::new(),
+    }
+}
+
+/// Действия меню, на которые в `binds.kdl` нет ни одного бинда. Пустой список
+/// означает, что всё меню покрыто клавишами.
+pub fn control_actions_without_bind(hotkeys: &[Hotkey]) -> Vec<&'static str> {
+    let haystack: Vec<String> = hotkeys
+        .iter()
+        .map(|hotkey| format!("{} {}", hotkey.keys, hotkey.desc).to_lowercase())
+        .collect();
+    CONTROL_ACTIONS
+        .iter()
+        .copied()
+        .filter(|action| {
+            let words = action_words(action);
+            !haystack
+                .iter()
+                .any(|line| words.iter().any(|word| line.contains(word)))
+        })
+        .collect()
+}
+
 /// Склеивает бинды одного действия в строки: клавиши через «/», порядок как в
 /// `binds.kdl`. Разные действия сохраняются раздельно и в исходном порядке.
 pub fn merge_hotkeys(keys: &[String], descs: &[String]) -> Vec<Hotkey> {
@@ -1247,6 +1317,9 @@ fn panel_rows(config: &Config) -> Vec<Row> {
             }
         }
     }
+    rows.push(Row::ControlButton {
+        rect: control_button_rect(),
+    });
     rows.push(Row::Rule { y: RULE_HEIGHT_Y });
     rows.push(Row::Header {
         text: "Высота панели",
@@ -1322,17 +1395,39 @@ fn notification_rows() -> Vec<Row> {
 
 /// Раздел «Управление»: горячие клавиши из niri. Только чтение, листается
 /// `PageUp`/`PageDown`, потому что биндов больше, чем помещается на экран.
+/// В конце списка — действия меню Control Center, на которые биндов нет.
 fn controls_rows(hotkeys: &[Hotkey], scroll: usize) -> Vec<Row> {
     let mut rows = vec![Row::Header {
         text: "Горячие клавиши (niri)",
         y: HOTKEY_HEADER_Y,
     }];
-    for (offset, hotkey) in hotkeys.iter().skip(scroll).take(HOTKEY_PAGE).enumerate() {
+    let page: Vec<&Hotkey> = hotkeys.iter().skip(scroll).take(HOTKEY_PAGE).collect();
+    for (offset, hotkey) in page.iter().enumerate() {
         rows.push(Row::Hotkey {
             keys: hotkey.keys.clone(),
             desc: hotkey.desc.clone(),
             rect: hotkey_rect(offset),
         });
+    }
+
+    // Действия меню без бинда занимают свободные слоты последней страницы:
+    // отдельный блок не поместился бы, а эта информация важная.
+    let last_page = scroll + HOTKEY_PAGE >= hotkeys.len();
+    if last_page {
+        let missing = control_actions_without_bind(hotkeys);
+        let free = HOTKEY_PAGE.saturating_sub(page.len());
+        if !missing.is_empty() && free > 0 {
+            rows.push(Row::Header {
+                text: "Меню Control Center без горячей клавиши",
+                y: HOTKEY_HEADER_Y,
+            });
+            for (index, action) in missing.iter().take(free).enumerate() {
+                rows.push(Row::MissingBind {
+                    desc: (*action).to_string(),
+                    rect: hotkey_rect(page.len() + index),
+                });
+            }
+        }
     }
     rows
 }
@@ -1511,6 +1606,47 @@ mod tests {
     /// Выбранный угол должен отличаться от остальных и попадать в угол,
     /// назначенный в `settings.json`.
     /// Прокрутка не должна уводить список за его конец и не прячет выбранное.
+    /// Каждое действие меню Control Center ищет свой бинд по понятным словам,
+    /// а найденные клавиши показываются в том же разделе.
+    #[test]
+    fn control_menu_actions_are_looked_up_by_words() {
+        let hotkeys = vec![
+            Hotkey {
+                keys: "super+shift+d".to_string(),
+                desc: "Режим «Не беспокоить»".to_string(),
+            },
+            Hotkey {
+                keys: "super+E".to_string(),
+                desc: "Эмодзи".to_string(),
+            },
+        ];
+
+        let missing = control_actions_without_bind(&hotkeys);
+
+        assert!(
+            !missing.contains(&"DND"),
+            "DND найден по слову «беспокоить»"
+        );
+        assert!(
+            missing.contains(&"Wi-Fi") && missing.contains(&"Блокировка"),
+            "у этих действий бинда нет: {missing:?}"
+        );
+    }
+
+    /// Список действий меню совпадает с тем, что реально рисует панель.
+    #[test]
+    fn control_actions_list_is_stable() {
+        assert_eq!(CONTROL_ACTIONS.len(), 9);
+        assert!(CONTROL_ACTIONS.contains(&"Настройки HUD"));
+        assert!(CONTROL_ACTIONS.contains(&"Обои"));
+        for action in CONTROL_ACTIONS {
+            assert!(
+                !action_words(action).is_empty(),
+                "для действия {action} нет слов поиска"
+            );
+        }
+    }
+
     #[test]
     fn wallpaper_scroll_stays_inside_the_list() {
         let count = WALLPAPER_FILES * 2 + 5;

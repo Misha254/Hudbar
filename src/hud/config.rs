@@ -28,6 +28,8 @@ pub struct Config {
     pub font_size: u32,
     pub line_height: u32,
     pub position: NotificationPosition,
+    /// Показывать ли шестерёнку Control Center на панели.
+    pub control_button: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +150,7 @@ impl Config {
             audio: self.module_enabled(Module::Audio),
             network: self.module_enabled(Module::Network),
             dnd: self.module_enabled(Module::Dnd),
+            control_button: self.control_button,
             theme: self.theme.map(|theme| theme.key().to_string()),
             font_size: self.font_size,
             line_height: self.line_height,
@@ -173,6 +176,7 @@ impl Default for Config {
             font_size: 13,
             line_height: 15,
             position: NotificationPosition::TopRight,
+            control_button: true,
         }
     }
 }
@@ -197,6 +201,7 @@ impl From<&Settings> for Config {
                 config.set_module(module, on);
             }
         }
+        config.control_button = settings.control_button;
         let zones = split_by_zone(&settings.module_order);
         config.left = zones.0;
         config.center = zones.1;
