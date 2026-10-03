@@ -219,6 +219,20 @@ impl Nav {
     }
 }
 
+/// Фокус после пересборки строк. Раньше любое применение возвращало курсор
+/// на первый элемент: выбрал файл — и снова оказался на первом. Здесь фокус
+/// держится, если контрол на месте, иначе берётся первый элемент содержимого.
+pub fn focus_after_rebuild(rows: &[Row], current: Focus) -> Focus {
+    match current {
+        Focus::Nav(_) => current,
+        Focus::Content(control) if content_controls(rows).contains(&control) => current,
+        Focus::Content(_) => content_controls(rows)
+            .first()
+            .map(|control| Focus::Content(*control))
+            .unwrap_or(current),
+    }
+}
+
 /// Контролы содержимого раздела. Пункты сайдбара и кнопка закрытия — обвязка:
 /// они есть на любом разделе и в содержимое не входят.
 pub fn content_controls(rows: &[Row]) -> Vec<Control> {
@@ -2319,6 +2333,28 @@ mod tests {
 
     /// Две кнопки языка всегда на месте, а галочка стоит на текущем: так же,
     /// как с темой.
+    /// Пересборка строк не должна сбрасывать фокус на первый элемент: иначе
+    /// после выбора файла или схемы курсор убегал наверх.
+    #[test]
+    fn focus_survives_a_rebuild_when_the_control_is_still_there() {
+        let config = Config::default();
+        let rows = rows_for(Section::Appearance, &config, &[], 0);
+
+        let kept = focus_after_rebuild(&rows, Focus::Content(Control::Language(Language::En)));
+        assert_eq!(kept, Focus::Content(Control::Language(Language::En)));
+
+        // Сайдбар остаётся сайдбаром.
+        assert_eq!(
+            focus_after_rebuild(&rows, Focus::Nav(2)),
+            Focus::Nav(2),
+            "фокус сайдбара сбросился"
+        );
+
+        // Контрола, которого больше нет, быть не может: уходим на первый.
+        let gone = focus_after_rebuild(&rows, Focus::Content(Control::WallpaperApply));
+        assert_eq!(gone, Focus::Content(Control::Theme(false)));
+    }
+
     #[test]
     fn appearance_marks_the_current_language() {
         for language in [Language::Ru, Language::En] {

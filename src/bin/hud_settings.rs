@@ -863,11 +863,7 @@ impl SettingsApp {
             self.hotkey_scroll,
             &self.wallpaper,
         );
-        if !self.nav.focus_nav()
-            && let Some(content) = self.nav.first_content(&self.rows)
-        {
-            self.nav.focus = content;
-        }
+        self.nav.focus = settings_ui::focus_after_rebuild(&self.rows, self.nav.focus);
     }
 
     /// Клик и Enter ведут в одно место: в сайдбаре открывают раздел, в контенте
