@@ -16,89 +16,13 @@ use super::settings_ui::{
     self, Control, Focus, Module, Nav, NotificationPosition, Rect, Row, Section,
 };
 use super::text::{Align, SCALE, TextPainter};
+use super::ui_tokens::radii as Radius;
+use super::ui_tokens::{TypeScale, UiPalette, always, radius, type_scale, ui_palette};
 
 pub const TITLE: &str = "HUDbar  /  Control Center";
 
-/// Фон окна непрозрачный: сквозь настройки не должен просвечивать терминал.
-pub const BG_ALPHA: f32 = 1.0;
-
 /// Контуры и центральные линии отладочной отрисовки раскладки.
 const DEBUG_OUTLINE: palette::Rgba = palette::Rgba(0xff, 0x5c, 0x5c, 255);
-
-/// Шрифтовая шкала окна. Все размеры кратны друг другу, чтобы строки
-/// модуля, карточки и подвал выглядели одной системой.
-#[derive(Clone, Copy)]
-pub struct Sizes {
-    title: f32,
-    section: f32,
-    row: f32,
-    micro: f32,
-    value: f32,
-}
-
-pub fn sizes(pixel: bool) -> Sizes {
-    if pixel {
-        Sizes {
-            title: 19.0,
-            section: 14.0,
-            row: 13.0,
-            micro: 11.5,
-            value: 13.5,
-        }
-    } else {
-        Sizes {
-            title: 20.0,
-            section: 15.0,
-            row: 14.0,
-            micro: 12.0,
-            value: 15.0,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct UiPalette {
-    pub base: palette::Rgba,
-    pub panel: palette::Rgba,
-    pub idle_panel: palette::Rgba,
-    pub border: palette::Rgba,
-    pub accent: palette::Rgba,
-    pub text: palette::Rgba,
-    pub muted: palette::Rgba,
-}
-
-fn mix(a: palette::Rgba, b: palette::Rgba, t: f32) -> palette::Rgba {
-    palette::Rgba(
-        (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t) as u8,
-        (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
-        (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
-        255,
-    )
-}
-
-pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
-    if pixel {
-        UiPalette {
-            base: palette::Rgba(0x0b, 0x10, 0x20, 255).with_a(BG_ALPHA),
-            panel: palette::Rgba(0x11, 0x1b, 0x31, 255).with_a(BG_ALPHA),
-            idle_panel: palette::Rgba(0x0e, 0x17, 0x2b, 255).with_a(BG_ALPHA),
-            border: palette::Rgba(0x31, 0x5b, 0x9b, 255),
-            accent: palette::Rgba(0x79, 0xa7, 0xff, 255),
-            text: palette::Rgba(0xe8, 0xea, 0xff, 255),
-            muted: palette::Rgba(0x8d, 0x9a, 0xbd, 255),
-        }
-    } else {
-        UiPalette {
-            base: p.base.with_a(BG_ALPHA),
-            panel: mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA),
-            idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
-            border: mix(p.base, p.primary, 0.35),
-            accent: p.primary,
-            text: p.text,
-            muted: p.text.with_a(0.58),
-        }
-    }
-}
 
 /// Имя файла без пути: в списке обоев полный путь занимает всю строку.
 pub fn notification_position_label(position: NotificationPosition) -> &'static str {
@@ -287,7 +211,7 @@ pub trait DrawExt: View {
         pixmap: &mut tiny_skia::Pixmap,
         p: UiPalette,
         rect: Rect,
-        s: Sizes,
+        s: TypeScale,
         pixel: bool,
     ) {
         let k = SCALE;
@@ -301,14 +225,14 @@ pub trait DrawExt: View {
                 rect.y * k,
                 rect.w * k,
                 rect.h * k,
-                if self.pixel_mode() { 0.0 } else { 6.0 * k },
+                radius(self.pixel_mode(), Radius::SM) * k,
                 p.idle_panel,
             );
         }
         self.painter().paint(
             pixmap,
             "Кнопка Control Center",
-            s.row,
+            s.label,
             if on { p.text } else { p.muted },
             Rect::new(rect.x + 10.0, rect.y, rect.w - 60.0, rect.h),
             Align::Start,
@@ -325,7 +249,7 @@ pub trait DrawExt: View {
             track.y * k,
             track.w * k,
             track.h * k,
-            9.0 * k,
+            always(Radius::TRACK) * k,
             if on { p.accent } else { p.border },
         );
         let knob = 14.0;
@@ -340,7 +264,7 @@ pub trait DrawExt: View {
             (track.y + 2.0) * k,
             knob * k,
             knob * k,
-            7.0 * k,
+            always(Radius::RAIL) * k,
             if on { p.base } else { p.text.with_a(0.7) },
         );
         let _ = pixel;
@@ -357,7 +281,7 @@ pub trait DrawExt: View {
         name: &str,
         selected: bool,
         active: bool,
-        s: Sizes,
+        s: TypeScale,
     ) {
         let k = SCALE;
         fill_round_rect(
@@ -366,7 +290,7 @@ pub trait DrawExt: View {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if self.pixel_mode() { 0.0 } else { 6.0 * k },
+            radius(self.pixel_mode(), Radius::SM) * k,
             if selected || active {
                 p.panel
             } else {
@@ -389,7 +313,7 @@ pub trait DrawExt: View {
         self.painter().paint_boxed(
             pixmap,
             name,
-            s.row,
+            s.label,
             if selected { p.text } else { p.muted },
             Rect::new(rect.x + 12.0, rect.y, rect.w - 60.0, rect.h),
             Align::Start,
@@ -398,7 +322,7 @@ pub trait DrawExt: View {
             self.painter().paint(
                 pixmap,
                 "выбран",
-                s.micro,
+                s.caption,
                 p.accent,
                 Rect::new(rect.right() - 56.0, rect.y, 46.0, rect.h),
                 Align::End,
@@ -415,7 +339,7 @@ pub trait DrawExt: View {
         language: settings::Language,
         rect: Rect,
         selected: bool,
-        s: Sizes,
+        s: TypeScale,
         pixel: bool,
     ) {
         let control = Control::Language(language);
@@ -425,14 +349,14 @@ pub trait DrawExt: View {
             rect,
             language.short(),
             selected || self.hovered(control) || self.focused(control),
-            s.micro,
+            s.caption,
             pixel,
         );
         if selected {
             self.painter().paint(
                 pixmap,
                 "✓",
-                s.row,
+                s.label,
                 p.accent,
                 Rect::new(rect.right() - 26.0, rect.y, 20.0, rect.h),
                 Align::Center,
@@ -450,7 +374,7 @@ pub trait DrawExt: View {
         name: &str,
         index: usize,
         selected: bool,
-        s: Sizes,
+        s: TypeScale,
         pixel: bool,
     ) {
         let control = Control::Scheme(index);
@@ -460,7 +384,7 @@ pub trait DrawExt: View {
             rect,
             name,
             selected || self.hovered(control) || self.focused(control),
-            s.micro,
+            s.caption,
             pixel,
         );
         if selected {
@@ -468,7 +392,7 @@ pub trait DrawExt: View {
             self.painter().paint(
                 pixmap,
                 "✓",
-                s.row,
+                s.label,
                 p.accent,
                 Rect::new(rect.right() - 26.0, rect.y, 20.0, rect.h),
                 Align::Center,
@@ -492,7 +416,7 @@ pub trait DrawExt: View {
         p: UiPalette,
         rect: Rect,
         desc: &str,
-        s: Sizes,
+        s: TypeScale,
     ) {
         let k = SCALE;
         fill_round_rect(
@@ -501,13 +425,13 @@ pub trait DrawExt: View {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if self.pixel_mode() { 0.0 } else { 6.0 * k },
+            radius(self.pixel_mode(), Radius::SM) * k,
             p.idle_panel,
         );
         self.painter().paint_boxed(
             pixmap,
             "нет клавиши",
-            s.micro,
+            s.caption,
             p.accent,
             Rect::new(rect.x + 10.0, rect.y, rect.w * 0.42, rect.h),
             Align::Start,
@@ -516,7 +440,7 @@ pub trait DrawExt: View {
         self.painter().paint_boxed(
             pixmap,
             desc,
-            s.row,
+            s.label,
             p.muted,
             Rect::new(keys_x + 10.0, rect.y, rect.right() - keys_x - 20.0, rect.h),
             Align::Start,
@@ -534,7 +458,7 @@ pub trait DrawExt: View {
         label: &str,
         value: &str,
         section: Section,
-        s: Sizes,
+        s: TypeScale,
     ) {
         let k = SCALE;
         fill_round_rect(
@@ -543,7 +467,7 @@ pub trait DrawExt: View {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if self.pixel_mode() { 0.0 } else { 8.0 * k },
+            radius(self.pixel_mode(), Radius::MD) * k,
             p.idle_panel,
         );
         stroke_rect(
@@ -558,7 +482,7 @@ pub trait DrawExt: View {
         self.painter().paint(
             pixmap,
             label,
-            s.row,
+            s.label,
             p.muted,
             Rect::new(rect.x + 12.0, rect.y, rect.w * 0.5, rect.h),
             Align::Start,
@@ -579,7 +503,7 @@ pub trait DrawExt: View {
         self.painter().paint_boxed(
             pixmap,
             value,
-            s.row,
+            s.label,
             p.text,
             Rect::new(rect.x + rect.w * 0.5, rect.y, rect.w * 0.5 - 34.0, rect.h),
             Align::End,
@@ -587,7 +511,7 @@ pub trait DrawExt: View {
         self.painter().paint(
             pixmap,
             "→",
-            s.row,
+            s.label,
             if active { p.accent } else { p.muted },
             Rect::new(rect.right() - 28.0, rect.y, 20.0, rect.h),
             Align::Center,
@@ -603,12 +527,12 @@ pub trait DrawExt: View {
         module: Module,
         line: usize,
         rect: Rect,
-        s: Sizes,
+        s: TypeScale,
     ) {
         let k = SCALE;
         let control = Control::Switch(module);
         let on = self.config().module_enabled(module);
-        let radius = if self.pixel_mode() { 0.0 } else { 6.0 * k };
+        let row_radius = radius(self.pixel_mode(), Radius::SM) * k;
         if self.hovered(control) || self.focused(control) {
             fill_round_rect(
                 pixmap,
@@ -616,7 +540,7 @@ pub trait DrawExt: View {
                 rect.y * k,
                 rect.w * k,
                 rect.h * k,
-                radius,
+                row_radius,
                 p.idle_panel,
             );
         }
@@ -627,7 +551,7 @@ pub trait DrawExt: View {
         self.painter().paint_boxed(
             pixmap,
             name,
-            s.micro,
+            s.caption,
             if on { p.text } else { p.muted },
             settings_ui::module_name_rect(module, line),
             Align::Start,
@@ -641,7 +565,7 @@ pub trait DrawExt: View {
             switch.y * k,
             switch.w * k,
             switch.h * k,
-            switch.h / 2.0 * k,
+            always(Radius::TRACK) * k,
             if on { p.accent } else { p.border },
         );
         let knob = switch.h - 4.0;
@@ -656,7 +580,7 @@ pub trait DrawExt: View {
             (switch.y + 2.0) * k,
             knob * k,
             knob * k,
-            knob / 2.0 * k,
+            always(Radius::KNOB) * k,
             if on { p.base } else { p.text.with_a(0.7) },
         );
 
@@ -682,7 +606,7 @@ pub trait DrawExt: View {
         rect: Rect,
         keys: &str,
         desc: &str,
-        s: Sizes,
+        s: TypeScale,
     ) {
         let k = SCALE;
         fill_round_rect(
@@ -691,7 +615,7 @@ pub trait DrawExt: View {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if self.pixel_mode() { 0.0 } else { 6.0 * k },
+            radius(self.pixel_mode(), Radius::SM) * k,
             p.idle_panel,
         );
         // Обе части обрезаются по измеренной ширине: длинное сочетание или
@@ -703,7 +627,7 @@ pub trait DrawExt: View {
         self.painter().paint_boxed(
             pixmap,
             keys,
-            s.micro,
+            s.caption,
             p.accent,
             Rect::new(keys_x, rect.y, keys_w, rect.h),
             Align::Start,
@@ -712,7 +636,7 @@ pub trait DrawExt: View {
         self.painter().paint_boxed(
             pixmap,
             desc,
-            s.row,
+            s.label,
             p.text,
             Rect::new(desc_x, rect.y, rect.right() - desc_x - 10.0, rect.h),
             Align::Start,
@@ -738,7 +662,7 @@ pub trait DrawExt: View {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if pixel { 0.0 } else { 6.0 * k },
+            radius(pixel, Radius::SM) * k,
             if active { p.panel } else { p.idle_panel },
         );
         stroke_rect(
@@ -774,7 +698,7 @@ pub trait DrawExt: View {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if pixel { 0.0 } else { 6.0 * k },
+            radius(pixel, Radius::SM) * k,
             if active { p.panel } else { p.idle_panel },
         );
         stroke_rect(
@@ -790,7 +714,7 @@ pub trait DrawExt: View {
             .paint(pixmap, label, size, p.muted, rect, Align::Center);
     }
 
-    fn draw_navigation(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, s: Sizes) {
+    fn draw_navigation(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, s: TypeScale) {
         let k = SCALE;
         let focus = self.nav().focus;
         let hover = self.hover();
@@ -802,7 +726,7 @@ pub trait DrawExt: View {
             rail.y * k,
             rail.w * k,
             rail.h * k,
-            7.0 * k,
+            always(Radius::RAIL) * k,
             p.idle_panel,
         );
         stroke_rect(
@@ -817,7 +741,7 @@ pub trait DrawExt: View {
         self.painter().paint(
             pixmap,
             "РАЗДЕЛЫ",
-            s.micro,
+            s.caption,
             p.muted,
             Rect::new(rail.x + 18.0, rail.y + 14.0, rail.w - 36.0, 20.0),
             Align::Start,
@@ -873,7 +797,7 @@ pub trait DrawExt: View {
             self.painter().paint(
                 pixmap,
                 section.label(),
-                s.row,
+                s.label,
                 if selected { p.text } else { p.muted },
                 Rect::new(rect.x + 20.0, rect.y, rect.w - 32.0, rect.h),
                 Align::Start,
@@ -911,7 +835,7 @@ pub trait DrawExt: View {
             self.painter().paint(
                 pixmap,
                 text,
-                s.micro,
+                s.caption,
                 color,
                 Rect::new(rail.x + 18.0, y, rail_w, 22.0),
                 Align::Start,
@@ -927,7 +851,7 @@ pub trait DrawExt: View {
         p: UiPalette,
         pixel: bool,
         rect: Rect,
-        s: Sizes,
+        s: TypeScale,
     ) {
         let k = SCALE;
         let control = Control::Theme(pixel);
@@ -952,7 +876,7 @@ pub trait DrawExt: View {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if self.pixel_mode() { 0.0 } else { 10.0 * k },
+            radius(self.pixel_mode(), Radius::LG) * k,
             if selected { p.panel } else { p.idle_panel },
         );
         stroke_rect(
@@ -980,7 +904,7 @@ pub trait DrawExt: View {
             box_y * k,
             box_size * k,
             box_size * k,
-            if self.pixel_mode() { 0.0 } else { 4.0 * k },
+            radius(self.pixel_mode(), Radius::XS) * k,
             if selected { p.accent } else { p.base },
         );
         stroke_rect(
@@ -995,7 +919,7 @@ pub trait DrawExt: View {
         self.painter().paint(
             pixmap,
             title,
-            s.section + 3.0,
+            s.section_title + 3.0,
             p.text,
             Rect::new(
                 box_x + box_size + 12.0,
@@ -1009,7 +933,7 @@ pub trait DrawExt: View {
             self.painter().paint(
                 pixmap,
                 "применено",
-                s.micro,
+                s.caption,
                 p.accent,
                 Rect::new(rect.right() - 104.0, title_band.y, 88.0, title_band.h),
                 Align::End,
@@ -1018,7 +942,7 @@ pub trait DrawExt: View {
         self.painter().paint_boxed(
             pixmap,
             description,
-            s.micro,
+            s.caption,
             p.muted,
             settings_ui::card_desc_rect(pixel),
             Align::Start,
@@ -1026,7 +950,7 @@ pub trait DrawExt: View {
         self.painter().paint_boxed(
             pixmap,
             font,
-            s.micro,
+            s.caption,
             p.accent,
             settings_ui::card_font_rect(pixel),
             Align::Start,
@@ -1044,7 +968,7 @@ pub trait DrawExt: View {
         on: bool,
         hovered: bool,
         focused: bool,
-        s: Sizes,
+        s: TypeScale,
     ) {
         let k = SCALE;
         if hovered || focused {
@@ -1054,7 +978,7 @@ pub trait DrawExt: View {
                 rect.y * k,
                 rect.w * k,
                 rect.h * k,
-                if self.pixel_mode() { 0.0 } else { 8.0 * k },
+                radius(self.pixel_mode(), Radius::MD) * k,
                 p.idle_panel,
             );
         }
@@ -1080,7 +1004,7 @@ pub trait DrawExt: View {
             track_y * k,
             switch_w * k,
             switch_h * k,
-            if self.pixel_mode() { 0.0 } else { 10.0 * k },
+            radius(self.pixel_mode(), Radius::LG) * k,
             if on { p.accent } else { p.border },
         );
         let knob = 16.0;
@@ -1095,13 +1019,13 @@ pub trait DrawExt: View {
             (track_y + 2.0) * k,
             knob * k,
             knob * k,
-            if self.pixel_mode() { 0.0 } else { 8.0 * k },
+            radius(self.pixel_mode(), Radius::MD) * k,
             if on { p.base } else { p.text.with_a(0.7) },
         );
         self.painter().paint(
             pixmap,
             label,
-            s.row,
+            s.label,
             if on { p.text } else { p.muted },
             Rect::new(rect.x + 12.0, rect.y, 240.0, rect.h),
             Align::Start,
@@ -1109,7 +1033,7 @@ pub trait DrawExt: View {
         self.painter().paint(
             pixmap,
             if on { "вкл" } else { "выкл" },
-            s.micro,
+            s.caption,
             p.muted,
             Rect::new(switch_rect.x - 60.0, rect.y, 48.0, rect.h),
             Align::End,
@@ -1118,7 +1042,7 @@ pub trait DrawExt: View {
 
     /// Строка высоты: дорожка, значение, подпись диапазона и кнопки шага стоят
     /// в одной полосе, поэтому всё лежит на одной линии.
-    fn draw_height_scale(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, s: Sizes) {
+    fn draw_height_scale(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, s: TypeScale) {
         let k = SCALE;
         let track = settings_ui::height_track_rect();
         fill_round_rect(
@@ -1154,7 +1078,7 @@ pub trait DrawExt: View {
         self.painter().paint(
             pixmap,
             &hint,
-            s.micro,
+            s.caption,
             p.muted,
             settings_ui::height_hint_rect(),
             Align::Start,
@@ -1179,7 +1103,7 @@ pub trait DrawExt: View {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if self.pixel_mode() { 0.0 } else { 8.0 * k },
+            radius(self.pixel_mode(), Radius::MD) * k,
             if hovered || focused {
                 p.panel
             } else {
@@ -1236,7 +1160,7 @@ pub trait DrawExt: View {
         let k = SCALE;
         let p = ui_palette(self.pixel_mode(), self.palette());
         let pixel = self.pixel_mode();
-        let s = sizes(pixel);
+        let s = type_scale(pixel);
         pixmap.fill(p.base.to_tiny());
         fill_rect(pixmap, 0.0, 0.0, pw, k, p.accent);
         fill_rect(pixmap, 0.0, 0.0, k, ph, p.accent.with_a(0.3));
@@ -1246,7 +1170,7 @@ pub trait DrawExt: View {
         self.painter().paint(
             pixmap,
             TITLE,
-            s.title,
+            s.page_title,
             p.text,
             settings_ui::title_rect(),
             Align::Start,
@@ -1260,7 +1184,7 @@ pub trait DrawExt: View {
                 Row::Header { text, y } => self.painter().paint(
                     pixmap,
                     text,
-                    s.section,
+                    s.section_title,
                     p.text,
                     settings_ui::header_rect(y),
                     Align::Start,
@@ -1274,7 +1198,7 @@ pub trait DrawExt: View {
                     self.painter().paint(
                         pixmap,
                         title,
-                        s.section + 4.0,
+                        s.section_title + 4.0,
                         p.text,
                         settings_ui::stub_rect(y),
                         Align::Start,
@@ -1282,7 +1206,7 @@ pub trait DrawExt: View {
                     self.painter().paint(
                         pixmap,
                         note,
-                        s.row,
+                        s.label,
                         p.muted,
                         settings_ui::stub_rect(y + 34.0),
                         Align::Start,
@@ -1309,7 +1233,7 @@ pub trait DrawExt: View {
                     self.painter().paint(
                         pixmap,
                         title,
-                        s.row,
+                        s.label,
                         p.text,
                         Rect::new(rect.x, rect.y, rect.w, 18.0),
                         Align::Start,
@@ -1317,7 +1241,7 @@ pub trait DrawExt: View {
                     self.painter().paint(
                         pixmap,
                         hint,
-                        s.micro,
+                        s.caption,
                         p.muted,
                         Rect::new(rect.x, rect.y + 18.0, rect.w, 16.0),
                         Align::Start,
@@ -1337,7 +1261,7 @@ pub trait DrawExt: View {
                         if dir < 0 { "▲" } else { "▼" },
                         self.hovered(control),
                         self.focused(control),
-                        s.micro,
+                        s.caption,
                     );
                 }
                 Row::HeightLabel { .. } => self.draw_height_scale(pixmap, p, s),
@@ -1346,7 +1270,7 @@ pub trait DrawExt: View {
                     self.painter().paint(
                         pixmap,
                         &label,
-                        s.row,
+                        s.label,
                         p.text,
                         Rect::new(settings_ui::PAD_X, rect.y, 260.0, rect.h),
                         Align::Start,
@@ -1367,7 +1291,7 @@ pub trait DrawExt: View {
                     self.painter().paint(
                         pixmap,
                         &label,
-                        s.row,
+                        s.label,
                         p.text,
                         Rect::new(settings_ui::PAD_X, rect.y, 260.0, rect.h),
                         Align::Start,
@@ -1395,14 +1319,14 @@ pub trait DrawExt: View {
                         rect,
                         notification_position_label(position),
                         active,
-                        s.micro,
+                        s.caption,
                         pixel,
                     );
                     if selected {
                         let k = SCALE;
                         let mark = Rect::new(rect.right() - 26.0, rect.y, 20.0, rect.h);
                         self.painter()
-                            .paint(pixmap, "✓", s.row, p.accent, mark, Align::Center);
+                            .paint(pixmap, "✓", s.label, p.accent, mark, Align::Center);
                         stroke_rect(
                             pixmap,
                             rect.x * k,
@@ -1441,7 +1365,7 @@ pub trait DrawExt: View {
                     let hints = settings_ui::hints(self.nav().section);
                     let hints: Vec<&str> =
                         hints.into_iter().filter(|hint| !hint.is_empty()).collect();
-                    self.draw_footer_hints(pixmap, p, y, s.micro, &hints);
+                    self.draw_footer_hints(pixmap, p, y, s.caption, &hints);
                 }
                 Row::Language {
                     language,
@@ -1491,7 +1415,7 @@ pub trait DrawExt: View {
                     };
                     let active =
                         enabled && (self.hovered(control) || self.focused(control) || self.busy());
-                    self.draw_button_disabled(pixmap, p, rect, label, active, s.row, pixel);
+                    self.draw_button_disabled(pixmap, p, rect, label, active, s.label, pixel);
                 }
                 Row::Close { rect } => {
                     self.draw_button(
@@ -1500,7 +1424,7 @@ pub trait DrawExt: View {
                         rect,
                         "Закрыть",
                         self.hovered(Control::Close) || self.focused(Control::Close),
-                        s.micro,
+                        s.caption,
                         pixel,
                     );
                 }

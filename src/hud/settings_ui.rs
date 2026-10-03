@@ -641,9 +641,9 @@ const TOP_BTN_Y: f32 = 24.0;
 pub const TITLE_X: f32 = 36.0;
 
 // Боковая навигация.
-const RAIL_X: f32 = 18.0;
+pub const RAIL_X: f32 = 18.0;
 const RAIL_Y: f32 = 92.0;
-const RAIL_W: f32 = 236.0;
+pub const RAIL_W: f32 = 236.0;
 const NAV_TOP: f32 = 140.0;
 // Шаг и высота подобраны так, чтобы шесть разделов поместились над
 // разделителем: последний пункт кончается на 420 px.
@@ -665,7 +665,7 @@ const CARD_DESC_Y: f32 = 184.0;
 const CARD_DESC_H: f32 = 20.0;
 const CARD_FONT_Y: f32 = 210.0;
 const CARD_FONT_H: f32 = 20.0;
-const CARD_PAD: f32 = 16.0;
+pub const CARD_PAD: f32 = 16.0;
 
 // Раздел «Обзор»: только сводка. Список разделов есть в сайдбаре, второй раз
 // перечислять разделы в содержимом незачем.
@@ -680,7 +680,7 @@ const ZONE_LABEL_H: f32 = 22.0;
 /// Верх первой строки модуля.
 const ZONE_ROWS_Y: f32 = 188.0;
 /// Промежуток между зонами.
-const ZONE_GAP: f32 = 12.0;
+pub const ZONE_GAP: f32 = 12.0;
 /// Ширина кнопок ▲▼ у строки модуля.
 const MOVE_BTN_W: f32 = 26.0;
 const MOVE_BTN_H: f32 = 26.0;

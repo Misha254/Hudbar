@@ -28,6 +28,8 @@ pub mod settings_view;
 pub mod text;
 pub mod tray;
 #[allow(dead_code)]
+pub mod ui_tokens;
+#[allow(dead_code)]
 pub mod wallpaper;
 
 pub mod app;

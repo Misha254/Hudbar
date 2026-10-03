@@ -62,6 +62,9 @@ mod settings_view;
 #[path = "../hud/text.rs"]
 mod text;
 #[allow(dead_code)]
+#[path = "../hud/ui_tokens.rs"]
+mod ui_tokens;
+#[allow(dead_code)]
 #[path = "../hud/wallpaper.rs"]
 mod wallpaper;
 
@@ -183,9 +186,9 @@ fn load_wallpapers() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use settings_view::{BG_ALPHA, ui_palette};
     use text::Align;
     use text::SCALE;
+    use ui_tokens::{BG_ALPHA, ui_palette};
 
     /// Фон окна настроек обязан быть непрозрачным: сквозь него видно терминал,
     /// и подписи на прозрачном фоне читаются хуже.
