@@ -294,6 +294,25 @@ mod tests {
         assert_eq!(BG_ALPHA, 1.0);
     }
 
+    /// Пересборка строк обязана брать состояние «Обоев»: с пустым состоянием
+    /// список файлов исчезал сразу после нажатия. Тест ловит именно вызов
+    /// `rows_for`, который состояние роняет.
+    #[test]
+    fn rebuild_rows_keeps_the_wallpaper_state() {
+        let source = include_str!("hud_settings.rs");
+        // Строка склеена из кусков: иначе тест поймал бы сам себя, ведь
+        // `rows_for_state(` начинается с `rows_for(`.
+        let state_less = ["settings_ui::rows_for", "("].concat();
+        assert!(
+            !source.contains(&state_less),
+            "rebuild_rows не должен терять состояние раздела «Обои»"
+        );
+        assert!(
+            source.contains("self.rows = settings_ui::rows_for_state("),
+            "rebuild_rows должен звать rows_for_state"
+        );
+    }
+
     #[test]
     fn settings_window_has_no_legacy_setting_commands() {
         let source = include_str!("hud_settings.rs");
@@ -792,7 +811,8 @@ impl SettingsApp {
                 selected
             });
         }
-        self.status = format!("Файлов: {} · показано {}-{next}{page}", count, next + 1);
+        let last = (next + page).min(count);
+        self.status = format!("Файлов: {count} · показано {}-{last}", next + 1);
         self.rebuild_rows();
         self.dirty = true;
     }
@@ -831,12 +851,17 @@ impl SettingsApp {
 
     /// Пересобирает строки под активный раздел. Фокус сайдбара сохраняется,
     /// из содержимого переносится на первый контрол нового раздела.
+    ///
+    /// Именно `rows_for_state`, а не `rows_for`: у раздела «Обои» есть
+    /// состояние (файлы, выбор, прокрутка), и пересборка через `rows_for`
+    /// подставляла пустое — список файлов исчезал после любого нажатия.
     fn rebuild_rows(&mut self) {
-        self.rows = settings_ui::rows_for(
+        self.rows = settings_ui::rows_for_state(
             self.nav.section,
             &self.config,
             &self.hotkeys,
             self.hotkey_scroll,
+            &self.wallpaper,
         );
         if !self.nav.focus_nav()
             && let Some(content) = self.nav.first_content(&self.rows)
@@ -1266,12 +1291,16 @@ impl SettingsApp {
                 }
                 Row::WallpaperFile {
                     name,
+                    index,
                     rect,
                     selected,
-                    ..
                 } => {
                     let label = wallpaper_dir_label(&name);
-                    self.draw_wallpaper_file(&mut pixmap, p, rect, &label, selected, s);
+                    let control = Control::WallpaperFile(index);
+                    // Фокус виден всегда: иначе непонятно, к какой строке
+                    // сейчас относится Space.
+                    let active = self.hovered(control) || self.focused(control);
+                    self.draw_wallpaper_file(&mut pixmap, p, rect, &label, selected, active, s);
                 }
                 Row::Scheme {
                     name,
@@ -1422,6 +1451,7 @@ impl SettingsApp {
 
     /// Файл обоев в списке: выбранный подсвечивается акцентной рамкой, имя
     /// обрезается по ширине полосы.
+    #[allow(clippy::too_many_arguments)]
     fn draw_wallpaper_file(
         &mut self,
         pixmap: &mut tiny_skia::Pixmap,
@@ -1429,6 +1459,7 @@ impl SettingsApp {
         rect: Rect,
         name: &str,
         selected: bool,
+        active: bool,
         s: Sizes,
     ) {
         let k = SCALE;
@@ -1439,7 +1470,11 @@ impl SettingsApp {
             rect.w * k,
             rect.h * k,
             if self.pixel_mode() { 0.0 } else { 6.0 * k },
-            if selected { p.panel } else { p.idle_panel },
+            if selected || active {
+                p.panel
+            } else {
+                p.idle_panel
+            },
         );
         stroke_rect(
             pixmap,
@@ -1447,7 +1482,11 @@ impl SettingsApp {
             rect.y * k,
             rect.w * k,
             rect.h * k,
-            if selected { p.accent } else { p.border },
+            if selected || active {
+                p.accent
+            } else {
+                p.border
+            },
             if selected { 2.0 * k } else { k },
         );
         self.painter.paint_boxed(
