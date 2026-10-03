@@ -2,7 +2,7 @@
 //! Только арифметика, без cosmic-text и Wayland — как `binds_layout`.
 
 use super::config::Config;
-pub use super::settings::{Module, NotificationPosition, Zone};
+pub use super::settings::{Language, Module, NotificationPosition, Zone};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -335,7 +335,8 @@ pub enum Control {
     WallpaperFile(usize),
     Scheme(usize),
     WallpaperApply,
-    Language,
+    /// Выбор языка интерфейса: кнопки РУС и EN.
+    Language(Language),
     Close,
 }
 
@@ -512,8 +513,11 @@ pub enum Row {
     Footer {
         y: f32,
     },
+    /// Кнопка языка: текущий отмечен галочкой, как выбранная тема.
     Language {
+        language: Language,
         rect: Rect,
+        selected: bool,
     },
 }
 
@@ -534,7 +538,7 @@ impl Row {
             | Row::ControlButton { rect }
             | Row::WallpaperFile { rect, .. }
             | Row::Scheme { rect, .. }
-            | Row::Language { rect }
+            | Row::Language { rect, .. }
             | Row::WallpaperApply { rect, .. } => Some(*rect),
             Row::Close { rect } => Some(*rect),
             Row::Move { rect, .. } => Some(*rect),
@@ -559,7 +563,7 @@ impl Row {
                 Some(Control::NotificationPosition(*position))
             }
             Row::Summary { section, .. } => Some(Control::Goto(*section)),
-            Row::Language { .. } => Some(Control::Language),
+            Row::Language { language, .. } => Some(Control::Language(*language)),
             Row::Close { .. } => Some(Control::Close),
             Row::WallpaperFile { index, .. } => Some(Control::WallpaperFile(*index)),
             Row::Scheme { index, .. } => Some(Control::Scheme(*index)),
@@ -847,9 +851,14 @@ pub fn summary_rect(index: usize) -> Rect {
     )
 }
 
-/// Переключатель языка в разделе «Внешний вид».
-pub fn language_row_rect() -> Rect {
-    Rect::new(PAD_X, LANGUAGE_Y, COL_W, ROW_H)
+/// Кнопки языка в разделе «Внешний вид»: две колонки, как карточки тем.
+pub fn language_rect(index: usize) -> Rect {
+    Rect::new(
+        PAD_X + (index % 2) as f32 * (COL_W + COL_GAP),
+        LANGUAGE_Y,
+        COL_W,
+        ROW_H,
+    )
 }
 
 /// Строка горячей клавиши из niri: две колонки, индекс уже с учётом прокрутки.
@@ -1050,8 +1059,10 @@ pub fn debug_rects() -> Vec<Rect> {
         footer_rect(),
         height_row_rect(),
         rule_rect(RULE_HEIGHT_Y),
-        language_row_rect(),
     ];
+    for index in 0..2 {
+        rects.push(language_rect(index));
+    }
     for index in 0..Section::ALL.len() {
         rects.push(nav_rect(index));
     }
@@ -1154,7 +1165,7 @@ pub fn rows_for_state(
     match section {
         Section::Overview => rows.extend(overview_rows(config)),
         Section::Panel => rows.extend(panel_rows(config)),
-        Section::Appearance => rows.extend(appearance_rows()),
+        Section::Appearance => rows.extend(appearance_rows(config.language)),
         Section::Notifications => rows.extend(notification_rows()),
         Section::Controls => rows.extend(controls_rows(hotkeys, hotkey_scroll)),
         Section::Wallpaper => rows.extend(wallpaper_rows(wallpaper)),
@@ -1261,8 +1272,8 @@ fn overview_rows(config: &Config) -> Vec<Row> {
         None => "не задана",
     };
     let language = match config.language {
-        super::settings::Language::Ru => "Русский",
-        super::settings::Language::En => "English",
+        Language::Ru => "Русский",
+        Language::En => "English",
     };
     let summary = [
         ("Тема", theme.to_string(), Section::Appearance),
@@ -1343,7 +1354,7 @@ fn panel_rows(config: &Config) -> Vec<Row> {
 }
 
 /// Раздел «Внешний вид»: тема и язык.
-fn appearance_rows() -> Vec<Row> {
+fn appearance_rows(language: Language) -> Vec<Row> {
     let mut rows = Vec::new();
     for pixel in [false, true] {
         rows.push(Row::Theme {
@@ -1356,9 +1367,13 @@ fn appearance_rows() -> Vec<Row> {
         text: "Язык интерфейса",
         y: LANGUAGE_HEADER_Y,
     });
-    rows.push(Row::Language {
-        rect: language_row_rect(),
-    });
+    for (index, lang) in [Language::Ru, Language::En].into_iter().enumerate() {
+        rows.push(Row::Language {
+            language: lang,
+            rect: language_rect(index),
+            selected: lang == language,
+        });
+    }
     rows
 }
 
@@ -2295,10 +2310,48 @@ mod tests {
         assert_eq!(
             appearance
                 .iter()
-                .filter(|c| **c == Control::Language)
+                .filter(|c| matches!(c, Control::Language(_)))
                 .count(),
-            1
+            2,
+            "в разделе две кнопки языка"
         );
+    }
+
+    /// Две кнопки языка всегда на месте, а галочка стоит на текущем: так же,
+    /// как с темой.
+    #[test]
+    fn appearance_marks_the_current_language() {
+        for language in [Language::Ru, Language::En] {
+            let config = Config {
+                language,
+                ..Config::default()
+            };
+            let rows = rows_for(Section::Appearance, &config, &[], 0);
+            let buttons: Vec<(Language, bool, Rect)> = rows
+                .iter()
+                .filter_map(|row| match row {
+                    Row::Language {
+                        language,
+                        rect,
+                        selected,
+                    } => Some((*language, *selected, *rect)),
+                    _ => None,
+                })
+                .collect();
+
+            assert_eq!(buttons.len(), 2, "в разделе две кнопки языка");
+            assert_eq!(buttons[0].0, Language::Ru);
+            assert_eq!(buttons[1].0, Language::En);
+            assert_eq!(buttons[0].1, language == Language::Ru, "РУС");
+            assert_eq!(buttons[1].1, language == Language::En, "EN");
+            assert!(
+                buttons[0].2.right() <= buttons[1].2.x,
+                "кнопки языка наложились: {:?}",
+                buttons.iter().map(|b| b.2).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(Language::Ru.short(), "РУС");
+        assert_eq!(Language::En.short(), "EN");
     }
 
     /// Плашки заглушки убрана: все шесть разделов рабочие, а заглушкой
@@ -2532,10 +2585,10 @@ mod tests {
             neighbour(&rows, Control::Theme(true), -1, 0),
             Some(Control::Theme(false))
         );
-        // с карточки вниз — переключатель языка
+        // с карточки вниз — кнопки языка
         assert_eq!(
             neighbour(&rows, Control::Theme(false), 0, 1),
-            Some(Control::Language)
+            Some(Control::Language(Language::Ru))
         );
     }
 

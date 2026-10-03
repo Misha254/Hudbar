@@ -140,6 +140,17 @@ impl Language {
         }
     }
 
+    /// Короткая подпись кнопки в окне: «РУС» и «EN». Окно настроек
+    /// подключает `settings.rs` отдельно от панели, поэтому метод может
+    /// казаться неиспользуемым в самом `hudbar`.
+    #[allow(dead_code)]
+    pub fn short(self) -> &'static str {
+        match self {
+            Language::Ru => "РУС",
+            Language::En => "EN",
+        }
+    }
+
     /// Любое значение, кроме `en`, трактуется как `ru` — как в старом парсере.
     pub fn from_key(key: &str) -> Language {
         match key {
@@ -526,6 +537,8 @@ mod tests {
 
     #[test]
     fn language_falls_back_to_russian_for_unknown_values() {
+        assert_eq!(Language::Ru.short(), "РУС");
+        assert_eq!(Language::En.short(), "EN");
         assert_eq!(Language::from_key("en"), Language::En);
         assert_eq!(Language::from_key("ru"), Language::Ru);
         assert_eq!(Language::from_key("de"), Language::Ru);

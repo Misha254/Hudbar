@@ -658,13 +658,26 @@ impl SettingsApp {
         self.commit(config_io::Patch::ModuleOrder(moved.flatten()));
     }
 
+    /// Выбор языка кнопкой: пишем только когда он действительно меняется,
+    /// иначе каждое нажатие переписывало бы файл впустую.
+    fn set_language(&mut self, language: settings::Language) {
+        if self.config.language == language {
+            self.status = format!("Язык уже {}", language.short());
+            self.dirty = true;
+            return;
+        }
+        self.commit(config_io::Patch::Language(language));
+    }
+
+    /// Клавиша L переключает язык без мыши: вторая кнопка для быстрого
+    /// переключения, сам выбор всё равно за кнопкой.
     fn toggle_language(&mut self) {
         let next = if self.config.language == settings::Language::Ru {
             settings::Language::En
         } else {
             settings::Language::Ru
         };
-        self.commit(config_io::Patch::Language(next));
+        self.set_language(next);
     }
     /// Показ шестерёнки Control Center. Панель читает файл на лету, поэтому
     /// перезапуск не нужен.
@@ -856,7 +869,7 @@ impl SettingsApp {
             Control::WallpaperApply => self.apply_wallpaper(),
             // Слайдер высоты реагирует на перетаскивание, а не на Space.
             Control::HeightSlider => {}
-            Control::Language => self.toggle_language(),
+            Control::Language(language) => self.set_language(language),
             Control::Close => {
                 self.flush_height(true);
                 self.exit.store(true, Ordering::Relaxed);
@@ -1231,22 +1244,11 @@ impl SettingsApp {
                         hints.into_iter().filter(|hint| !hint.is_empty()).collect();
                     self.draw_footer_hints(&mut pixmap, p, y, s.micro, &hints);
                 }
-                Row::Language { rect } => {
-                    let label = if self.config.language == settings::Language::Ru {
-                        "РУС"
-                    } else {
-                        "ENG"
-                    };
-                    self.draw_button(
-                        &mut pixmap,
-                        p,
-                        rect,
-                        label,
-                        self.hovered(Control::Language) || self.focused(Control::Language),
-                        s.micro,
-                        pixel,
-                    );
-                }
+                Row::Language {
+                    language,
+                    rect,
+                    selected,
+                } => self.draw_language(&mut pixmap, p, language, rect, selected, s, pixel),
                 Row::Summary {
                     label,
                     value,
@@ -1464,6 +1466,40 @@ impl SettingsApp {
                 p.accent,
                 Rect::new(rect.right() - 56.0, rect.y, 46.0, rect.h),
                 Align::End,
+            );
+        }
+    }
+
+    /// Кнопка языка: та же подсветка с галочкой, что у схем и темы.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_language(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        p: UiPalette,
+        language: settings::Language,
+        rect: Rect,
+        selected: bool,
+        s: Sizes,
+        pixel: bool,
+    ) {
+        let control = Control::Language(language);
+        self.draw_button(
+            pixmap,
+            p,
+            rect,
+            language.short(),
+            selected || self.hovered(control) || self.focused(control),
+            s.micro,
+            pixel,
+        );
+        if selected {
+            self.painter.paint(
+                pixmap,
+                "✓",
+                s.row,
+                p.accent,
+                Rect::new(rect.right() - 26.0, rect.y, 20.0, rect.h),
+                Align::Center,
             );
         }
     }
