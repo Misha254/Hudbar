@@ -12,9 +12,16 @@
 
 use super::config::{Config, Theme};
 use super::palette;
-use super::settings_ui::{self, Focus, Hotkey, Nav, Row, Section, Wallpaper};
+use super::settings_icons;
+use super::settings_ui::{self, Focus, Hotkey, Nav, Rect, Row, Section, Wallpaper};
 use super::settings_view::{DrawExt, View, font_name};
-use super::text::{SCALE, TextPainter};
+use super::settings_widgets::CARD_PAD;
+use super::settings_widgets::{
+    self as widgets, BadgeKind, ButtonKind, Ctx, WidgetState, badge, button, icon, icon_button,
+    slider, stepper, stepper_layout, toggle,
+};
+use super::text::{Align, SCALE, TextPainter};
+use super::ui_tokens::{self, PAGE_PAD, spacing, type_scale};
 
 /// Состояние для кадра: те же поля, что у живого окна, но без Wayland.
 struct Snapshot {
@@ -188,9 +195,287 @@ pub fn write_png(pixmap: &tiny_skia::Pixmap, path: &std::path::Path) -> Result<(
         .map_err(|error| format!("PNG: {error}"))
 }
 
-/// Разбор `--snapshot <section> <out.png> [--theme normal|pixel]`.
+/// Галерея виджетов: все виджеты во всех состояниях плюс все иконки. Это
+/// визуальный тест — снимок сразу показывает, сломался ли виджет, поэтому
+/// здесь не нужен ни Wayland, ни реальный конфиг.
+pub fn render_gallery(pixel: bool) -> tiny_skia::Pixmap {
+    let p = ui_tokens::ui_palette(pixel, palette::Palette::default());
+    let s = type_scale(pixel);
+    let width = (settings_ui::WIDTH * SCALE) as u32;
+    let height = (settings_ui::HEIGHT * SCALE) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height).expect("pixmap");
+    pixmap.fill(p.base.to_tiny());
+    let mut painter = TextPainter::new(&font_name(pixel));
+    // Иконки рисуются отдельной копией painter: в Pixel основной шрифт
+    // Minecraft Rus, а Nerd Font глифов в нём нет.
+    let mut icon_painter = TextPainter::new(settings_icons::FONT);
+
+    let area = Rect::new(PAGE_PAD, PAGE_PAD, settings_ui::WIDTH - PAGE_PAD * 2.0, 0.0);
+    let columns = 4;
+    let column_w = (area.w - CARD_PAD * (columns + 1) as f32) / columns as f32;
+    let column_x = |index: usize| area.x + CARD_PAD + index as f32 * (column_w + CARD_PAD);
+    let row_h = 64.0;
+
+    let mut ctx = Ctx {
+        pixmap: &mut pixmap,
+        painter: &mut painter,
+        palette: p,
+        scale: s,
+        pixel,
+    };
+
+    ctx.paint(
+        "Виджеты",
+        s.page_title,
+        p.text,
+        Rect::new(area.x, area.y, 300.0, 30.0),
+        Align::Start,
+    );
+    badge(
+        &mut ctx,
+        Rect::new(area.right() - 230.0, area.y + 2.0, 100.0, 24.0),
+        "ACCENT",
+        BadgeKind::Accent,
+    );
+    badge(
+        &mut ctx,
+        Rect::new(area.right() - 120.0, area.y + 2.0, 120.0, 24.0),
+        "NEUTRAL",
+        BadgeKind::Neutral,
+    );
+
+    let mut y = area.y + 46.0;
+    for (index, title) in [
+        "Карточка и плитки",
+        "Кнопки",
+        "Степпер и слайдер",
+        "Тумблер",
+    ]
+    .iter()
+    .enumerate()
+    {
+        ctx.paint(
+            title,
+            s.caption,
+            p.muted,
+            Rect::new(column_x(index), y, column_w, 20.0),
+            Align::Start,
+        );
+    }
+    y += 26.0;
+    let cell = |column: usize, row: usize| {
+        Rect::new(
+            column_x(column),
+            y + row as f32 * (row_h + spacing::SM),
+            column_w,
+            row_h,
+        )
+    };
+
+    // Состояния плитки: обычный, наведение, фокус, выбран, неактивный.
+    let states = [
+        ("обычный", WidgetState::plain()),
+        ("наведение", WidgetState::plain().with(false, true)),
+        ("фокус", WidgetState::plain().with(true, false)),
+        ("выбран", WidgetState::plain().selected(true)),
+        ("неактивен", WidgetState::plain().disabled(true)),
+    ];
+    widgets::card(&mut ctx, cell(0, 0), Some("Карточка"));
+    for (index, (name, state)) in states.iter().enumerate() {
+        widgets::choice_tile(&mut ctx, cell(0, 1 + index), name, *state);
+    }
+
+    // Кнопки обоих ролей во всех состояниях.
+    for (index, (kind, label)) in [
+        (ButtonKind::Secondary, "Secondary"),
+        (ButtonKind::Primary, "Primary"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let base = cell(1, index * 3);
+        for (offset, (_, state)) in states.iter().enumerate() {
+            button(
+                &mut ctx,
+                Rect::new(base.x, base.y + offset as f32 * 38.0, base.w, 32.0),
+                label,
+                *kind,
+                *state,
+            );
+        }
+    }
+
+    // Степперы: обычный и неактивный.
+    stepper(
+        &mut ctx,
+        Rect::new(cell(2, 0).x, cell(2, 0).y + 8.0, cell(2, 0).w, 32.0),
+        "Панель",
+        "27 px",
+        WidgetState::plain(),
+    );
+    stepper(
+        &mut ctx,
+        Rect::new(cell(2, 1).x, cell(2, 1).y + 8.0, cell(2, 1).w, 32.0),
+        "Недоступно",
+        "\u{2014}",
+        WidgetState::plain().disabled(true),
+    );
+
+    // Слайдер с подписями и степпером: трек, min/max, значение и кнопки.
+    let slider_cell = cell(2, 2);
+    let track_w = slider_cell.w - 104.0;
+    slider(
+        &mut ctx,
+        Rect::new(slider_cell.x, slider_cell.y + 14.0, track_w, 4.0),
+        0.32,
+        WidgetState::plain(),
+    );
+    ctx.paint(
+        "24",
+        s.caption,
+        p.muted,
+        Rect::new(slider_cell.x, slider_cell.y + 26.0, 40.0, 16.0),
+        Align::Start,
+    );
+    ctx.paint(
+        "48",
+        s.caption,
+        p.muted,
+        Rect::new(
+            slider_cell.x + track_w - 40.0,
+            slider_cell.y + 26.0,
+            40.0,
+            16.0,
+        ),
+        Align::End,
+    );
+    let parts = stepper_layout(
+        Rect::new(slider_cell.right() - 88.0, slider_cell.y, 88.0, 32.0),
+        32.0,
+    );
+    icon_button(
+        &mut ctx,
+        parts.minus,
+        settings_icons::MINUS,
+        WidgetState::plain(),
+    );
+    ctx.paint("27 px", s.value, p.text, parts.value, Align::Center);
+    icon_button(
+        &mut ctx,
+        parts.plus,
+        settings_icons::PLUS,
+        WidgetState::plain(),
+    );
+
+    // Тот же слайдер в фокусе.
+    let focus_cell = cell(2, 3);
+    slider(
+        &mut ctx,
+        Rect::new(focus_cell.x, focus_cell.y + 14.0, focus_cell.w - 8.0, 4.0),
+        0.68,
+        WidgetState::plain().with(true, false),
+    );
+
+    // Тумблер: включён, выключен, в фокусе, неактивен.
+    for (index, state) in [
+        WidgetState::plain().on(true),
+        WidgetState::plain().on(false),
+        WidgetState::plain().on(true).with(true, false),
+        WidgetState::plain().on(false).disabled(true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let rect = cell(3, index);
+        let name = match (state.on, state.disabled, state.focused) {
+            (true, false, false) => "вкл",
+            (false, false, false) => "выкл",
+            (true, false, true) => "вкл, фокус",
+            _ => "выкл, неактивен",
+        };
+        ctx.paint(
+            name,
+            s.caption,
+            p.muted,
+            Rect::new(rect.x, rect.y + 4.0, rect.w - 44.0, 20.0),
+            Align::Start,
+        );
+        toggle(
+            &mut ctx,
+            Rect::new(rect.right() - 36.0, rect.y + 4.0, 36.0, 20.0),
+            state,
+        );
+    }
+    // IconButton: стрелки перестановки в трёх состояниях.
+    for (index, state) in [
+        WidgetState::plain(),
+        WidgetState::plain().with(false, true),
+        WidgetState::plain().with(true, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let rect = Rect::new(
+            cell(3, 4).x + index as f32 * 72.0,
+            cell(3, 4).y + 10.0,
+            32.0,
+            32.0,
+        );
+        icon_button(&mut ctx, rect, settings_icons::UP, state);
+        icon_button(
+            &mut ctx,
+            Rect::new(rect.x + 36.0, rect.y, 32.0, 32.0),
+            settings_icons::DOWN,
+            state,
+        );
+    }
+
+    // Иконки: сетка 8 колонок с подписями под каждой.
+    let icons_y = y + 6.0 * (row_h + spacing::SM) + 16.0;
+    ctx.paint(
+        "Иконки",
+        s.section_title,
+        p.text,
+        Rect::new(area.x, icons_y, 300.0, 24.0),
+        Align::Start,
+    );
+    let icon_w = (area.w - spacing::SM * 7.0) / 8.0;
+    for (index, (name, glyph)) in settings_icons::ALL.into_iter().enumerate() {
+        let column = index % 8;
+        let row = index / 8;
+        let x = area.x + column as f32 * (icon_w + spacing::SM);
+        let cell_y = icons_y + 30.0 + row as f32 * 52.0;
+        ctx.paint(
+            name,
+            s.caption,
+            p.muted,
+            Rect::new(x, cell_y + 26.0, icon_w, 16.0),
+            Align::Center,
+        );
+        // Иконка рисуется последней и отдельным painter: в Pixel основной
+        // шрифт — Minecraft Rus, и Nerd Font глифов в нём нет.
+        let mut icon_ctx = Ctx {
+            pixmap: ctx.pixmap,
+            painter: &mut icon_painter,
+            palette: p,
+            scale: s,
+            pixel,
+        };
+        icon(&mut icon_ctx, Rect::new(x, cell_y, icon_w, 26.0), glyph);
+    }
+    pixmap
+}
+
+/// Что рисовать: секция окна или галерея виджетов.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Subject {
+    Section(settings_ui::Section),
+    Gallery,
+}
+
+/// Разбор `--snapshot <section|gallery> <out.png> [--theme normal|pixel]`.
 pub fn run(args: &[String]) -> Result<(), String> {
-    let mut section: Option<Section> = None;
+    let mut subject: Option<Subject> = None;
     let mut out: Option<&str> = None;
     let mut pixel = false;
     let mut i = 0;
@@ -208,11 +493,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 i += 2;
             }
             value => {
-                if section.is_none() {
-                    section = Some(Section::from_key(value).ok_or(format!(
-                        "секция не понята: {value}. Доступны: overview, panel, appearance, \
-                         notifications, controls, wallpaper"
-                    ))?);
+                if subject.is_none() {
+                    subject = Some(if value == "gallery" {
+                        Subject::Gallery
+                    } else {
+                        Subject::Section(Section::from_key(value).ok_or(format!(
+                            "секция не понята: {value}. Доступны: overview, panel, \
+                                 appearance, notifications, controls, wallpaper, gallery"
+                        ))?)
+                    });
                 } else if out.is_none() {
                     out = Some(value);
                 } else {
@@ -222,15 +511,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
             }
         }
     }
-    let section = section.ok_or("нужна секция")?;
+    let subject = subject.ok_or("нужна секция или gallery")?;
     let out = out.ok_or("нужен путь к PNG")?;
-    let pixmap = render_section(section, pixel);
+    let pixmap = match subject {
+        Subject::Section(section) => render_section(section, pixel),
+        Subject::Gallery => render_gallery(pixel),
+    };
     write_png(&pixmap, std::path::Path::new(out))?;
     let theme = if pixel { "pixel" } else { "normal" };
+    let name = match subject {
+        Subject::Section(section) => section.label(),
+        Subject::Gallery => "галерея",
+    };
     println!(
-        "{} {} {}x{} → {out}",
-        section.label(),
-        theme,
+        "{name} {theme} {}x{} → {out}",
         pixmap.width(),
         pixmap.height()
     );

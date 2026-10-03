@@ -3,8 +3,8 @@
 
 use super::config::Config;
 pub use super::settings::{Language, Module, NotificationPosition, Zone};
+use super::settings_widgets;
 use super::ui_layout;
-use super::ui_tokens::SECTION_GAP;
 use super::ui_tokens::spacing;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -501,6 +501,12 @@ pub enum Row {
     },
     Height {
         dir: i32,
+        rect: Rect,
+    },
+    /// Карточка секции: рамка и заголовок. Рисуется раньше детей, поэтому
+    /// интерактивной считается не она, а строки внутри.
+    Card {
+        title: &'static str,
         rect: Rect,
     },
     /// Степпер размера шрифта: `label` — подпись слева, `value` — число,
@@ -1080,6 +1086,18 @@ pub fn height_hint_rect() -> Rect {
     Rect::new(value.right() + 12.0, value.y, 92.0, value.h)
 }
 
+/// Подпись минимальной высоты под дорожкой.
+pub fn height_hint_min_rect() -> Rect {
+    let track = height_track_rect();
+    Rect::new(track.x, track.bottom() + 4.0, 40.0, 16.0)
+}
+
+/// Подпись максимальной высоты под дорожкой.
+pub fn height_hint_max_rect() -> Rect {
+    let track = height_track_rect();
+    Rect::new(track.right() - 40.0, track.bottom() + 4.0, 40.0, 16.0)
+}
+
 /// Прямоугольник кнопки закрытия в шапке.
 pub fn close_rect() -> Rect {
     Rect::new(WIDTH - PAD_R - TOP_BTN_W, TOP_BTN_Y, TOP_BTN_W, TOP_BTN_H)
@@ -1427,21 +1445,31 @@ fn appearance_rows(language: Language) -> Vec<Row> {
     rows
 }
 
-/// Раздел «Уведомления»: размер шрифта, высота строки и угол экрана.
+/// Раздел «Уведомления»: две карточки — «Размер» с двумя степперами и
+/// «Угол экрана» с сеткой выбора углов.
 ///
-/// Первый раздел на новом слое раскладки: вертикальный стек из секций, между
-/// ними `SECTION_GAP`, без разделительных линий. Прямоугольники считает
-/// `Layout`, поэтому порядок секций меняется перестановкой блоков, а не
-/// правкой чисел.
+/// Высоту карточек считает `Layout::card`, поэтому добавление строки внутрь не
+/// ломает геометрию ниже. `Row::Card` стоит перед своими детьми и рисуется
+/// первым: рамка ложится под содержимое, а не сверху.
 fn notification_rows() -> Vec<Row> {
     let mut rows = Vec::new();
-    let mut layout = ui_layout::Layout::new(ui_layout::content_area(), SECTION_GAP);
+    let mut layout = ui_layout::Layout::new(ui_layout::content_area(), settings_widgets::CARD_PAD);
 
-    // Секция «Шрифт»: подпись, значение и −/+ одной полосой. Зазор SECTION_GAP
-    // стоит перед заголовком секции, а под ним полоса идёт сразу: иначе
-    // заголовок слипался бы со своей полосой.
-    rows.push(section_header(&mut layout, "Шрифт"));
-    let font = stepper_row(section_area(&mut layout, ui_layout::SETTING_ROW_H));
+    // Карточка «Размер»: два степпера, у каждого своя полоса настроек.
+    let stepper_h = ui_layout::SETTING_ROW_H;
+    let size_card = layout.card("Размер", 2.0 * stepper_h + spacing::SM, |inner| {
+        inner.row(stepper_h);
+        inner.row(stepper_h);
+    });
+    rows.push(Row::Card {
+        title: "Размер",
+        rect: size_card,
+    });
+    let mut steps = ui_layout::Layout::new(
+        settings_widgets::card_content_rect(size_card, true),
+        spacing::SM,
+    );
+    let font = stepper_row(steps.row(stepper_h));
     for dir in [-1, 1] {
         rows.push(Row::NotificationFont {
             dir,
@@ -1450,11 +1478,7 @@ fn notification_rows() -> Vec<Row> {
             value: font.value,
         });
     }
-
-    // Секция «Строка»: та же форма, другая настройка.
-    layout.gap(SECTION_GAP);
-    rows.push(section_header(&mut layout, "Строка"));
-    let line = stepper_row(section_area(&mut layout, ui_layout::SETTING_ROW_H));
+    let line = stepper_row(steps.row(stepper_h));
     for dir in [-1, 1] {
         rows.push(Row::NotificationLineHeight {
             dir,
@@ -1464,46 +1488,28 @@ fn notification_rows() -> Vec<Row> {
         });
     }
 
-    // Секция «Угол экрана»: четыре варианта сеткой 2x2.
-    layout.gap(SECTION_GAP);
-    rows.push(section_header(&mut layout, "Угол экрана"));
-    let mut corners = layout.columns(2, COL_GAP, ROW_H);
-    // Второй ряд сетки ближе к первому, чем соседние секции друг к другу.
-    layout.gap(spacing::SM);
-    corners.extend(layout.columns(2, COL_GAP, ROW_H));
+    // Карточка «Угол экрана»: сетка 2x2 из плиток выбора.
+    let corner_card = layout.card("Угол экрана", 2.0 * ROW_H + spacing::SM, |inner| {
+        inner.columns(2, COL_GAP, ROW_H);
+        inner.columns(2, COL_GAP, ROW_H);
+    });
+    rows.push(Row::Card {
+        title: "Угол экрана",
+        rect: corner_card,
+    });
+    let mut grid = ui_layout::Layout::new(
+        settings_widgets::card_content_rect(corner_card, true),
+        spacing::SM,
+    );
+    let mut corners = grid.columns(2, COL_GAP, ROW_H);
+    corners.extend(grid.columns(2, COL_GAP, ROW_H));
     for (index, position) in NotificationPosition::ALL.into_iter().enumerate() {
         rows.push(Row::NotificationPosition {
             position,
             rect: corners[index],
         });
     }
-    layout.gap(SECTION_GAP);
     rows
-}
-
-/// Заголовок секции: та же полоса стека, но подпись рисует сама строка.
-/// После заголовка зазор обнуляется — полоса секции идёт под ним вплотную.
-fn section_header(layout: &mut ui_layout::Layout, text: &'static str) -> Row {
-    let rect = layout.row(HEADER_H);
-    layout.gap(0.0);
-    Row::Header { text, y: rect.y }
-}
-
-/// Область очередной полосы секции: отступ сверху, затем сама полоса.
-fn section_area(layout: &mut ui_layout::Layout, height: f32) -> Rect {
-    let y = layout.cursor_y();
-    layout.row(height);
-    Rect::new(layout_left(layout), y, layout_width(layout), height)
-}
-
-/// Слева и ширина области контента: `Layout` держит их приватно, а секциям
-/// нужно собрать вложенный стек (степпер, сетка) на той же полосе.
-fn layout_left(layout: &ui_layout::Layout) -> f32 {
-    layout.area().x
-}
-
-fn layout_width(layout: &ui_layout::Layout) -> f32 {
-    layout.area().w
 }
 
 /// Раздел «Управление»: горячие клавиши из niri. Только чтение, листается

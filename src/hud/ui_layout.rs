@@ -94,7 +94,7 @@ impl Layout {
         self.area
     }
 
-    /// Нижний край последней полосы, без зазора перед следующей.
+    /// Нижний край последней полосы.
     pub fn end_y(&self) -> f32 {
         self.y
     }
@@ -129,6 +129,19 @@ impl Layout {
                 )
             })
             .collect()
+    }
+
+    /// Карточка: рамка, заголовок и содержимое. Высота считается сама из
+    /// высоты содержимого, поэтому добавление строки внутрь не требует
+    /// пересчёта чисел. `f` получает внутреннюю область и кладёт в неё строки.
+    pub fn card(&mut self, title: &str, content: f32, f: impl FnOnce(&mut Layout)) -> Rect {
+        let has_title = !title.is_empty();
+        let outer_height = super::settings_widgets::card_height(content, has_title);
+        let outer = self.row(outer_height);
+        let inner_area = super::settings_widgets::card_content_rect(outer, has_title);
+        let mut inner = Layout::new(inner_area, 0.0);
+        f(&mut inner);
+        outer
     }
 
     /// Полоса из колонок смешанной ширины: `Fill` делит остаток по весам,
@@ -326,6 +339,27 @@ mod tests {
         assert!((before - (area().bottom() - area().y)).abs() < 0.001);
         layout.row(SETTING_ROW_H);
         assert!((layout.remaining() - (before - SETTING_ROW_H - spacing::MD)).abs() < 0.001);
+    }
+
+    /// `card` считает высоту сам и отдаёт рамку; содержимое кладётся внутрь
+    /// по отступам и не выходит за них.
+    #[test]
+    fn card_counts_its_own_height() {
+        let area = Rect::new(0.0, 0.0, 600.0, 400.0);
+        let mut layout = Layout::new(area, spacing::MD);
+        let outer = layout.card("Заголовок", 2.0 * ROW_H + spacing::SM, |inner| {
+            inner.row(ROW_H);
+            inner.row(ROW_H);
+        });
+        assert_eq!(
+            outer.h,
+            super::super::settings_widgets::card_height(2.0 * ROW_H + spacing::SM, true),
+            "высота карточки не совпала с содержимым"
+        );
+        assert!(
+            outer.bottom() <= area.bottom(),
+            "карточка вылезла из области"
+        );
     }
 
     /// Пилот «Уведомлений» должен целиком помещаться в область контента.

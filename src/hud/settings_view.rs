@@ -12,9 +12,11 @@ use super::config;
 use super::config::Config;
 use super::palette;
 use super::settings;
+use super::settings_icons;
 use super::settings_ui::{
     self, Control, Focus, Module, Nav, NotificationPosition, Rect, Row, Section,
 };
+use super::settings_widgets::{self as widgets, ButtonKind, WidgetState};
 use super::text::{Align, SCALE, TextPainter};
 use super::ui_tokens::radii as Radius;
 use super::ui_tokens::{TypeScale, UiPalette, always, radius, type_scale, ui_palette};
@@ -51,7 +53,14 @@ pub fn wallpaper_dir_label(path: &str) -> String {
     }
 }
 
-fn fill_rect(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w: f32, h: f32, color: palette::Rgba) {
+pub fn fill_rect(
+    pixmap: &mut tiny_skia::Pixmap,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: palette::Rgba,
+) {
     let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) else {
         return;
     };
@@ -63,7 +72,7 @@ fn fill_rect(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w: f32, h: f32, col
     pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
 }
 
-fn fill_round_rect(
+pub fn fill_round_rect(
     pixmap: &mut tiny_skia::Pixmap,
     x: f32,
     y: f32,
@@ -100,7 +109,7 @@ fn fill_round_rect(
     }
 }
 
-fn stroke_rect(
+pub fn stroke_rect(
     pixmap: &mut tiny_skia::Pixmap,
     x: f32,
     y: f32,
@@ -330,7 +339,6 @@ pub trait DrawExt: View {
         }
     }
 
-    /// Кнопка языка: та же подсветка с галочкой, что у схем и темы.
     #[allow(clippy::too_many_arguments)]
     fn draw_language(
         &mut self,
@@ -409,7 +417,6 @@ pub trait DrawExt: View {
         }
     }
 
-    /// Действие меню без бинда: пометка «нет клавиши» вместо сочетания.
     fn draw_missing_bind(
         &mut self,
         pixmap: &mut tiny_skia::Pixmap,
@@ -1040,7 +1047,6 @@ pub trait DrawExt: View {
         );
     }
 
-    /// Строка высоты: дорожка, значение, подпись диапазона и кнопки шага стоят
     /// в одной полосе, поэтому всё лежит на одной линии.
     fn draw_height_scale(&mut self, pixmap: &mut tiny_skia::Pixmap, p: UiPalette, s: TypeScale) {
         let k = SCALE;
@@ -1214,17 +1220,21 @@ pub trait DrawExt: View {
                 }
                 Row::Theme { pixel, rect } => self.draw_theme_card(pixmap, p, pixel, rect, s),
                 Row::Toggle { module, rect } => {
-                    let on = self.config().module_enabled(module);
                     let control = Control::Toggle(module);
-                    self.draw_toggle(
-                        pixmap,
-                        p,
+                    let state = WidgetState::plain()
+                        .with(self.focused(control), self.hovered(control))
+                        .on(self.config().module_enabled(module));
+                    let painter = self.painter();
+                    widgets::toggle(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
                         rect,
-                        module.label(),
-                        on,
-                        self.hovered(control),
-                        self.focused(control),
-                        s,
+                        state,
                     );
                 }
                 Row::ZoneLabel {
@@ -1254,43 +1264,108 @@ pub trait DrawExt: View {
                     module, dir, rect, ..
                 } => {
                     let control = Control::Move(module, dir);
-                    self.draw_step(
-                        pixmap,
-                        p,
+                    let state =
+                        WidgetState::plain().with(self.focused(control), self.hovered(control));
+                    let painter = self.painter();
+                    widgets::icon_button(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
                         rect,
-                        if dir < 0 { "▲" } else { "▼" },
-                        self.hovered(control),
-                        self.focused(control),
-                        s.caption,
+                        if dir < 0 {
+                            settings_icons::UP
+                        } else {
+                            settings_icons::DOWN
+                        },
+                        state,
                     );
                 }
-                Row::HeightLabel { .. } => self.draw_height_scale(pixmap, p, s),
+                Row::HeightLabel { .. } => {
+                    // Слайдер высоты: трек, подписи диапазона и значение с
+                    // единицей. Кнопки шага рисуются своими строками.
+                    let track = settings_ui::height_track_rect();
+                    let span = (settings_ui::HEIGHT_MAX - settings_ui::HEIGHT_MIN) as f32;
+                    let share = (self.config().height - settings_ui::HEIGHT_MIN) as f32 / span;
+                    let state = WidgetState::plain().with(
+                        self.focused(Control::HeightSlider),
+                        self.hovered(Control::HeightSlider),
+                    );
+                    let min = settings_ui::HEIGHT_MIN.to_string();
+                    let max = settings_ui::HEIGHT_MAX.to_string();
+                    let current = format!("{} px", self.config().height);
+                    let painter = self.painter();
+                    let mut ctx = widgets::Ctx {
+                        pixmap,
+                        painter,
+                        palette: p,
+                        scale: s,
+                        pixel,
+                    };
+                    widgets::slider(&mut ctx, track, share.clamp(0.0, 1.0), state);
+                    ctx.paint(
+                        &min,
+                        s.caption,
+                        p.muted,
+                        settings_ui::height_hint_min_rect(),
+                        Align::Start,
+                    );
+                    ctx.paint(
+                        &max,
+                        s.caption,
+                        p.muted,
+                        settings_ui::height_hint_max_rect(),
+                        Align::End,
+                    );
+                    ctx.paint(
+                        &current,
+                        s.value,
+                        p.text,
+                        settings_ui::height_value_rect(),
+                        Align::Center,
+                    );
+                }
+                Row::Card { title, rect } => {
+                    let painter = self.painter();
+                    widgets::card(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
+                        rect,
+                        Some(title),
+                    );
+                }
                 Row::NotificationFont {
                     dir,
                     rect,
                     label,
                     value,
                 } => {
-                    self.painter().paint(
-                        pixmap,
-                        "Размер шрифта",
-                        s.label,
-                        p.text,
-                        label,
-                        Align::Start,
-                    );
+                    let control = Control::NotificationFont(dir);
+                    let state =
+                        WidgetState::plain().with(self.focused(control), self.hovered(control));
                     let number = self.config().font_size.to_string();
-                    self.painter()
-                        .paint(pixmap, &number, s.value, p.text, value, Align::Center);
-                    self.draw_step(
-                        pixmap,
-                        p,
-                        rect,
-                        if dir < 0 { "−" } else { "+" },
-                        self.hovered(Control::NotificationFont(dir))
-                            || self.focused(Control::NotificationFont(dir)),
-                        self.focused(Control::NotificationFont(dir)),
-                        s.value,
+                    let row = Rect::new(label.x, rect.y, value.right() - label.x, rect.h);
+                    let painter = self.painter();
+                    widgets::stepper(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
+                        row,
+                        "Размер шрифта",
+                        &number,
+                        state,
                     );
                 }
                 Row::NotificationLineHeight {
@@ -1299,69 +1374,67 @@ pub trait DrawExt: View {
                     label,
                     value,
                 } => {
-                    self.painter().paint(
-                        pixmap,
-                        "Высота строки",
-                        s.label,
-                        p.text,
-                        label,
-                        Align::Start,
-                    );
+                    let control = Control::NotificationLineHeight(dir);
+                    let state =
+                        WidgetState::plain().with(self.focused(control), self.hovered(control));
                     let number = self.config().line_height.to_string();
-                    self.painter()
-                        .paint(pixmap, &number, s.value, p.text, value, Align::Center);
-                    self.draw_step(
-                        pixmap,
-                        p,
-                        rect,
-                        if dir < 0 { "−" } else { "+" },
-                        self.hovered(Control::NotificationLineHeight(dir))
-                            || self.focused(Control::NotificationLineHeight(dir)),
-                        self.focused(Control::NotificationLineHeight(dir)),
-                        s.value,
+                    let row = Rect::new(label.x, rect.y, value.right() - label.x, rect.h);
+                    let painter = self.painter();
+                    widgets::stepper(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
+                        row,
+                        "Высота строки",
+                        &number,
+                        state,
                     );
                 }
                 Row::NotificationPosition { position, rect } => {
-                    // Выбранный угол подсвечивается так же, как выбранная тема
-                    // в «Внешнем виде»: заливка, акцентная рамка и метка.
+                    // Выбранный угол помечается так же, как выбранная тема:
+                    // рамка фокуса, приглушённая заливка и галочка справа.
                     let control = Control::NotificationPosition(position);
-                    let selected = self.config().position == position;
-                    let active = selected || self.hovered(control) || self.focused(control);
-                    self.draw_button(
-                        pixmap,
-                        p,
+                    let state = WidgetState::plain()
+                        .with(self.focused(control), self.hovered(control))
+                        .selected(self.config().position == position);
+                    let painter = self.painter();
+                    widgets::choice_tile(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
                         rect,
                         notification_position_label(position),
-                        active,
-                        s.caption,
-                        pixel,
+                        state,
                     );
-                    if selected {
-                        let k = SCALE;
-                        let mark = Rect::new(rect.right() - 26.0, rect.y, 20.0, rect.h);
-                        self.painter()
-                            .paint(pixmap, "✓", s.label, p.accent, mark, Align::Center);
-                        stroke_rect(
-                            pixmap,
-                            rect.x * k,
-                            rect.y * k,
-                            rect.w * k,
-                            rect.h * k,
-                            p.accent,
-                            2.0 * k,
-                        );
-                    }
                 }
                 Row::Height { dir, rect } => {
                     let control = Control::Height(dir);
-                    self.draw_step(
-                        pixmap,
-                        p,
+                    let state =
+                        WidgetState::plain().with(self.focused(control), self.hovered(control));
+                    let painter = self.painter();
+                    widgets::icon_button(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
                         rect,
-                        if dir < 0 { "−" } else { "+" },
-                        self.hovered(control),
-                        self.focused(control),
-                        s.value,
+                        if dir < 0 {
+                            settings_icons::MINUS
+                        } else {
+                            settings_icons::PLUS
+                        },
+                        state,
                     );
                 }
                 Row::Status { y } => {
@@ -1385,7 +1458,25 @@ pub trait DrawExt: View {
                     language,
                     rect,
                     selected,
-                } => self.draw_language(pixmap, p, language, rect, selected, s, pixel),
+                } => {
+                    let control = Control::Language(language);
+                    let state = WidgetState::plain()
+                        .with(self.focused(control), self.hovered(control))
+                        .selected(selected);
+                    let painter = self.painter();
+                    widgets::choice_tile(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
+                        rect,
+                        language.short(),
+                        state,
+                    );
+                }
                 Row::Summary {
                     label,
                     value,
@@ -1419,7 +1510,25 @@ pub trait DrawExt: View {
                     index,
                     rect,
                     selected,
-                } => self.draw_scheme(pixmap, p, rect, name, index, selected, s, pixel),
+                } => {
+                    let control = Control::Scheme(index);
+                    let state = WidgetState::plain()
+                        .with(self.focused(control), self.hovered(control))
+                        .selected(selected);
+                    let painter = self.painter();
+                    widgets::choice_tile(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
+                        rect,
+                        name,
+                        state,
+                    );
+                }
                 Row::WallpaperApply { rect, enabled } => {
                     let control = Control::WallpaperApply;
                     let label = if enabled {
@@ -1427,19 +1536,40 @@ pub trait DrawExt: View {
                     } else {
                         "Сначала выберите файл"
                     };
-                    let active =
-                        enabled && (self.hovered(control) || self.focused(control) || self.busy());
-                    self.draw_button_disabled(pixmap, p, rect, label, active, s.label, pixel);
+                    let state = WidgetState::plain()
+                        .with(self.focused(control), self.hovered(control))
+                        .disabled(!enabled);
+                    let painter = self.painter();
+                    widgets::button(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
+                        rect,
+                        label,
+                        ButtonKind::Primary,
+                        state,
+                    );
                 }
                 Row::Close { rect } => {
-                    self.draw_button(
-                        pixmap,
-                        p,
+                    let state = WidgetState::plain()
+                        .with(self.focused(Control::Close), self.hovered(Control::Close));
+                    let painter = self.painter();
+                    widgets::button(
+                        &mut widgets::Ctx {
+                            pixmap,
+                            painter,
+                            palette: p,
+                            scale: s,
+                            pixel,
+                        },
                         rect,
                         "Закрыть",
-                        self.hovered(Control::Close) || self.focused(Control::Close),
-                        s.caption,
-                        pixel,
+                        ButtonKind::Primary,
+                        state,
                     );
                 }
             }
