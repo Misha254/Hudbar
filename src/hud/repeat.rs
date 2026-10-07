@@ -13,10 +13,17 @@ use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, RepeatInfo};
 
-/// Стандартные значения на случай, если композитор ещё не прислал
-/// `repeat_info`. Нулями быть не должны: иначе первое же удержание до
-/// поступления `repeat_info` пронесло бы курсор через весь список.
-const DEFAULT_RATE: u32 = 25;
+/// Потолок частоты повтора в списках.
+///
+/// Композитор присылает rate, настроенный для набора текста, где 25 Гц
+/// привычны. В списке это слишком быстро: строка проносится мимо, и выбрать
+/// нужную не получается. Поэтому частота ограничена сверху, а `delay`
+/// остаётся композиторский — пауза перед стартом помогает попасть в начало.
+const MAX_RATE: u32 = 12;
+
+/// Задержка до первого повтора, если композитор ещё не прислал `repeat_info`.
+/// Нулём быть не должна: иначе первое же удержание пронесло бы курсор через
+/// весь список.
 const DEFAULT_DELAY_MS: u32 = 400;
 
 #[derive(Debug)]
@@ -30,7 +37,9 @@ pub struct Repeat {
 impl Default for Repeat {
     fn default() -> Self {
         Self {
-            interval: Duration::from_millis(u64::from(1000 / DEFAULT_RATE)),
+            // Тот же потолок, что и в `set_info`: иначе до первого
+            // `repeat_info` список листался бы вдвое быстрее, чем потом.
+            interval: Duration::from_millis(u64::from(1000 / MAX_RATE)),
             delay: Duration::from_millis(u64::from(DEFAULT_DELAY_MS)),
             held: None,
             next: None,
@@ -48,8 +57,8 @@ impl Repeat {
                 self.next = None;
             }
             RepeatInfo::Repeat { rate, delay } => {
-                let millis = 1000 / rate.get().clamp(1, 100);
-                self.interval = Duration::from_millis(u64::from(millis.max(8)));
+                let millis = 1000 / rate.get().clamp(1, MAX_RATE);
+                self.interval = Duration::from_millis(u64::from(millis));
                 self.delay = Duration::from_millis(u64::from(delay));
             }
         }
@@ -168,7 +177,23 @@ mod tests {
     }
 
     #[test]
-    fn absurd_rate_is_clamped_so_the_menu_stays_readable() {
+    fn fast_rate_is_capped_so_rows_stay_readable() {
+        // Композитор обычно присылает rate около 25: для набора текста
+        // нормально, для списка строка проносится мимо. Режем до MAX_RATE.
+        // Проверяем сам интервал, а не остаток до следующего тика: замер
+        // времени копит микросекунды и сравнение в миллисекундах дрожит.
+        let mut repeat = Repeat::default();
+        repeat.set_info(repeat_info(25, 0));
+        assert_eq!(
+            repeat.interval,
+            Duration::from_millis(u64::from(1000 / MAX_RATE)),
+            "частота выше потолка должна быть срезана"
+        );
+        assert_eq!(repeat.interval, Duration::from_millis(83));
+    }
+
+    #[test]
+    fn absurd_rate_does_not_collapse_the_interval() {
         let mut repeat = Repeat::default();
         repeat.set_info(repeat_info(100_000, 0));
         repeat.press(&key(30));
@@ -180,6 +205,15 @@ mod tests {
             hint >= Duration::from_millis(8),
             "интервал не должен схлопнуться в ноль: {hint:?}"
         );
+    }
+
+    #[test]
+    fn slow_rate_is_left_alone() {
+        // Потолок только сверху: если rate меньше, это выбор пользователя,
+        // и ускорять его нельзя.
+        let mut repeat = Repeat::default();
+        repeat.set_info(repeat_info(4, 0));
+        assert_eq!(repeat.interval, Duration::from_millis(250));
     }
 
     #[test]
@@ -209,7 +243,9 @@ mod tests {
         );
         assert_eq!(
             repeat.interval,
-            Duration::from_millis(u64::from(1000 / DEFAULT_RATE))
+            Duration::from_millis(u64::from(1000 / MAX_RATE)),
+            "дефолт обязан совпадать с потолком, иначе список до первого \
+             repeat_info листался бы быстрее, чем после"
         );
         assert_eq!(
             repeat.delay,
