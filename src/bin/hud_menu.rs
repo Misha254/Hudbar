@@ -1065,7 +1065,12 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
         // фоновые задачи (providers/команды), тик короче — результат worker-а
         // подхватывается быстро, без ожидания ввода.
         if let Some(guard) = event_queue.prepare_read() {
-            let wait = if app.jobs.is_empty() { 100u16 } else { 16u16 };
+            // В простое тик длинный: от его частоты не зависит ничего — ни
+            // повтор клавиш (его шлёт композитор событием на сокете), ни
+            // курсор (в карточке его нет), ни таймеры (их в окне нет вовсе).
+            // Пока есть фоновые задачи, тик короткий: результат worker-а
+            // подхватывается без ожидания ввода.
+            let wait = if app.jobs.is_empty() { 250u16 } else { 16u16 };
             let mut fds = [PollFd::new(conn.as_fd(), PollFlags::POLLIN)];
             let _ = poll(&mut fds, wait);
             let readable = fds[0]
