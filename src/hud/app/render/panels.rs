@@ -10,7 +10,7 @@ fn level_label(level: u8, muted: bool) -> String {
 
 impl App {
     pub fn control_rows(&self) -> Vec<(String, String, bool)> {
-        let sys = self.shared.sys.lock().unwrap().clone();
+        let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
         vec![
             (
                 "Wi-Fi".to_string(),
@@ -45,7 +45,7 @@ impl App {
         match self.panel.as_ref().map(|p| p.kind) {
             Some(PanelKind::Control) => self.control_rows(),
             _ => {
-                let sys = self.shared.sys.lock().unwrap().clone();
+                let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
                 self.panel_rows_for_system(sys)
             }
         }
@@ -137,7 +137,7 @@ impl App {
     }
 
     pub fn av_devices(&self) -> Vec<(String, String, bool, String)> {
-        let sys = self.shared.sys.lock().unwrap().clone();
+        let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
         let is_mic = self
             .panel
             .as_ref()
@@ -552,7 +552,7 @@ impl App {
         let w = pixmap.width() as f32;
         let is_mic = panel.kind == PanelKind::Mic;
         let (title, pct, muted) = {
-            let sys = self.shared.sys.lock().unwrap();
+            let sys = crate::hud::lock::mutex(&self.shared.sys);
             if is_mic {
                 ("Микрофон", sys.mic, sys.mic_muted)
             } else {
@@ -693,7 +693,7 @@ impl App {
         let k = SCALE;
         let w = pixmap.width() as f32;
         let pad = PANEL_PAD * k;
-        let sys = self.shared.sys.lock().unwrap().clone();
+        let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
 
         let Some(wx) = &sys.weather_data else {
             let msg = if sys.weather_loading {

@@ -159,7 +159,7 @@ impl App {
             Hit::TrayItem(i) => i,
             _ => return None,
         };
-        let sys = self.shared.sys.lock().unwrap().clone();
+        let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
         let items: Vec<tray::TrayItem> = sys.tray.iter().filter(|t| t.visible()).cloned().collect();
         let item = items.get(idx)?;
         let name = item.display_name();

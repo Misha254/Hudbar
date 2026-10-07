@@ -48,13 +48,13 @@ impl App {
             Some(Hit::VolChip) => self.toggle_panel(PanelKind::Volume, qh),
             Some(Hit::MicChip) => self.toggle_panel(PanelKind::Mic, qh),
             Some(Hit::Workspace(i)) => {
-                let sys = self.shared.sys.lock().unwrap().clone();
+                let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
                 if let Some(w) = sys.workspaces.get(i) {
                     crate::hud::actions::focus_workspace(&w.idx.to_string());
                 }
             }
             Some(Hit::TrayItem(i)) => {
-                let sys = self.shared.sys.lock().unwrap().clone();
+                let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
                 let items: Vec<tray::TrayItem> =
                     sys.tray.iter().filter(|t| t.visible()).cloned().collect();
                 if let Some(item) = items.get(i) {
@@ -114,7 +114,7 @@ impl App {
             .map(|(h, _)| *h);
         match hit {
             Some(Hit::TrayItem(i)) => {
-                let sys = self.shared.sys.lock().unwrap().clone();
+                let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
                 let items: Vec<tray::TrayItem> =
                     sys.tray.iter().filter(|t| t.visible()).cloned().collect();
                 if let Some(item) = items.get(i) {
@@ -131,7 +131,7 @@ impl App {
     }
 
     pub fn radio_state(&self, kind: PanelKind) -> bool {
-        let sys = self.shared.sys.lock().unwrap();
+        let sys = crate::hud::lock::mutex(&self.shared.sys);
         match kind {
             PanelKind::Wifi => sys.wifi_enabled,
             PanelKind::Bt => sys.bt_on,
@@ -253,7 +253,7 @@ impl App {
         if is_hint(label) {
             return;
         }
-        let sys = self.shared.sys.lock().unwrap().clone();
+        let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
         match kind {
             PanelKind::Control => {
                 let rows = self.control_rows();

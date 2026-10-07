@@ -150,7 +150,7 @@ fn run(shared: Arc<Shared>) {
                 if let (Some(name), Some(new)) = (name, new) {
                     if new.is_empty() {
                         let removed = {
-                            let mut st = st.lock().unwrap();
+                            let mut st = crate::hud::lock::mutex(&st);
                             let before = st.len();
                             st.retain(|(s, _), _| s != &name);
                             st.len() != before
@@ -185,14 +185,14 @@ fn run(shared: Arc<Shared>) {
 
     loop {
         let jobs: Vec<(String, String, u8)> = {
-            let mut p = pending.lock().unwrap();
+            let mut p = crate::hud::lock::mutex(&pending);
             std::mem::take(&mut *p)
         };
         for (bus, path, retries) in jobs {
             if !fetch_item(&conn, &state, &shared, &bus, &path, Duration::from_secs(2))
                 && retries < 6
             {
-                pending.lock().unwrap().push((bus, path, retries + 1));
+                crate::hud::lock::mutex(&pending).push((bus, path, retries + 1));
             }
         }
         if conn.process(Duration::from_millis(500)).is_err() {
@@ -210,7 +210,7 @@ fn split_service(service: &str) -> (String, String) {
 
 fn publish(state: &Arc<Mutex<State>>, shared: &Arc<Shared>) {
     let items: Vec<TrayItem> = {
-        let st = state.lock().unwrap();
+        let st = crate::hud::lock::mutex(state);
         let mut v: Vec<TrayItem> = st
             .iter()
             .map(|((service, path), s)| TrayItem {
@@ -228,7 +228,7 @@ fn publish(state: &Arc<Mutex<State>>, shared: &Arc<Shared>) {
         v.sort_by(|a, b| a.title.cmp(&b.title));
         v
     };
-    let mut g = shared.sys.lock().unwrap();
+    let mut g = crate::hud::lock::mutex(&shared.sys);
     if g.tray != items {
         g.tray = items;
         drop(g);
@@ -332,7 +332,7 @@ fn store_props(
         .or_else(|| icon_from_name(&get_str("IconThemePath"), &icon_name));
 
     {
-        let mut st = state.lock().unwrap();
+        let mut st = crate::hud::lock::mutex(state);
         st.insert(
             (service.to_string(), path.to_string()),
             ItemState {
@@ -441,7 +441,7 @@ fn probe_name(conn: &Connection, state: &Arc<Mutex<State>>, shared: &Arc<Shared>
         return;
     }
     {
-        let st = state.lock().unwrap();
+        let st = crate::hud::lock::mutex(state);
         if st.keys().any(|(s, _)| s == name) {
             return;
         }
@@ -476,7 +476,7 @@ fn handle_props(msg: &Message, conn: &Connection, state: &Arc<Mutex<State>>) {
             send_error(msg, conn, "UnknownInterface");
             return;
         }
-        let st = state.lock().unwrap();
+        let st = crate::hud::lock::mutex(state);
         let mut items: Vec<String> = st.keys().map(|(s, p)| format!("{s}{p}")).collect();
         items.sort();
         let mut map = PropMap::new();
@@ -496,7 +496,7 @@ fn handle_props(msg: &Message, conn: &Connection, state: &Arc<Mutex<State>>) {
             send_error(msg, conn, "UnknownInterface");
             return;
         }
-        let st = state.lock().unwrap();
+        let st = crate::hud::lock::mutex(state);
         let v: Option<Variant<Box<dyn RefArg>>> = match prop.as_deref() {
             Some("RegisteredStatusNotifierItems") => {
                 let mut items: Vec<String> = st.keys().map(|(s, p)| format!("{s}{p}")).collect();
@@ -546,7 +546,7 @@ fn handle_call(
                     split_service(&service)
                 };
                 if !bus.is_empty() {
-                    pending.lock().unwrap().push((bus, path, 0));
+                    crate::hud::lock::mutex(pending).push((bus, path, 0));
                 }
                 emit(conn, "StatusNotifierItemRegistered", &service);
             }
@@ -557,7 +557,7 @@ fn handle_call(
             if let Some(service) = service {
                 let (bus, path) = split_service(&service);
                 let removed = {
-                    let mut st = state.lock().unwrap();
+                    let mut st = crate::hud::lock::mutex(state);
                     st.remove(&(bus, path)).is_some()
                 };
                 if removed {

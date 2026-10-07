@@ -34,7 +34,7 @@ impl App {
     /// Сверяет состояние звука с прошлым кадром и создаёт или убирает окно.
     pub fn sync_osd(&mut self, qh: &QueueHandle<Self>) {
         let stamp = {
-            let g = self.shared.sys.lock().unwrap();
+            let g = crate::hud::lock::mutex(&self.shared.sys);
             AudioStamp {
                 vol: g.vol,
                 vol_muted: g.vol_muted,
