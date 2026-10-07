@@ -64,7 +64,11 @@ fn parse(content: &str) -> Palette {
             continue;
         };
         let hex = hex.trim_end_matches(';').trim_start_matches('#');
-        if hex.len() != 6 {
+        // Длина считается в байтах, а срез ниже — тоже по байтам. Строка из
+        // трёх двухбайтовых букв («ёёё») даёт 6 байт и прошла бы проверку
+        // длины, после чего `hex[0..2]` разрезал бы UTF-8 между символами.
+        // Поэтому ASCII проверяется явно, до среза.
+        if hex.len() != 6 || !hex.is_ascii() {
             continue;
         }
         let (Ok(r), Ok(g), Ok(b)) = (
@@ -99,6 +103,56 @@ mod tests {
         assert_eq!(palette.base, Rgba(1, 2, 3, 255));
         assert_eq!(palette.primary, Rgba(0xaa, 0xbb, 0xcc, 255));
         assert_eq!(palette.text, Palette::default().text);
+    }
+
+    /// Регрессия: не-ASCII в значении цвета не должно ронять разбор. Раньше
+    /// `hex.len()` считал байты, «ёёё» давало ровно 6 и проходило проверку,
+    /// после чего срез `hex[0..2]` разрезал UTF-8 между символами.
+    #[test]
+    fn multibyte_color_does_not_panic_and_is_ignored() {
+        let palette = parse("@define-color base ёёё;\n@define-color primary #aabbcc;\n");
+
+        assert_eq!(
+            palette.base,
+            Palette::default().base,
+            "не-ASCII значение должно быть проигнорировано, а не разобрано"
+        );
+        assert_eq!(
+            palette.primary,
+            Rgba(0xaa, 0xbb, 0xcc, 255),
+            "следующая строка разбирается как обычно"
+        );
+    }
+
+    /// Четыре двухбайтовые буквы — восемь байт, длину проходит только при
+    /// обрезании; проверка ASCII всё равно обязана отбросить значение.
+    #[test]
+    fn multibyte_color_of_other_length_is_ignored() {
+        let palette = parse("@define-color text ёёёё;\n");
+
+        assert_eq!(palette.text, Palette::default().text);
+    }
+
+    /// Настоящий триггер паники: «€» занимает три байта, поэтому в строке
+    /// «€abc» ровно 6 байт, длина проходит, а `hex[0..2]` разрезает UTF-8
+    /// между байтами символа. Двухбайтовые буквы («ёёё») такой границы не
+    /// дают и были безопасны всегда — этот тест остаётся как страховка.
+    #[test]
+    fn three_byte_char_does_not_panic_and_is_ignored() {
+        let palette = parse("@define-color base €abc;\n@define-color primary #aabbcc;\n");
+
+        assert_eq!(palette.base, Palette::default().base);
+        assert_eq!(palette.primary, Rgba(0xaa, 0xbb, 0xcc, 255));
+    }
+
+    /// Смешанный случай: кириллица вперемешку с латиницей, длина случайно
+    /// совпала с шестью байтами.
+    #[test]
+    fn mixed_multibyte_color_is_ignored() {
+        let palette = parse("@define-color text aёbcd;\n@define-color base ёa€bc;\n");
+
+        assert_eq!(palette.text, Palette::default().text);
+        assert_eq!(palette.base, Palette::default().base);
     }
 
     #[test]
