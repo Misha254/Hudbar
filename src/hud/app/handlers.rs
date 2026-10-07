@@ -315,7 +315,10 @@ impl KeyboardHandler for App {
 impl LayerShellHandler for App {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
         if layer.wl_surface() == self.layer.wl_surface() {
-            self.exit = true;
+            // Композитор закрыл surface панели. Обычно это отключение вывода
+            // (крышка ноутбука), а не конец сессии: пересоздаём панель, иначе
+            // после возврата выхода верхняя панель не вернётся никогда.
+            self.recreate_panel = true;
         } else if self
             .popup
             .as_ref()

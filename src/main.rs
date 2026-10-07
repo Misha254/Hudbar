@@ -12,14 +12,36 @@ use smithay_client_toolkit::{
     seat::{SeatState, keyboard::Modifiers},
     shell::{
         WaylandSurface,
-        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell},
+        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface},
     },
     shm::{Shm, slot::SlotPool},
 };
-use wayland_client::{Connection, globals::registry_queue_init};
+use wayland_client::{Connection, QueueHandle, globals::registry_queue_init};
 
 use hud::App;
 use hud::ui::*;
+
+/// Создаёт layer-surface панели.
+///
+/// Вынесено отдельно, потому что surface приходится пересоздавать: niri
+/// закрывает его вместе с выходом, когда гасит внутреннюю панель по крышке.
+fn create_panel(
+    compositor: &CompositorState,
+    layer_shell: &LayerShell,
+    qh: &QueueHandle<App>,
+    height: u32,
+) -> LayerSurface {
+    let surface = compositor.create_surface(qh);
+    let layer = layer_shell.create_layer_surface(qh, surface, Layer::Top, Some("hudbar"), None);
+    let reserve = height as i32 + 2;
+    layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
+    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+    layer.set_size(0, height);
+    layer.set_exclusive_zone(reserve);
+    layer.set_margin(1, 0, 1, 0);
+    layer.commit();
+    layer
+}
 
 fn main() {
     let hud_settings = hud::settings::load();
@@ -29,18 +51,10 @@ fn main() {
     let qh = event_queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor");
-    let layer_shell = LayerShell::bind(&globals, &qh).expect("wlr-layer-shell");
+    let layer_shell = LayerShell::bind(&globals, &qh).expect("wlr_layer_shell");
     let shm = Shm::bind(&globals, &qh).expect("wl_shm");
 
-    let surface = compositor.create_surface(&qh);
-    let layer = layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("hudbar"), None);
-    let reserve = hud_settings.height as i32 + 2;
-    layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    layer.set_size(0, hud_settings.height);
-    layer.set_exclusive_zone(reserve);
-    layer.set_margin(1, 0, 1, 0);
-    layer.commit();
+    let layer = create_panel(&compositor, &layer_shell, &qh, hud_settings.height);
 
     let pool = SlotPool::new(12_000_000, &shm).expect("shm pool");
     let (wake_rx, wake_tx) = hud::data::wake_pipe();
@@ -62,6 +76,7 @@ fn main() {
         layer,
         configured: false,
         first_draw: false,
+        recreate_panel: false,
         width: 0,
         height: hud_settings.height,
         exit: false,
@@ -212,7 +227,22 @@ fn main() {
             }
         }
 
-        let _ = event_queue.dispatch_pending(&mut app);
+        // Потеря соединения с композитором — единственный настоящий повод
+        // завершиться. Раньше этим поводом считалось и закрытие surface
+        // панели, из-за чего процесс уходил при гашении экрана по крышке.
+        if event_queue.dispatch_pending(&mut app).is_err() {
+            app.exit = true;
+        }
+
+        // Панель пересоздаётся после возврата выхода: пока выхода нет,
+        // `configure` не придёт, и отрисовка просто не начнётся.
+        if app.recreate_panel {
+            app.layer = create_panel(&app.compositor, &app.layer_shell, &qh, app.settings.height);
+            app.recreate_panel = false;
+            app.configured = false;
+            app.first_draw = true;
+            app.width = 0;
+        }
 
         let dirty = app.shared.dirty.swap(false, Ordering::Relaxed);
         if dirty || app.first_draw {

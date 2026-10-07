@@ -285,11 +285,21 @@ fn read_trim(path: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
-/// Включён ли кофе-мод: скрипт `coffee-toggle.sh` судит по наличию
-/// `sleep.sh` и `swayidle`. Читаем тем же способом, иначе меню показывало бы
-/// состояние, обратное тому, что на самом деле.
+/// Включён ли кофе-мод: `coffee-toggle.sh` хранит состояние в `hud-coffee`
+/// в runtime-каталоге пользователя. Меню читает тот же файл, чтобы значение не
+/// зависело от живого списка процессов.
 pub fn coffee_on() -> bool {
-    pgrep_found("[s]leep.sh")
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(format!("/run/user/{}", nix::unistd::getuid().as_raw()))
+        });
+    coffee_state_present(&dir.join("hud-coffee"))
+}
+
+fn coffee_state_present(path: &std::path::Path) -> bool {
+    path.is_file()
 }
 
 /// Идёт ли запись экрана: `record.sh` работает, пока жив `wf-recorder`.
@@ -424,6 +434,26 @@ mod tests {
                 .expect("cat есть");
         assert_eq!(code, Some(0));
         assert_eq!(stdout, "quiet secret");
+    }
+
+    #[test]
+    fn coffee_state_uses_runtime_file() {
+        let root = std::env::temp_dir().join(format!(
+            "hud-coffee-test-{}-{}",
+            std::process::id(),
+            "present"
+        ));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("hud-coffee");
+
+        assert!(!coffee_state_present(&file));
+        std::fs::write(&file, []).unwrap();
+        assert!(coffee_state_present(&file));
+        let missing_parent = root.join("absent").join("hud-coffee");
+        assert!(!coffee_state_present(&missing_parent));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
