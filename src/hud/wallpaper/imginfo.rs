@@ -53,6 +53,18 @@ fn parse_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
             break;
         }
         let marker = bytes[index + 1];
+        // Заполняющий байт перед маркером: не маркер, длины за ним нет.
+        if marker == 0xFF {
+            index += 1;
+            continue;
+        }
+        // Маркеры без поля длины: у них за 0xFF сразу идёт следующий байт.
+        // Читать для них «длину» нельзя — это уже данные другого сегмента,
+        // из-за чего разбор уходил в сторону или обрывался.
+        if marker == 0x01 || marker == 0xD8 || (0xD0..=0xD7).contains(&marker) {
+            index += 2;
+            continue;
+        }
         if marker == 0xC0 || marker == 0xC1 || marker == 0xC2 {
             // SOFn: fp 1 байт, height 2 байта, width 2 байта.
             let height = u16::from_be_bytes([bytes[index + 5], bytes[index + 6]]);
@@ -180,6 +192,45 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         assert_eq!(dimensions(&path), Some((1920, 1080)));
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Регрессия: маркеры без поля длины (RSTn, TEM, SOI) и заполняющие
+    /// байты 0xFF раньше читались как сегменты с длиной, из-за чего разбор
+    /// уходил в данные следующего сегмента и возвращал None вместо SOFn.
+    #[test]
+    fn jpeg_survives_markers_without_a_length_field() {
+        let mut bytes = vec![0xFF, 0xD8]; // SOI — длины нет
+        bytes.extend_from_slice(&[0xFF, 0xFF]); // заполняющий байт
+        bytes.extend_from_slice(&[0xFF, 0xD0]); // RST0 — длины нет
+        bytes.extend_from_slice(&[0xFF, 0x01]); // TEM — длины нет
+        bytes.extend_from_slice(&[0xFF, 0xD7]); // RST7 — длины нет
+        bytes.extend_from_slice(&[0xFF, 0xE0]); // APP0, у него длина есть
+        bytes.extend_from_slice(&17u16.to_be_bytes());
+        bytes.extend_from_slice(b"JFIF\0\0\x01\x01\x00\x00\x01\x00\x01\x00\x00");
+        bytes.extend_from_slice(&[0xFF, 0xC0]);
+        bytes.extend_from_slice(&17u16.to_be_bytes());
+        bytes.push(8);
+        bytes.extend_from_slice(&1080u16.to_be_bytes());
+        bytes.extend_from_slice(&1920u16.to_be_bytes());
+
+        assert_eq!(parse_jpeg(&bytes), Some((1920, 1080)));
+    }
+
+    /// Тот же случай, но маркеров без длины в файле нет — обычный путь не
+    /// должен пострадать.
+    #[test]
+    fn jpeg_with_only_length_bearing_markers_is_unaffected() {
+        let mut bytes = vec![0xFF, 0xD8];
+        bytes.extend_from_slice(&[0xFF, 0xE1]);
+        // Длина 2 — это только два байта самого поля длины, полезной части нет.
+        bytes.extend_from_slice(&2u16.to_be_bytes());
+        bytes.extend_from_slice(&[0xFF, 0xC0]);
+        bytes.extend_from_slice(&17u16.to_be_bytes());
+        bytes.push(8);
+        bytes.extend_from_slice(&720u16.to_be_bytes());
+        bytes.extend_from_slice(&1280u16.to_be_bytes());
+
+        assert_eq!(parse_jpeg(&bytes), Some((1280, 720)));
     }
 
     #[test]
