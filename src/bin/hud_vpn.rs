@@ -47,7 +47,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Modifiers, RawModifiers},
+        keyboard::{KeyEvent, KeyboardHandler, Modifiers, RawModifiers, RepeatInfo},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
@@ -96,6 +96,8 @@ mod menu;
 #[allow(dead_code)]
 #[path = "../hud/palette.rs"]
 mod palette;
+#[path = "../hud/repeat.rs"]
+mod repeat;
 #[allow(dead_code)]
 #[path = "../hud/settings.rs"]
 mod settings;
@@ -132,6 +134,7 @@ use menu::state::Menu;
 use menu::state::{Frame, Outcome};
 use menu::system::{CommandRunner, ProviderKey, spawn_fetch};
 use menu::view::{self, MenuView};
+use repeat::Repeat;
 use settings_ui::Rect;
 use text::{SCALE, TextPainter};
 
@@ -168,6 +171,8 @@ struct MenuApp {
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     mods: Modifiers,
+    /// Автоповтор удержанной стрелки: композитор повторов не шлёт.
+    repeat: Repeat,
     painter: TextPainter,
     icons: TextPainter,
     menu: Menu,
@@ -515,6 +520,7 @@ impl KeyboardHandler for MenuApp {
         _: u32,
         event: KeyEvent,
     ) {
+        self.repeat.press(&event);
         self.handle_key(event);
     }
 
@@ -524,12 +530,14 @@ impl KeyboardHandler for MenuApp {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.repeat.release(&event);
     }
 
-    /// Удержание стрелки работает так же, как её нажатие: композитор шлёт
-    /// повторы сам, а свой таймер в меню не нужен — список короткий.
+    /// Композитор повторов не шлёт: он один раз сообщает rate и delay через
+    /// `repeat_info`, а повтор выдаёт клиент. Поэтому удержание стрелки
+    /// крутит `Repeat::poll()` в цикле ниже.
     fn repeat_key(
         &mut self,
         _: &Connection,
@@ -539,6 +547,17 @@ impl KeyboardHandler for MenuApp {
         event: KeyEvent,
     ) {
         self.handle_key(event);
+    }
+
+    /// Композитор сообщил rate и delay удержания: без них стрелка не едет.
+    fn update_repeat_info(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        info: RepeatInfo,
+    ) {
+        self.repeat.set_info(info);
     }
 
     fn update_modifiers(
@@ -880,6 +899,7 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
         pointer: None,
         keyboard: None,
         mods: Modifiers::default(),
+        repeat: Repeat::default(),
         painter: TextPainter::new(&view::font_name(pixel)),
         icons: TextPainter::new(settings_icons::FONT),
         menu,
@@ -1006,6 +1026,14 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
             app.ctx.dirty = false;
             app.draw();
         }
+        // Повтор удержанной стрелки: композитор его не шлёт, крутим сами.
+        while let Some(event) = app.repeat.poll() {
+            app.handle_key(event);
+            if app.ctx.configured {
+                app.ctx.dirty = false;
+                app.draw();
+            }
+        }
         if app.exit.load(Ordering::Relaxed) || SIGNAL_EXIT.load(Ordering::Relaxed) {
             break;
         }
@@ -1014,7 +1042,14 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
         // фоновые задачи (providers/команды), тик короче — результат worker-а
         // подхватывается быстро, без ожидания ввода.
         if let Some(guard) = event_queue.prepare_read() {
-            let wait = if app.jobs.is_empty() { 100u16 } else { 16u16 };
+            let idle = if app.jobs.is_empty() { 100u16 } else { 16u16 };
+            // С удержанной стрелкой ждать дольше интервала повтора нельзя.
+            let wait = app
+                .repeat
+                .wait_hint()
+                .map(|left| left.as_millis().clamp(1, u16::MAX as u128) as u16)
+                .unwrap_or(idle)
+                .min(idle);
             let mut fds = [PollFd::new(conn.as_fd(), PollFlags::POLLIN)];
             let _ = poll(&mut fds, wait);
             let readable = fds[0]

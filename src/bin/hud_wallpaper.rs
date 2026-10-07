@@ -29,7 +29,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Modifiers, RawModifiers},
+        keyboard::{KeyEvent, KeyboardHandler, Modifiers, RawModifiers, RepeatInfo},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
@@ -62,6 +62,8 @@ mod log;
 #[allow(dead_code)]
 #[path = "../hud/palette.rs"]
 mod palette;
+#[path = "../hud/repeat.rs"]
+mod repeat;
 #[allow(dead_code)]
 #[path = "../hud/settings.rs"]
 mod settings;
@@ -90,6 +92,7 @@ mod ui_tokens;
 #[path = "../hud/wallpaper.rs"]
 mod wallpaper;
 
+use repeat::Repeat;
 use settings_ui::Rect;
 use text::{SCALE, TextPainter};
 use wallpaper::input::{WpInput, click as click_at, motion as motion_at};
@@ -125,6 +128,8 @@ struct WpApp {
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     mods: Modifiers,
+    /// Автоповтор удержанной стрелки: композитор повторов не шлёт.
+    repeat: Repeat,
     painter: TextPainter,
     icons: TextPainter,
     state: State,
@@ -339,6 +344,7 @@ impl KeyboardHandler for WpApp {
         _: u32,
         event: KeyEvent,
     ) {
+        self.repeat.press(&event);
         self.handle_key(event);
     }
 
@@ -348,8 +354,21 @@ impl KeyboardHandler for WpApp {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.repeat.release(&event);
+    }
+
+    /// Композитор сообщил rate и delay удержания. Повторы он не шлёт: их
+    /// выдаёт клиент, поэтому без этих чисел стрелка не едет.
+    fn update_repeat_info(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        info: RepeatInfo,
+    ) {
+        self.repeat.set_info(info);
     }
 
     fn repeat_key(
@@ -741,6 +760,7 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
         pointer: None,
         keyboard: None,
         mods: Modifiers::default(),
+        repeat: Repeat::default(),
         painter: TextPainter::new(&settings_view::font_name(pixel)),
         icons: TextPainter::new(settings_icons::FONT),
         state,
@@ -777,6 +797,14 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
             app.ctx.dirty = false;
             app.draw();
         }
+        // Повтор удержанной стрелки: композитор его не шлёт, крутим сами.
+        while let Some(event) = app.repeat.poll() {
+            app.handle_key(event);
+            if app.ctx.configured {
+                app.ctx.dirty = false;
+                app.draw();
+            }
+        }
         if app.exit.load(Ordering::Relaxed) || SIGNAL_EXIT.load(Ordering::Relaxed) {
             break;
         }
@@ -785,7 +813,14 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
         if let Some(guard) = event_queue.prepare_read() {
             let mut fds = [PollFd::new(conn.as_fd(), PollFlags::POLLIN)];
             // Не держать ввод и готовые миниатюры в очереди дольше кадра.
-            let _ = poll(&mut fds, 8u16);
+            // С удержанной стрелкой ждать дольше интервала повтора нельзя,
+            // иначе список пролистывался бы рывками.
+            let wait = app
+                .repeat
+                .wait_hint()
+                .map(|left| left.as_millis().clamp(1, 8) as u16)
+                .unwrap_or(8);
+            let _ = poll(&mut fds, wait);
             let readable = fds[0]
                 .revents()
                 .is_some_and(|events| events.intersects(PollFlags::POLLIN));

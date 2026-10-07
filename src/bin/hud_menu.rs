@@ -38,7 +38,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Modifiers, RawModifiers},
+        keyboard::{KeyEvent, KeyboardHandler, Modifiers, RawModifiers, RepeatInfo},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
@@ -87,6 +87,8 @@ mod menu;
 #[allow(dead_code)]
 #[path = "../hud/palette.rs"]
 mod palette;
+#[path = "../hud/repeat.rs"]
+mod repeat;
 #[allow(dead_code)]
 #[path = "../hud/settings.rs"]
 mod settings;
@@ -123,6 +125,7 @@ use menu::state::Menu;
 use menu::state::{Frame, Outcome};
 use menu::system::{CommandRunner, ProviderKey, spawn_fetch};
 use menu::view::{self, MenuView};
+use repeat::Repeat;
 use settings_ui::Rect;
 use text::{SCALE, TextPainter};
 
@@ -178,6 +181,8 @@ struct MenuApp {
     /// Остаток дробного скролла: тачпад присылает value120 меньше 120, и без
     /// накопления одно деление давало ноль строк.
     scroll_acc: f32,
+    /// Автоповтор удержанной стрелки: композитор повторов не шлёт.
+    repeat: Repeat,
     exit: Arc<AtomicBool>,
     /// Фоновые задачи: системные команды и дозапросы providers. UI-поток
     /// никогда не ждёт — готовый результат забирается `try_take` в тике.
@@ -533,6 +538,7 @@ impl KeyboardHandler for MenuApp {
         _: u32,
         event: KeyEvent,
     ) {
+        self.repeat.press(&event);
         self.handle_key(event);
     }
 
@@ -542,12 +548,15 @@ impl KeyboardHandler for MenuApp {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.repeat.release(&event);
     }
 
-    /// Удержание стрелки работает так же, как её нажатие: композитор шлёт
-    /// повторы сам, а свой таймер в меню не нужен — список короткий.
+    /// Удержание стрелки. Композитор повторов не шлёт: он один раз сообщает
+    /// rate и delay через `repeat_info`, а повторные нажатия клиент обязан
+    /// выдавать сам. Поэтому `repeat_key` сюда почти не приходит, а движение
+    /// при удержании порождает `Repeat::poll()` в цикле ниже.
     fn repeat_key(
         &mut self,
         _: &Connection,
@@ -557,6 +566,18 @@ impl KeyboardHandler for MenuApp {
         event: KeyEvent,
     ) {
         self.handle_key(event);
+    }
+
+    /// Композитор сообщил rate и delay удержания. Без этого меню знать не
+    /// чему, с какой частотой повторять стрелку.
+    fn update_repeat_info(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        info: RepeatInfo,
+    ) {
+        self.repeat.set_info(info);
     }
 
     fn update_modifiers(
@@ -937,6 +958,7 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
         palette: palette::load(),
         pixel,
         scroll_acc: 0.0,
+        repeat: Repeat::default(),
         direct,
         exit: Arc::new(AtomicBool::new(false)),
         jobs: Vec::new(),
@@ -1057,6 +1079,17 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
             app.ctx.dirty = false;
             app.draw();
         }
+        // Повтор удержанной стрелки: композитор его не шлёт, поэтому крутим сами.
+        // Пока клавиша нажата, циклу нельзя спать дольше интервала повтора.
+        let mut repeat_fired = false;
+        while let Some(event) = app.repeat.poll() {
+            app.handle_key(event);
+            repeat_fired = true;
+        }
+        if repeat_fired && app.ctx.configured {
+            app.ctx.dirty = false;
+            app.draw();
+        }
         if app.exit.load(Ordering::Relaxed) || SIGNAL_EXIT.load(Ordering::Relaxed) {
             break;
         }
@@ -1066,11 +1099,15 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
         // подхватывается быстро, без ожидания ввода.
         if let Some(guard) = event_queue.prepare_read() {
             // В простое тик длинный: от его частоты не зависит ничего — ни
-            // повтор клавиш (его шлёт композитор событием на сокете), ни
             // курсор (в карточке его нет), ни таймеры (их в окне нет вовсе).
             // Пока есть фоновые задачи, тик короткий: результат worker-а
-            // подхватывается без ожидания ввода.
-            let wait = if app.jobs.is_empty() { 250u16 } else { 16u16 };
+            // подхватывается без ожидания ввода. С удержанной стрелкой тик
+            // ещё короче — иначе повтор шёл бы рывками.
+            let idle = if app.jobs.is_empty() { 250u16 } else { 16u16 };
+            let wait = match app.repeat.wait_hint() {
+                Some(hint) => idle.min(hint.as_millis().clamp(1, u16::MAX as u128) as u16),
+                None => idle,
+            };
             let mut fds = [PollFd::new(conn.as_fd(), PollFlags::POLLIN)];
             let _ = poll(&mut fds, wait);
             let readable = fds[0]
