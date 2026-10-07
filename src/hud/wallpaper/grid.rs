@@ -49,6 +49,16 @@ impl Grid {
         self.len.div_ceil(self.cols.max(1))
     }
 
+    /// Выбранная ячейка в последнем ряду, где есть данные.
+    ///
+    /// ↓ отсюда уводит в зону схем под сеткой. Замыкать кольцо по вертикали
+    /// не нужно: ↑ с первого ряда и так уводит на последний, поэтому обход
+    /// сетки остаётся кругом.
+    pub fn in_last_row(&self) -> bool {
+        let rows = self.rows_in_data();
+        rows > 0 && self.sel / self.cols.max(1) == rows - 1
+    }
+
     /// Ставит выбор на первый элемент и возвращает окно в начало. Нужен после
     /// смены набора (папка, фильтр): индекс из прошлого списка может уйти за
     /// границы, и подсветка окажется не там.
@@ -246,6 +256,39 @@ mod tests {
         grid.sel = 0;
         grid.move_dir(Dir::Down);
         assert_eq!(grid.sel, 4);
+    }
+
+    /// Последний ряд — это тот, где последние данные, а не где кончилось окно.
+    #[test]
+    fn last_row_follows_the_data_and_ignores_a_partial_one() {
+        // 10 плиток при cols=4 — это три ряда: 0-3, 4-7 и неполный 8-9.
+        let mut grid = Grid::new(4, 3, 10);
+        grid.sel = 9;
+        assert!(
+            grid.in_last_row(),
+            "9 — неполный последний ряд, но он последний"
+        );
+        grid.sel = 8;
+        assert!(grid.in_last_row(), "8 — тот же последний ряд");
+        grid.sel = 7;
+        assert!(!grid.in_last_row(), "7 — средний ряд, не последний");
+        grid.sel = 3;
+        assert!(!grid.in_last_row(), "3 — первый ряд");
+
+        // 6 плиток при cols=4 — это два ряда: 0-3 и неполный 4-5.
+        grid.set_len(6);
+        grid.sel = 5;
+        assert!(grid.in_last_row(), "5 — неполный последний ряд");
+        grid.sel = 4;
+        assert!(grid.in_last_row());
+        grid.sel = 2;
+        assert!(!grid.in_last_row());
+    }
+
+    #[test]
+    fn last_row_on_an_empty_grid_is_never_taken() {
+        let grid = Grid::new(4, 3, 0);
+        assert!(!grid.in_last_row(), "пустой сетке нечего покидать");
     }
 
     /// PgUp/PgDn и Home/End держат границы и видимость.
