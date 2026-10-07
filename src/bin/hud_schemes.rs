@@ -47,6 +47,9 @@ mod config_io;
 #[path = "../hud/dunst.rs"]
 mod dunst;
 #[allow(dead_code)]
+#[path = "../hud/menu/instance.rs"]
+mod instance;
+#[allow(dead_code)]
 #[path = "../hud/layer.rs"]
 mod layer;
 #[allow(dead_code)]
@@ -98,6 +101,8 @@ use text::Align;
 use text::{SCALE, TextPainter};
 
 const NAMESPACE: &str = "hudschemes";
+/// Свой pid-файл: окно схем не должно закрывать окно обоев и наоборот.
+const PID_FILE: &str = "hudbar-schemes.pid";
 const WIDTH: u32 = CARD_W as u32;
 const HEIGHT: u32 = CARD_H as u32;
 
@@ -252,6 +257,10 @@ impl SchemesApp {
 
     /// Рисует кадр карточкой от нуля и отдаёт буфер слою.
     fn draw(&mut self) {
+        // Ждать именно configure, а не ненулевых размеров: `layer::open`
+        // заполняет width/height сразу, и буфер, прикреплённый до
+        // `ack_configure`, рвёт протокол — композитор убивает клиент, и окно
+        // не появляется вовсе.
         if !self.ctx.configured || !self.ctx.dirty {
             return;
         }
@@ -640,7 +649,36 @@ impl ProvidesRegistryState for SchemesApp {
 delegate_registry!(SchemesApp);
 smithay_client_toolkit::delegate_dispatch2!(SchemesApp);
 
+/// Один экземпляр. Слой не виден в `niri msg windows`, поэтому единственный
+/// способ узнать, открыто ли окно, — pid-файл.
+///
+/// Это не удобство: каждый слой забирает клавиатуру на себя
+/// (`KeyboardInteractivity::Exclusive` в `layer::open`), и второе окно схем
+/// оставило бы первое висеть поверх всех остальных, не давая ими пользоваться.
 fn main() -> Result<(), String> {
+    let pid_file = instance::pid_path_for(PID_FILE);
+    if let instance::Startup::CloseRunning(pid) =
+        instance::startup_for(PID_FILE, std::path::Path::new("/proc"))
+    {
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .map_err(|error| format!("не закрыть прошлый pid {pid}: {error}"))?;
+        return Ok(());
+    }
+    let pid = std::process::id() as i32;
+    if let Err(error) = instance::store(&pid_file, pid) {
+        return Err(format!("не записать pid-файл: {error}"));
+    }
+    let result = run();
+    // pid-файл снимается на любом выходе, включая падение: иначе следующий
+    // запуск увидит «живой» pid и не откроет окно.
+    instance::clear(&pid_file, pid);
+    result
+}
+
+fn run() -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|error| format!("нет Wayland: {error}"))?;
     let (globals, mut event_queue) =
         registry_queue_init(&conn).map_err(|error| format!("нет реестра: {error}"))?;
@@ -690,12 +728,20 @@ fn main() -> Result<(), String> {
     };
     app.draw();
 
+    // Порядок как у окна обоев: сначала досылаем накопленное, потом
+    // обрабатываем очередь, и только потом ждём сокет. Обработка configure
+    // внутри poll-ожидания не срабатывала — окно так и не получало размер.
     while !app.exit.load(Ordering::Relaxed) {
+        if event_queue.flush().is_err() {
+            break;
+        }
+        let _ = event_queue.dispatch_pending(&mut app);
+        app.draw();
         while let Some(event) = app.repeat.poll() {
             let action = app.handle_key(event);
             app.apply(action);
+            app.draw();
         }
-        app.draw();
         if app.exit.load(Ordering::Relaxed) {
             break;
         }
@@ -717,7 +763,6 @@ fn main() -> Result<(), String> {
                 let _ = guard.read();
             }
         }
-        let _ = event_queue.dispatch_pending(&mut app);
     }
     Ok(())
 }
