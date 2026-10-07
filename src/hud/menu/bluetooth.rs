@@ -5,8 +5,7 @@
 //! доверять/не доверять, удалить. Сопряжённые и найденные — два отдельных
 //! списка.
 //!
-//! Четыре вызова на одном обновлении + по одному `info` на каждое
-//! сопряжённое и подключённое устройство:
+//! Четыре вызова на одном обновлении — и ни одного `info <MAC>`:
 //!
 //! | команда | что берём |
 //! |---|---|
@@ -14,19 +13,19 @@
 //! | `bluetoothctl devices Paired` | список сопряжённых |
 //! | `bluetoothctl devices Connected` | список подключённых |
 //! | `bluetoothctl devices` | все известные устройства (то, что BlueZ уже знает) |
-//! | `bluetoothctl info <MAC>` | Trusted, RSSI, Battery, UUID — по одному на сопряжённое/подключённое |
 //!
 //! Почему именно так. `bluetoothctl paired-devices` в bluez 5.87 не существует
 //! (`Invalid command in menu main`), а фильтр `devices Paired` есть в этой же
 //! версии и отдаёт тот же список одним вызовом. Состояние `Connected` в общем
 //! выводе `devices` не печатается, поэтому оно берётся вторым фильтром того же
-//! списка — один вызов на весь раздел, а не `info <MAC>` на каждое устройство
-//! ради связности. Сканирование не запускается автоматически: `scan on`
+//! списка. Сканирование не запускается автоматически: `scan on`
 //! меняет состояние адаптера, «Найденные» — это то, что BlueZ уже знает.
 //!
-//! `info <MAC>` идёт по одному на сопряжённое или подключённое — «Найденные»
-//! (известные BlueZ, но не сопряжённые) этим не опрашиваются, иначе это тот
-//! же N+1 по всем соседям. Trusted/RSSI/Battery/Службы у «Найденных» — «—».
+//! `info <MAC>` обычный refresh не делает вовсе: один вызов на устройство —
+//! это N+1, растущий с числом гаджетов. Trusted/RSSI/Battery/Службы поэтому
+//! показываются как «—», пока не появится on-demand чтение выбранного
+//! устройства отдельным запросом.
+//!
 //! Разбор локальный и построчный: строка `Device AA:BB:CC:DD:EE:01 Имя`
 //! делится по первому пробелу после MAC, а имя берётся целиком — пробелы,
 //! двоеточия, обратные слэши, кавычки и юникод в именах разрешены. Личность
@@ -56,9 +55,6 @@ const DEVICE_TIMEOUT: Duration = Duration::from_secs(8);
 /// Pairing ждёт регистрации агента и, возможно, PIN: даём больше, а не
 /// держим меню.
 const PAIR_TIMEOUT: Duration = Duration::from_secs(20);
-/// `info <MAC>` — локальный D-Bus-вызов, но устройство вне эфира может
-/// тянуть ответ до тех пор, пока BlueZ не ответит явно.
-const INFO_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Состояние одного блока раздела. Отсутствие поля — не «нет», а «не знаю»:
 /// `Missing` значит «инструмента нет», `Failed` — «команда ответила не тем».
@@ -119,20 +115,23 @@ pub struct BluetoothAdapter {
     pub discovering: Option<bool>,
 }
 
-/// Устройство Bluetooth. `trusted` сюда не попадает намеренно: BlueZ не
-/// отдаёт его в списках, а `info <MAC>` на каждое устройство — это ровно тот
-/// N+1, которого здесь быть не должно. Поле пригодится в W5.3b, где будет
-/// отдельный вызов на выбранное устройство.
+/// Устройство Bluetooth. `paired` и `connected` — `Option`: если список
+/// `devices Paired`/`devices Connected` прочитать не удалось, состояние
+/// остаётся `None` («не знаю»), а не превращается в `false`. По `None` меню
+/// не предлагает Pair/Connect/Remove: действие по недостоверному состоянию
+/// хуже его отсутствия.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BluetoothDevice {
     /// MAC в нормализованном виде: единственная личность устройства.
     pub address: String,
     /// Имя устройства. Пусто, если BlueZ его не знает: покажется MAC.
     pub name: String,
-    /// Сопряжено ли устройство: сохранено в BlueZ.
-    pub paired: bool,
-    /// Подключено ли устройство прямо сейчас.
-    pub connected: bool,
+    /// Сопряжено ли устройство: сохранено в BlueZ. `None` — список
+    /// сопряжённых не прочитался.
+    pub paired: Option<bool>,
+    /// Подключено ли устройство прямо сейчас. `None` — список подключённых
+    /// не прочитался.
+    pub connected: Option<bool>,
 }
 
 impl BluetoothDevice {
@@ -211,8 +210,10 @@ pub struct BluetoothSnapshot {
     pub paired: Block<Vec<BluetoothDevice>>,
     /// Подключённые прямо сейчас.
     pub connected: Block<Vec<String>>,
-    /// Статус из `info <MAC>`: по MAC. У «Найденных» обычно пусто — их
-    /// списком мы не опрашиваем.
+    /// Статус из `info <MAC>`: по MAC. Обычный refresh карту не заполняет —
+    /// это был бы N+1 вызов на устройство. Поле — кэш для будущего on-demand
+    /// чтения выбранного устройства; пока оно пусто, строки Trusted/RSSI/
+    /// Батарея показывают «—».
     pub infos: HashMap<String, DeviceDetails>,
 }
 
@@ -226,11 +227,13 @@ impl BluetoothSnapshot {
         list
     }
 
-    /// Найденные: всё известное BlueZ, кроме уже сопряжённых — те показаны
-    /// в своём списке, дублировать их во втором бессмысленно.
+    /// Найденные: всё известное BlueZ, кроме точно сопряжённых — те показаны
+    /// в своём списке, дублировать их во втором бессмысленно. Устройства с
+    /// неизвестным `paired` остаются здесь: это честно («вижу, но не знаю,
+    /// сопряжено ли»), а Pair им не предлагается — см. `device_children`.
     pub fn discovered_sorted(&self) -> Vec<BluetoothDevice> {
         let mut list = self.known.ready().cloned().unwrap_or_default();
-        list.retain(|device| !device.paired);
+        list.retain(|device| device.paired != Some(true));
         sort_devices(&mut list);
         list
     }
@@ -244,6 +247,9 @@ impl BluetoothSnapshot {
 
 fn sort_devices(list: &mut [BluetoothDevice]) {
     list.sort_by(|a, b| {
+        // `Option<bool>`: `None < Some(false) < Some(true)`. Подключённые
+        // первыми, затем точно неподключённые, затем неизвестные — в самом
+        // низу, чтобы не вводить в заблуждение.
         b.connected
             .cmp(&a.connected)
             .then_with(|| a.title().to_lowercase().cmp(&b.title().to_lowercase()))
@@ -275,53 +281,34 @@ impl SystemProvider for BluetoothProvider {
         let paired = devices(runner, "Paired");
 
         // Подключённость приходит отдельным списком MAC: в общем выводе её
-        // нет, а `info` на каждое устройство — это N+1 вызовов.
-        let connected_addresses: Vec<String> = connected.ready().cloned().unwrap_or_default();
+        // нет. Если список не прочитался, состояние — `None`, а не `false`:
+        // считать всё неподключённым было бы выдумкой.
+        let connected_addresses: Option<Vec<String>> = connected.ready().cloned();
         // Сопряжённость приезжает отдельным списком: устройство из общего
         // списка тоже сопряжено, просто об этом не сказано в его строке. Без
-        // этой пометки оно дублировалось бы ещё и в «Найденных».
-        let paired_addresses: Vec<String> = paired
+        // этой пометки оно дублировалось бы ещё и в «Найденных». Непрочитанный
+        // список — `None`, а не «все несопряжены».
+        let paired_addresses: Option<Vec<String>> = paired
             .ready()
-            .map(|list| list.iter().map(|device| device.address.clone()).collect())
-            .unwrap_or_default();
+            .map(|list| list.iter().map(|device| device.address.clone()).collect());
         let mut known = known;
         if let Block::Ready(list) = &mut known {
             for device in list.iter_mut() {
-                device.connected = connected_addresses.contains(&device.address);
-                device.paired = paired_addresses.contains(&device.address);
+                device.connected = connected_addresses
+                    .as_ref()
+                    .map(|addresses| addresses.contains(&device.address));
+                device.paired = paired_addresses
+                    .as_ref()
+                    .map(|addresses| addresses.contains(&device.address));
             }
         }
         let mut paired = paired;
         if let Block::Ready(list) = &mut paired {
             for device in list.iter_mut() {
-                device.paired = true;
-                device.connected = connected_addresses.contains(&device.address);
-            }
-        }
-        // `info` — только для сопряжённых и подключённых: «Найденных», которых
-        // может быть сотня, этим не опрашиваем. Один MAC = один вызов.
-        let mut targets: Vec<String> = Vec::new();
-        if let Block::Ready(list) = &paired {
-            for device in list {
-                targets.push(device.address.clone());
-            }
-        }
-        for address in &connected_addresses {
-            if !targets.contains(address) {
-                targets.push(address.clone());
-            }
-        }
-        let mut infos = HashMap::new();
-        for address in targets {
-            let spec = CommandSpec::new("bluetoothctl")
-                .arg("info")
-                .arg(&address)
-                .with_timeout(INFO_TIMEOUT);
-            match runner.run(&spec) {
-                Ok(output) if output.success() => {
-                    infos.insert(address, parse_device_info(&output.stdout));
-                }
-                _ => {}
+                device.paired = Some(true);
+                device.connected = connected_addresses
+                    .as_ref()
+                    .map(|addresses| addresses.contains(&device.address));
             }
         }
         Ok(BluetoothSnapshot {
@@ -329,7 +316,7 @@ impl SystemProvider for BluetoothProvider {
             known,
             paired,
             connected,
-            infos,
+            infos: HashMap::new(),
         })
     }
 
@@ -561,8 +548,8 @@ pub fn parse_devices(text: &str) -> Vec<BluetoothDevice> {
             None => list.push(BluetoothDevice {
                 address,
                 name,
-                paired: false,
-                connected: false,
+                paired: None,
+                connected: None,
             }),
         }
     }
@@ -678,10 +665,12 @@ fn status_row(lang: Language, snapshot: &BluetoothSnapshot) -> Node {
     Node::info(settings_icons::BLUETOOTH, &text).with_id("bluetooth/status")
 }
 
-/// Подпись устройства: имя плюс «· подключено», когда подключено.
+/// Подпись устройства: имя плюс «· подключено», когда точно подключено.
+/// Неизвестное состояние подписи не меняет: «подключено?» — это уже вопрос,
+/// а не подпись.
 fn device_title(lang: Language, device: &BluetoothDevice) -> String {
     let mut title = device.title();
-    if device.connected {
+    if device.connected == Some(true) {
         title.push_str(if ru(lang) {
             " · подключено"
         } else {
@@ -715,7 +704,9 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
         .ready()
         .filter(|adapter| !adapter.address.is_empty())
     {
-        rows.push(power_row(lang, adapter));
+        if let Some(power) = power_row(lang, adapter) {
+            rows.push(power);
+        }
         rows.push(
             Node::action(
                 settings_icons::NETWORK,
@@ -741,6 +732,15 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
             .with_id("bluetooth/scan/off"),
         );
     }
+    if let Some(row) = block_failure_row(
+        lang,
+        "Сопряжённые: список не прочитался",
+        "Paired: the list was not read",
+        "bluetooth/paired-error",
+        &snapshot.paired,
+    ) {
+        rows.push(row);
+    }
     rows.push(device_list(
         lang,
         "Сопряжённые",
@@ -750,6 +750,15 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
         snapshot.paired_sorted(),
         &snapshot.infos,
     ));
+    if let Some(row) = block_failure_row(
+        lang,
+        "Найденные: список не прочитался",
+        "Found: the list was not read",
+        "bluetooth/known-error",
+        &snapshot.known,
+    ) {
+        rows.push(row);
+    }
     rows.push(device_list(
         lang,
         "Найденные",
@@ -774,29 +783,33 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
     rows
 }
 
-/// Кнопка включения/выключения радио. Текст зависит от текущего `Powered`:
-/// включён — предлагаем выключить, иначе — включить. `None` (строки не было)
-/// трактуем как «выключено»: безопаснее включить, чем пытаться выключить то,
-/// что, возможно, и так не крутится.
-fn power_row(lang: Language, adapter: &BluetoothAdapter) -> Node {
-    let off = adapter.powered != Some(true);
-    let action = if off {
-        power_action(true)
-    } else {
-        power_action(false)
-    };
-    let title = if off {
-        if ru(lang) {
-            "Включить Bluetooth"
-        } else {
-            "Turn Bluetooth on"
+/// Кнопка включения/выключения радио.
+/// `Some(true)` — включён, предлагаем выключить; `Some(false)` — выключен,
+/// предлагаем включить; `None` (строки `Powered` не было) — кнопки нет вовсе:
+/// включать «на всякий случай» значит действовать по неизвестному состоянию.
+fn power_row(lang: Language, adapter: &BluetoothAdapter) -> Option<Node> {
+    let title = match adapter.powered {
+        Some(true) => {
+            if ru(lang) {
+                "Выключить Bluetooth"
+            } else {
+                "Turn Bluetooth off"
+            }
         }
-    } else if ru(lang) {
-        "Выключить Bluetooth"
-    } else {
-        "Turn Bluetooth off"
+        Some(false) => {
+            if ru(lang) {
+                "Включить Bluetooth"
+            } else {
+                "Turn Bluetooth on"
+            }
+        }
+        None => return None,
     };
-    Node::action(settings_icons::BLUETOOTH, title, action).with_id("bluetooth/power")
+    let action = match adapter.powered {
+        Some(true) => power_action(false),
+        _ => power_action(true),
+    };
+    Some(Node::action(settings_icons::BLUETOOTH, title, action).with_id("bluetooth/power"))
 }
 
 /// Подменю одного устройства: первая строка — главное действие (подключить/
@@ -814,50 +827,75 @@ fn device_row(lang: Language, device: &BluetoothDevice, details: Option<&DeviceD
 /// Строки внутри подменю устройства. Первичное действие сверху — самое
 /// частое: подключён → «Отключить», сопряжён но не подключён → «Подключить»,
 /// известен BlueZ, но не сопряжён → «Сопрячь».
+///
+/// Неизвестное состояние первичного действия не даёт: вместо
+/// Pair/Connect/Remove — строка «состояние неизвестно». Действие по
+/// недостоверному состоянию (сопрячь то, что, возможно, уже сопряжено)
+/// хуже его отсутствия. Trust/Remove/info — только при достоверно
+/// известном сопряжении или подключении.
 fn device_children(
     lang: Language,
     device: &BluetoothDevice,
     details: Option<&DeviceDetails>,
 ) -> Vec<Node> {
     let mut rows = Vec::new();
-    if device.connected {
-        rows.push(
-            Node::action(
-                settings_icons::MINUS,
-                if ru(lang) {
-                    "Отключить"
-                } else {
-                    "Disconnect"
-                },
-                disconnect_action(&device.address),
-            )
-            .with_id(&format!("{}/disconnect", device.row_id())),
-        );
-    } else if device.paired {
-        rows.push(
-            Node::action(
-                settings_icons::NETWORK,
-                if ru(lang) {
-                    "Подключить"
-                } else {
-                    "Connect"
-                },
-                connect_action(&device.address),
-            )
-            .with_id(&format!("{}/connect", device.row_id())),
-        );
-    } else {
-        rows.push(
-            Node::action(
-                settings_icons::PLUS,
-                if ru(lang) { "Сопрячь" } else { "Pair" },
-                pair_action(&device.address),
-            )
-            .with_id(&format!("{}/pair", device.row_id())),
-        );
+    match (device.paired, device.connected) {
+        (_, Some(true)) => {
+            rows.push(
+                Node::action(
+                    settings_icons::MINUS,
+                    if ru(lang) {
+                        "Отключить"
+                    } else {
+                        "Disconnect"
+                    },
+                    disconnect_action(&device.address),
+                )
+                .with_id(&format!("{}/disconnect", device.row_id())),
+            );
+        }
+        (Some(true), Some(false)) => {
+            rows.push(
+                Node::action(
+                    settings_icons::NETWORK,
+                    if ru(lang) {
+                        "Подключить"
+                    } else {
+                        "Connect"
+                    },
+                    connect_action(&device.address),
+                )
+                .with_id(&format!("{}/connect", device.row_id())),
+            );
+        }
+        (Some(false), _) => {
+            rows.push(
+                Node::action(
+                    settings_icons::PLUS,
+                    if ru(lang) { "Сопрячь" } else { "Pair" },
+                    pair_action(&device.address),
+                )
+                .with_id(&format!("{}/pair", device.row_id())),
+            );
+        }
+        // `paired` неизвестно, либо сопряжено, но `connected` неизвестно:
+        // гадать, что делать с устройством, нельзя.
+        _ => {
+            rows.push(
+                Node::info(
+                    settings_icons::DOT,
+                    if ru(lang) {
+                        "Состояние неизвестно: список не прочитался"
+                    } else {
+                        "State unknown: the list was not read"
+                    },
+                )
+                .with_id(&format!("{}/unknown", device.row_id())),
+            );
+        }
     }
 
-    if device.paired || device.connected {
+    if device.paired == Some(true) || device.connected == Some(true) {
         let trusted = details.and_then(|detail| detail.trusted);
         if trusted == Some(true) {
             rows.push(
@@ -979,6 +1017,28 @@ fn info_line(device_id: &str, key: &str, text: String) -> Node {
     Node::info(settings_icons::DOT, &text).with_id(&format!("{device_id}/info/{key}"))
 }
 
+/// Строка о непрочитанном списке: пустой подменю «Нет устройств» молчит о
+/// причине, а `Failed` — это не «пусто», а «не знаю». Пусто/успех — строки
+/// нет, чтобы не шуметь.
+fn block_failure_row<T>(
+    lang: Language,
+    ru_text: &str,
+    en_text: &str,
+    id: &str,
+    block: &Block<T>,
+) -> Option<Node> {
+    match block {
+        Block::Failed(_) => Some(
+            Node::info(
+                settings_icons::DOT,
+                if ru(lang) { ru_text } else { en_text },
+            )
+            .with_id(id),
+        ),
+        _ => None,
+    }
+}
+
 /// Подменю со списком устройств. Длинный список обрезается до
 /// [`MAX_VISIBLE_DEVICES`], а остальное уходит в подменю «Все»: терять
 /// устройства молча нельзя, а поиск меню по динамическим строкам не ходит.
@@ -1050,17 +1110,11 @@ mod tests {
     }
 
     /// Порядок вызовов провайдера: show, devices Connected, devices,
-    /// devices Paired, info для сопряжённых/подключённых — как в `fetch`,
-    /// иначе сценарий не совпадёт.
+    /// devices Paired — и больше ничего. Обычный refresh не зависит от числа
+    /// устройств: `info <MAC>` на устройство здесь нет, иначе сценарий бы не
+    /// совпал с четырьмя ответами.
     fn script() -> Vec<Result<CommandOutput, CommandError>> {
-        vec![
-            ok(SHOW),
-            ok(CONNECTED),
-            ok(DEVICES),
-            ok(PAIRED),
-            ok(INFO_CONNECTED),
-            ok(INFO_PAIRED_ONLY),
-        ]
+        vec![ok(SHOW), ok(CONNECTED), ok(DEVICES), ok(PAIRED)]
     }
 
     const INFO_CONNECTED: &str = "Device AA:BB:CC:DD:EE:01 (public)\n\tName: Sony WH-1000XM5\n\tTrusted: yes\n\tConnected: yes\n\tRSSI: -62\n\tBattery: 84%\n\tUUID: SDP  (00000001-0000-1000-8000-00805f9b34fb)\n\tUUID: Audio Sink  (0000110b-0000-1000-8000-00805f9b34fb)\n";
@@ -1155,36 +1209,28 @@ mod tests {
         assert_eq!(normalize_address(""), None);
     }
 
+    /// Обычный refresh — ровно четыре базовых вызова, сколько бы устройств
+    /// ни было: `info <MAC>` на устройство (N+1) здесь запрещён. Порядок —
+    /// как в `fetch`, иначе сценарий не совпадёт.
     #[test]
-    fn fetch_reads_base_commands_and_info_for_paired_or_connected_only() {
+    fn refresh_is_four_base_calls_and_no_per_device_info() {
         let runner = ScriptedRunner::new(script());
         BluetoothProvider.fetch(&runner).expect("снимок");
         let calls = runner.calls();
-        // Четыре базовых вызова на весь раздел.
-        for expected in [
+        let expected = [
             "bluetoothctl show",
             "bluetoothctl devices Connected",
             "bluetoothctl devices",
             "bluetoothctl devices Paired",
-        ] {
-            assert!(
-                calls.contains(&expected.to_string()),
-                "нет {expected}: {calls:?}"
-            );
-        }
-        // `info` идёт по одному на сопряжённые/подключённые: 01 и 06.
-        assert!(calls.contains(&"bluetoothctl info AA:BB:CC:DD:EE:01".to_string()));
-        assert!(calls.contains(&"bluetoothctl info AA:BB:CC:DD:EE:06".to_string()));
-        // «Найденные» (02–05) `info` не опрашивают.
-        for index in 2..=5 {
-            assert!(
-                !calls.contains(&format!("bluetoothctl info AA:BB:CC:DD:EE:0{index}")),
-                "info на найденное устройство не нужно: {calls:?}"
-            );
-        }
-        // Самооновление список не загрязняет: scan/power/connect в fetch нет.
-        for call in &calls {
-            for forbidden in ["scan", "power on", "power off", "connect", "pair"] {
+        ];
+        assert_eq!(
+            calls,
+            expected.map(str::to_string),
+            "refresh — ровно четыре базовых вызова"
+        );
+        // Самообновление список не загрязняет: scan/power/connect в fetch нет.
+        for call in runner.calls() {
+            for forbidden in ["scan", "power on", "power off", "connect", "pair", "info"] {
                 assert!(!call.contains(forbidden), "лишнее действие в fetch: {call}");
             }
         }
@@ -1226,14 +1272,18 @@ mod tests {
             .into_iter()
             .find(|device| device.address == "AA:BB:CC:DD:EE:01")
             .expect("Sony есть");
-        assert!(sony.connected, "подключённое помечено");
-        assert!(sony.paired);
+        assert_eq!(sony.connected, Some(true), "подключённое помечено");
+        assert_eq!(sony.paired, Some(true));
         let old = snapshot
             .paired_sorted()
             .into_iter()
             .find(|device| device.address == "AA:BB:CC:DD:EE:06")
             .expect("старое устройство есть");
-        assert!(!old.connected, "сопряжённое, но не подключённое");
+        assert_eq!(
+            old.connected,
+            Some(false),
+            "сопряжённое, но не подключённое"
+        );
     }
 
     #[test]
@@ -1242,20 +1292,20 @@ mod tests {
             BluetoothDevice {
                 address: "AA:BB:CC:DD:EE:09".to_string(),
                 name: "airpods".to_string(),
-                paired: true,
-                connected: false,
+                paired: Some(true),
+                connected: Some(false),
             },
             BluetoothDevice {
                 address: "AA:BB:CC:DD:EE:08".to_string(),
                 name: "AirPods".to_string(),
-                paired: true,
-                connected: true,
+                paired: Some(true),
+                connected: Some(true),
             },
             BluetoothDevice {
                 address: "AA:BB:CC:DD:EE:07".to_string(),
                 name: "Клавиатура".to_string(),
-                paired: true,
-                connected: false,
+                paired: Some(true),
+                connected: Some(false),
             },
         ];
         sort_devices(&mut list);
@@ -1425,6 +1475,183 @@ mod tests {
         assert_eq!(snapshot.known.ready().map(Vec::len), Some(5));
     }
 
+    /// Сбой `devices Paired`: сопряжённость неизвестна у всех, а не `false`.
+    /// Адаптер и списки при этом на месте — деградация частичная.
+    #[test]
+    fn failed_paired_list_means_unknown_not_unpaired() {
+        let mut answers = script();
+        answers[3] = Ok(CommandOutput {
+            status: Some(1),
+            stdout: String::new(),
+            stderr: "org.bluez.Error.NotReady\n".to_string(),
+        });
+        let runner = ScriptedRunner::new(answers);
+        let snapshot = BluetoothProvider.fetch(&runner).expect("снимок");
+        assert!(snapshot.paired.failure().is_some());
+        let known = snapshot.known.ready().expect("список известен");
+        assert_eq!(known.len(), 5, "устройства прочитались");
+        assert!(
+            known.iter().all(|device| device.paired.is_none()),
+            "сопряжённость неизвестна, а не false: {known:?}"
+        );
+        // Подключённость при этом известна: её список прочитался.
+        let sony = known
+            .iter()
+            .find(|device| device.address == "AA:BB:CC:DD:EE:01")
+            .expect("Sony есть");
+        assert_eq!(sony.connected, Some(true));
+    }
+
+    /// Сбой `devices Connected`: подключённость неизвестна у всех.
+    #[test]
+    fn failed_connected_list_means_unknown_not_disconnected() {
+        let mut answers = script();
+        answers[1] = Ok(CommandOutput {
+            status: Some(1),
+            stdout: String::new(),
+            stderr: "org.bluez.Error.NotReady\n".to_string(),
+        });
+        let runner = ScriptedRunner::new(answers);
+        let snapshot = BluetoothProvider.fetch(&runner).expect("снимок");
+        assert!(snapshot.connected.failure().is_some());
+        let known = snapshot.known.ready().expect("список известен");
+        assert!(
+            known.iter().all(|device| device.connected.is_none()),
+            "подключённость неизвестна, а не false: {known:?}"
+        );
+        let sony = known
+            .iter()
+            .find(|device| device.address == "AA:BB:CC:DD:EE:01")
+            .expect("Sony есть");
+        assert_eq!(sony.paired, Some(true), "сопряжённость известна");
+    }
+
+    /// Оба списка не прочитались: всё неизвестно, но адаптер и устройства
+    /// на месте, раздел жив.
+    #[test]
+    fn both_lists_failed_keeps_adapter_and_devices_visible() {
+        let mut answers = script();
+        for index in [1, 3] {
+            answers[index] = Ok(CommandOutput {
+                status: Some(1),
+                stdout: String::new(),
+                stderr: "org.bluez.Error.NotReady\n".to_string(),
+            });
+        }
+        let runner = ScriptedRunner::new(answers);
+        let snapshot = BluetoothProvider.fetch(&runner).expect("снимок");
+        assert!(snapshot.paired.failure().is_some());
+        assert!(snapshot.connected.failure().is_some());
+        assert_eq!(
+            snapshot.adapter.ready().map(|a| a.powered),
+            Some(Some(true)),
+            "адаптер уцелел"
+        );
+        let known = snapshot.known.ready().expect("устройства видны");
+        assert_eq!(known.len(), 5);
+        assert!(
+            known
+                .iter()
+                .all(|device| device.paired.is_none() && device.connected.is_none()),
+            "оба состояния неизвестны: {known:?}"
+        );
+        // Подменю честно говорит о причине, а не показывает пустой список.
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        let titles: Vec<&str> = nodes.iter().map(|node| node.title.as_str()).collect();
+        assert!(
+            titles.contains(&"Сопряжённые: список не прочитался"),
+            "{titles:?}"
+        );
+    }
+
+    /// Неизвестное состояние не даёт опасных действий: ни Pair, ни Connect,
+    /// ни Remove, ни Disconnect, ни Trust. Только строка о неизвестности.
+    #[test]
+    fn unknown_state_offers_no_actions() {
+        let device = BluetoothDevice {
+            address: "AA:BB:CC:DD:EE:01".to_string(),
+            name: "Sony".to_string(),
+            paired: None,
+            connected: None,
+        };
+        let titles: Vec<String> = device_children(Language::Ru, &device, None)
+            .iter()
+            .map(|node| node.title.clone())
+            .collect();
+        for forbidden in [
+            "Сопрячь",
+            "Подключить",
+            "Отключить",
+            "Удалить",
+            "Доверять",
+            "Не доверять",
+        ] {
+            assert!(
+                !titles.contains(&forbidden.to_string()),
+                "недостоверное действие в меню: {titles:?}"
+            );
+        }
+        assert!(
+            titles.iter().any(|title| title.contains("неизвестно")),
+            "должна быть строка о неизвестности: {titles:?}"
+        );
+        // Та же строгость, когда сопряжение известно, а подключение — нет:
+        // Connect по гаданию запрещён.
+        let half_known = BluetoothDevice {
+            paired: Some(true),
+            ..device
+        };
+        let titles: Vec<String> = device_children(Language::Ru, &half_known, None)
+            .iter()
+            .map(|node| node.title.clone())
+            .collect();
+        assert!(
+            !titles.contains(&"Подключить".to_string()),
+            "Connect без известного connected: {titles:?}"
+        );
+    }
+
+    /// Кнопка питания: вкл — выключить, выкл — включить, неизвестно — кнопки
+    /// нет. Статусная строка при этом уже сказала «состояние неизвестно».
+    #[test]
+    fn power_row_follows_powered_and_hides_on_unknown() {
+        let on = parse_adapter(SHOW);
+        let row = power_row(Language::Ru, &on).expect("кнопка есть");
+        assert_eq!(row.title, "Выключить Bluetooth");
+        match &row.kind {
+            super::super::tree::NodeKind::Action(Action::RefreshAndRun { command, .. }) => {
+                assert_eq!(command.argv().1, ["power", "off"]);
+            }
+            other => panic!("ожидалась команда, {other:?}"),
+        }
+        let off = parse_adapter(SHOW_OFF);
+        let row = power_row(Language::Ru, &off).expect("кнопка есть");
+        assert_eq!(row.title, "Включить Bluetooth");
+        let unknown = parse_adapter(SHOW_NO_POWER);
+        assert_eq!(unknown.powered, None);
+        assert!(
+            power_row(Language::Ru, &unknown).is_none(),
+            "по неизвестному состоянию кнопку не предлагаем"
+        );
+        // И в собранном разделе кнопки нет, а статус честный.
+        let snapshot = BluetoothSnapshot {
+            adapter: Block::Ready(unknown),
+            known: Block::Ready(Vec::new()),
+            paired: Block::Ready(Vec::new()),
+            connected: Block::Ready(Vec::new()),
+            infos: HashMap::new(),
+        };
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        let titles: Vec<&str> = nodes.iter().map(|node| node.title.as_str()).collect();
+        assert!(titles.contains(&"Bluetooth: состояние неизвестно · hci0"));
+        assert!(
+            !titles
+                .iter()
+                .any(|title| title.contains("ключить Bluetooth")),
+            "кнопки питания нет: {titles:?}"
+        );
+    }
+
     #[test]
     fn devices_failed_keeps_paired_list() {
         let mut answers = script();
@@ -1458,8 +1685,8 @@ mod tests {
             .map(|index| BluetoothDevice {
                 address: format!("AA:BB:CC:DD:EE:{index:02X}"),
                 name: format!("Устройство {index}"),
-                paired: true,
-                connected: false,
+                paired: Some(true),
+                connected: Some(false),
             })
             .collect();
         let snapshot = BluetoothSnapshot {
@@ -1506,7 +1733,7 @@ mod tests {
     /// кого ещё не сопрягали.
     #[test]
     fn device_submenu_offers_the_action_for_its_state() {
-        let device = |paired: bool, connected: bool| BluetoothDevice {
+        let device = |paired: Option<bool>, connected: Option<bool>| BluetoothDevice {
             address: "AA:BB:CC:DD:EE:01".to_string(),
             name: "Sony".to_string(),
             paired,
@@ -1519,24 +1746,24 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            titles(device(true, true))[0],
+            titles(device(Some(true), Some(true)))[0],
             "Отключить",
             "подключённое — отключить"
         );
         assert_eq!(
-            titles(device(true, false))[0],
+            titles(device(Some(true), Some(false)))[0],
             "Подключить",
             "сопряжённое вне эфира — подключить"
         );
         assert_eq!(
-            titles(device(false, false))[0],
+            titles(device(Some(false), Some(false)))[0],
             "Сопрячь",
             "известное, но не сопряжённое — сопрячь"
         );
-        let connected = titles(device(true, true));
+        let connected = titles(device(Some(true), Some(true)));
         assert!(connected.contains(&"Удалить".to_string()));
         assert!(connected.contains(&"Доверять".to_string()));
-        let found = titles(device(false, false));
+        let found = titles(device(Some(false), Some(false)));
         assert!(!found.contains(&"Удалить".to_string()));
         assert!(!found.contains(&"Доверять".to_string()));
     }
@@ -1595,14 +1822,14 @@ mod tests {
         let first = BluetoothDevice {
             address: "AA:BB:CC:DD:EE:01".to_string(),
             name: "Sony".to_string(),
-            paired: true,
-            connected: false,
+            paired: Some(true),
+            connected: Some(false),
         };
         let renamed = BluetoothDevice {
             address: "AA:BB:CC:DD:EE:01".to_string(),
             name: "Sony WH-1000XM5".to_string(),
-            paired: true,
-            connected: false,
+            paired: Some(true),
+            connected: Some(false),
         };
         assert_eq!(first.row_id(), renamed.row_id(), "имя не часть личности");
         assert_eq!(first.row_id(), "bluetooth/device/AA:BB:CC:DD:EE:01");
@@ -1628,14 +1855,21 @@ mod tests {
         let device = BluetoothDevice {
             address: "AA:BB:CC:DD:EE:01".to_string(),
             name: "Sony".to_string(),
-            paired: true,
-            connected: true,
+            paired: Some(true),
+            connected: Some(true),
         };
         assert_eq!(device_title(Language::Ru, &device), "Sony · подключено");
         let idle = BluetoothDevice {
-            connected: false,
-            ..device
+            connected: Some(false),
+            ..device.clone()
         };
         assert_eq!(device_title(Language::Ru, &idle), "Sony");
+        // Неизвестное подключение метки не ставит: «подключено?» — это уже
+        // вопрос, а не подпись.
+        let unknown = BluetoothDevice {
+            connected: None,
+            ..device.clone()
+        };
+        assert_eq!(device_title(Language::Ru, &unknown), "Sony");
     }
 }

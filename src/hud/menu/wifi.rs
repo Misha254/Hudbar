@@ -6,9 +6,12 @@
 //! перезапрашивается, а строка, из которой нажали, до этого момента
 //! помечена «выполняется».
 //!
-//! Пароли здесь не вводятся и не хранятся: раздел умеет подключаться только к
-//! открытым сетям и к сетям с уже сохранённым профилем. Защищённая сеть без
-//! профиля — неактивная строка с пометкой, пароль это W5.2b.
+//! Пароли вводятся через [`Action::SecretInput`](super::action::Action):
+//! защищённая сеть без профиля открывает поле ввода, а после `Enter` команда
+//! `nmcli device wifi connect <SSID> password <PASSWORD>` собирается с
+//! паролем как `CmdArg::Secret` — в журналах и `Debug` его нет, но в `argv`
+//! процесса он попадает (см. `secret`). Открытые сети и сети с сохранённым
+//! профилем подключаются без ввода.
 //!
 //! Безопасность argv. SSID приходит из эфира и может содержать пробелы,
 //! кавычки, `:`, `\\` и начинаться с `-`. Поэтому:
@@ -340,6 +343,12 @@ fn wireless_profiles(runner: &dyn CommandRunner, visible: &[WifiNet]) -> Vec<Pro
 }
 
 /// SSID профиля: `nmcli -t -f 802-11-wireless.ssid connection show uuid <UUID>`.
+///
+/// Ответ разбирается тем же `split_nmcli_terse`, что и основной список сетей:
+/// двоеточие и обратный слэш внутри SSID приходят экранированными
+/// (`My\:Network`, `Дом \\ принтер`), и голый `split_once(':')` оставил бы
+/// escape-последовательности как есть — профиль бы не сматчился с видимой
+/// сетью.
 fn profile_ssid(runner: &dyn CommandRunner, uuid: &str) -> Option<String> {
     let spec = CommandSpec::new("nmcli")
         .arg("-t")
@@ -351,10 +360,16 @@ fn profile_ssid(runner: &dyn CommandRunner, uuid: &str) -> Option<String> {
         .arg(uuid);
     match run(runner, &spec) {
         Ok(Block::Ready(text)) => text
-            .trim()
-            .split_once(':')
-            .map(|(_, value)| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .and_then(|line| {
+                let fields = oneshot::split_nmcli_terse(line);
+                fields
+                    .get(1)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            }),
         _ => None,
     }
 }
@@ -669,11 +684,22 @@ fn status_row(lang: Language, snapshot: &WifiSnapshot) -> Node {
                 "on"
             }
         }
-        _ => {
+        Block::Ready(false) => {
             if ru(lang) {
                 "выкл"
             } else {
                 "off"
+            }
+        }
+        // Ошибка чтения — это «не знаю», а не «выкл»: техническая неудача
+        // не должна выглядеть выключенным радио. `Missing` сюда не доходит
+        // (выше — ранний возврат «нет nmcli»), но если дойдёт, это тоже не
+        // «выкл».
+        Block::Failed(_) | Block::Missing => {
+            if ru(lang) {
+                "неизвестно"
+            } else {
+                "unknown"
             }
         }
     };
@@ -998,6 +1024,67 @@ mod tests {
         let networks = snapshot.networks.ready().expect("сети есть");
         let cudy = networks.iter().find(|n| n.ssid == "Cudy-5g").unwrap();
         assert_eq!(cudy.saved_uuid.as_deref(), Some("uuid-cudy"));
+    }
+
+    /// SSID профиля приходит экранированным, как в списке сетей: `My\:Network`
+    /// — это `My:Network`, а не строка с обратным слэшем. Голый
+    /// `split_once(':')` оставлял escape как есть, и профиль не матчился.
+    #[test]
+    fn escaped_profile_ssid_unescapes_like_the_network_list() {
+        let runner = ScriptedRunner::new(vec![ok("802-11-wireless.ssid:My\\:Network\n")]);
+        assert_eq!(
+            profile_ssid(&runner, "uuid-odd"),
+            Some("My:Network".to_string())
+        );
+        let runner = ScriptedRunner::new(vec![ok("802-11-wireless.ssid:Дом \\\\ принтер\n")]);
+        assert_eq!(
+            profile_ssid(&runner, "uuid-odd"),
+            Some("Дом \\ принтер".to_string())
+        );
+    }
+
+    /// Профиль с экранированным SSID матчится с видимой сетью: UUID
+    /// проставляется, сеть подключается по профилю, а не как новая.
+    #[test]
+    fn escaped_profile_ssid_matches_the_visible_network() {
+        let runner = ScriptedRunner::new(vec![
+            ok(RADIO_ON),
+            ok("wlp0s20f0u2:wifi:connected:\n"),
+            ok(":My\\:Net:70:WPA2:AA:BB\n"),
+            ok("OddName:uuid-odd:802-11-wireless\n"),
+            ok("802-11-wireless.ssid:My\\:Net\n"),
+        ]);
+        let snapshot = WifiProvider.fetch(&runner).expect("снимок");
+        let networks = snapshot.networks.ready().expect("сети есть");
+        let net = networks.iter().find(|n| n.ssid == "My:Net").unwrap();
+        assert_eq!(net.saved_uuid.as_deref(), Some("uuid-odd"));
+    }
+
+    /// Сбой чтения радио — это «неизвестно», а не «выкл». Переключателя при
+    /// этом нет (состояние недостоверно), а прочитанный список сетей
+    /// показывается как есть.
+    #[test]
+    fn radio_failure_is_unknown_not_off() {
+        let snapshot = WifiSnapshot {
+            radio: Block::Failed("не ответил".to_string()),
+            device: device_block(&Block::Ready(parse_devices(DEVICES))),
+            active: None,
+            networks: Block::Ready(parse_networks(LISTS)),
+        };
+        let rows = build_nodes(&snapshot, Language::Ru);
+        let titles: Vec<&str> = rows.iter().map(|n| n.title.as_str()).collect();
+        assert!(
+            titles[0].starts_with("Wi-Fi: неизвестно"),
+            "ошибка чтения не превращается в «выкл»: {titles:?}"
+        );
+        assert!(
+            !titles.iter().any(|t| t.contains("ключить Wi-Fi")),
+            "переключателя по недостоверному состоянию нет: {titles:?}"
+        );
+        assert!(
+            titles.iter().any(|t| t.contains("My:Net")),
+            "прочитанные сети показываются: {titles:?}"
+        );
     }
 
     #[test]

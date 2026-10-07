@@ -11,10 +11,15 @@
 //!   * [`SecretTarget`] — только несекретные данные операции (SSID и личность
 //!     строки). Секрета в нём нет, поэтому его можно спокойно клонировать и
 //!     показывать в отладке;
-//!   * [`SecretInput`] — буфер пароля. Он не клонируется в кадр: наружу
-//!     уходит только [`SecretFrame`] с маской из точек;
-//!   * [`CmdArg::Secret`](super::system::CmdArg) — единственное место, где
-//!     значение доходит до процесса, и то через настоящий `argv`.
+//!   * [`SecretInput`] — буфер пароля. У него нет `Clone`: пароль нельзя
+//!     размножить случайным `.clone()` состояния. Наружу уходит только
+//!     [`SecretFrame`] с маской из точек, а при подтверждении буфер
+//!     переезжает в команду через [`SecretInput::into_parts`];
+//!   * [`CmdArg::Secret`](super::system::CmdArg) — дальше пароль живёт внутри
+//!     `CommandSpec`, затем в `CommandJob` очереди worker-а и, наконец, в
+//!     настоящем `argv` дочернего процесса. UI-буфера после submit уже нет,
+//!     но «пароль полностью исчез» — неправда: он временно существует в
+//!     команде и виден через `ps`/`/proc/<pid>/cmdline`.
 //!
 //! Чего `CmdArg::Secret` не делает: значение всё равно попадает в `argv`
 //! дочернего процесса, а значит доступно тому, кто читает `/proc/<pid>/cmdline`
@@ -72,8 +77,9 @@ impl SecretTarget {
         }
     }
 
-    /// Команда для этого секрета. Пароль уходит сюда и больше нигде не живёт
-    /// открытым: внутри это `CmdArg::Secret`.
+    /// Команда для этого секрета. Пароль переезжает в `CommandSpec` как
+    /// `CmdArg::Secret`: в UI-буфере его после этого нет, но в команде,
+    /// очереди и `argv` процесса он временно живёт — см. модуль.
     pub fn command(&self, password: &str) -> CommandSpec {
         match self {
             SecretTarget::Wifi { ssid, .. } => super::wifi::connect_with_password(ssid, password),
@@ -83,7 +89,11 @@ impl SecretTarget {
 
 /// Активный ввод секрета: заголовок, буфер и цель. Живёт в меню отдельным
 /// полем и не смешивается с запросом уровня.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// Умышленно без `Clone`: пароль не должен размножаться обычным `.clone()`
+/// UI-состояния. Наружу уходит только маска через [`SecretFrame`], а при
+/// подтверждении буфер переезжает в команду через [`SecretInput::into_parts`].
+#[derive(PartialEq, Eq)]
 pub struct SecretInput {
     /// Что именно вводим: «Пароль для HONOR 200».
     pub title: String,
@@ -143,8 +153,9 @@ impl SecretInput {
         std::iter::repeat_n(MASK, self.len()).collect()
     }
 
-    /// Разобрать ввод на цель и пароль: буфер отдаётся наружу один раз и
-    /// после этого больше не хранится.
+    /// Разобрать ввод на цель и пароль: буфер переезжает наружу целиком
+    /// (`self` расходуется) и в `SecretInput` больше не хранится. Дальше
+    /// пароль живёт в команде — см. `command` и документацию модуля.
     pub fn into_parts(self) -> (SecretTarget, String) {
         (self.target, self.value)
     }
@@ -276,5 +287,33 @@ mod tests {
         assert_eq!(target.subject(), "Мой Дом");
         assert_eq!(target.row_id(), "wifi/net/Мой Дом");
         assert_eq!(target.provider_key(), ProviderKey::WIFI);
+    }
+
+    /// Submit переезжает владением, а не клонированием: `into_parts`
+    /// расходует ввод целиком. Пароль оказывается секретным аргументом
+    /// команды (настоящий `argv`), но ни в журнале, ни в `Debug` его нет.
+    #[test]
+    fn submit_moves_the_buffer_into_the_command_without_cloning() {
+        let target = SecretTarget::wifi("HONOR 200", "wifi/net/HONOR 200");
+        let mut input = SecretInput::new(target, Language::Ru);
+        for ch in "тихийпароль".chars() {
+            input.push(ch);
+        }
+        let (target, password) = input.into_parts();
+        let spec = target.command(&password);
+        let (program, args) = spec.argv();
+        assert_eq!(program, "nmcli");
+        assert_eq!(args.last().map(String::as_str), Some("тихийпароль"));
+        assert!(spec.has_secrets());
+        assert!(
+            !spec.log_line().contains("тихийпароль"),
+            "пароль в журнале: {}",
+            spec.log_line()
+        );
+        assert!(
+            !format!("{spec:?}").contains("тихийпароль"),
+            "пароль в Debug"
+        );
+        drop(password);
     }
 }

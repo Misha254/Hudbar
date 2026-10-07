@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1] - 2026-10-07
+
+### Fixed
+- Bluetooth: a failed `devices Paired`/`devices Connected` read no longer turns into `false` for every device — state is now `Option<bool>` and stays `unknown`.
+- Bluetooth: with unknown paired/connected state the device submenu offers no Pair/Connect/Remove/Trust action, only an explicit "state unknown" row.
+- Bluetooth: `Powered: None` no longer implies "off" — the power button is hidden when adapter power state is unknown.
+- Bluetooth: ordinary refresh is now exactly four `bluetoothctl` calls; the per-device `info <MAC>` N+1 is gone, so refresh no longer scales with device count.
+- Wi-Fi: profile SSID is unescaped with the same `split_nmcli_terse` as the network list, so `My\:Network` and `Дом \\ принтер` match their visible networks.
+- Wi-Fi: a failed `nmcli radio` read shows "unknown" instead of "off".
+- Secret: `SecretInput` and `Menu` no longer implement `Clone`, so a plaintext password cannot be duplicated through ordinary UI state cloning.
+- Docs: corrected the claims that the password disappears after submit and that it travels via stdin — it now passes through `CommandSpec`/`CommandJob` and remains visible in the child process `argv`.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

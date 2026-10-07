@@ -76,6 +76,10 @@ W5.5 (хранилища), W5.6 (OSD громкости) — готовы, пр�
   микрофона по внешнему mute.
 - Уведомления opencode: плагин opencode на `session.idle` и ожидание прав
   дёргает `notify-send`/HUDbar.
+- Secret hardening (будущее, не W5.x): пароль Wi-Fi сейчас идёт через
+  `CmdArg::Secret` в `argv` и виден через `ps`; `CmdArg`/`CommandSpec`
+  клонируемы вместе с `Action`. Перевод на stdin/keyring и ограничение
+  клонирования секрета — отдельной задачей, не раньше закрытия W5.
 - Крышка: сначала разведка поведения. `logind HandleLidSwitch` + `swayidle` +
   `niri msg action power-off-monitors` могут конфликтовать. Закрыл — suspend,
   открыл — восстановление, внешний монитор жив.
