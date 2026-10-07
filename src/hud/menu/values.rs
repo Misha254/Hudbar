@@ -276,7 +276,7 @@ pub fn set_wifi(on: bool) {
     }
 }
 
-/// Кофе-мод: экран не гаснет, пока нет `sleep.sh`.
+/// Кофе-мод: экран не гаснет, пока существует `hud-coffee`.
 pub fn coffee() -> bool {
     oneshot::coffee_on()
 }
