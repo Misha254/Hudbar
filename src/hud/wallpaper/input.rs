@@ -173,11 +173,9 @@ pub fn apply(state: &mut State, input: WpInput) -> Outcome {
         WpInput::Tab(forward) => {
             state.zone = match (state.zone, forward) {
                 (Zone::Folders, true) => Zone::Grid,
-                (Zone::Grid, true) => Zone::Schemes,
-                (Zone::Schemes, true) => Zone::Folders,
-                (Zone::Folders, false) => Zone::Schemes,
+                (Zone::Grid, true) => Zone::Folders,
+                (Zone::Folders, false) => Zone::Grid,
                 (Zone::Grid, false) => Zone::Folders,
-                (Zone::Schemes, false) => Zone::Grid,
             };
             Outcome::None
         }
@@ -221,17 +219,10 @@ fn move_in_zone(state: &mut State, dir: Dir) -> Outcome {
                 Outcome::None
             }
             Dir::Down => {
-                // С последней папки ↓ уводит в схемы — так же, как из
-                // последнего ряда сетки: жест в сторону соседней зоны
-                // уходит из зоны. Обход колонки кольцом не теряется: ↑ с
-                // первой папки по-прежнему заворачивает на последнюю.
+                // Вниз с последней — на первую: колонка зациклена.
                 let len = state.folders.len();
                 if len > 0 {
-                    if state.folder_sel + 1 < len {
-                        state.folder_sel += 1;
-                    } else {
-                        state.zone = Zone::Schemes;
-                    }
+                    state.folder_sel = (state.folder_sel + 1) % len;
                 }
                 Outcome::None
             }
@@ -259,25 +250,7 @@ fn move_in_zone(state: &mut State, dir: Dir) -> Outcome {
                 state.zone = Zone::Folders;
                 return Outcome::None;
             }
-            // ↓ из последнего ряда — в схемы, которые нарисованы под сеткой.
-            // Правило то же, что и для ← в папки: жест в сторону соседней зоны
-            // уходит из зоны, а не замыкает кольцо. По вертикали кольцо не
-            // теряется — ↑ с первого ряда уводит на последний.
-            if dir == Dir::Down && state.grid.in_last_row() {
-                state.zone = Zone::Schemes;
-                return Outcome::None;
-            }
             state.grid.move_dir(dir);
-            Outcome::None
-        }
-        Zone::Schemes => {
-            // ↑ с первого ряда схем — в сетку над ними. ←/→ остаются кольцом
-            // чипов, а ↑ со второго ряда по-прежнему переходит на первый.
-            if dir == Dir::Up && state.scheme_sel < layout::SCHEME_COLS {
-                state.zone = Zone::Grid;
-                return Outcome::None;
-            }
-            state.move_dir(dir);
             Outcome::None
         }
     }
@@ -307,11 +280,6 @@ pub fn click(state: &mut State, card: Rect, x: f32, y: f32) -> Outcome {
         state.grid.ensure_visible();
         return Outcome::None;
     }
-    if let Some(index) = layout::chip_at(zones, x, y) {
-        state.zone = Zone::Schemes;
-        state.set_scheme(index);
-        return Outcome::None;
-    }
     Outcome::None
 }
 
@@ -324,7 +292,6 @@ pub fn motion(state: &mut State, card: Rect, x: f32, y: f32) -> bool {
         .or_else(|| {
             layout::cell_at(zones, state.grid.top_row, state.filtered.len(), x, y).map(Hover::Cell)
         })
-        .or_else(|| layout::chip_at(zones, x, y).map(Hover::Scheme))
         .unwrap_or(Hover::None);
     if next == state.hover {
         return false;
@@ -461,71 +428,6 @@ mod tests {
         assert_eq!(translate(key, ""), WpInput::Type('с'));
     }
 
-    /// Tab гоняет зону по кругу в обе стороны.
-    #[test]
-    fn tab_cycles_zones_both_ways() {
-        let mut state = mock_state();
-        state.zone = Zone::Folders;
-        apply(&mut state, WpInput::Tab(true));
-        assert_eq!(state.zone, Zone::Grid);
-        apply(&mut state, WpInput::Tab(true));
-        assert_eq!(state.zone, Zone::Schemes);
-        apply(&mut state, WpInput::Tab(true));
-        assert_eq!(state.zone, Zone::Folders);
-        apply(&mut state, WpInput::Tab(false));
-        assert_eq!(state.zone, Zone::Schemes);
-        apply(&mut state, WpInput::Tab(false));
-        assert_eq!(state.zone, Zone::Grid);
-        apply(&mut state, WpInput::Tab(false));
-        assert_eq!(state.zone, Zone::Folders);
-    }
-
-    /// Весь обход зон стрелками, без Tab: папки → схемы → сетка. Схемы лежат
-    /// под сеткой, но ↓ с последней папки тоже ведёт туда: пользователю не
-    /// нужно знать, что сетка стоит между ними, — он просто жмёт вниз.
-    #[test]
-    fn arrows_reach_schemes_from_the_folders_column() {
-        let mut state = mock_state();
-        state.select_folder(0);
-        state.filtered = (0..8)
-            .map(|i| PathBuf::from(format!("/tmp/wall-{i}.png")))
-            .collect();
-        state.grid = super::super::grid::Grid::new(4, 3, 8);
-        state.zone = Zone::Folders;
-        state.folder_sel = state.folders.len() - 1;
-
-        apply(&mut state, WpInput::Move(Dir::Down));
-        assert_eq!(state.zone, Zone::Schemes, "↓ с последней папки — в схемы");
-
-        state.scheme_sel = 0;
-        apply(&mut state, WpInput::Move(Dir::Up));
-        assert_eq!(state.zone, Zone::Grid, "↑ из схем — в сетку");
-    }
-
-    /// ↑ с первой папки заворачивает на последнюю, ↓ по списку идёт вниз, а с
-    /// последней уходит в схемы.
-    #[test]
-    fn folders_wrap_on_up_and_leave_to_schemes_from_the_last() {
-        let mut state = mock_state();
-        state.select_folder(0);
-        state.zone = Zone::Folders;
-        assert!(state.folders.len() >= 2, "нужны хотя бы две папки");
-
-        apply(&mut state, WpInput::Move(Dir::Up));
-        assert_eq!(
-            state.folder_sel,
-            state.folders.len() - 1,
-            "↑ с первой — на последнюю"
-        );
-
-        apply(&mut state, WpInput::Move(Dir::Down));
-        assert_eq!(
-            state.zone,
-            Zone::Schemes,
-            "↓ с последней папки — в схемы, а не замыкание на первую"
-        );
-    }
-
     /// ↓ в середине колонки просто идёт по списку, зона не меняется.
     #[test]
     fn folders_down_moves_inside_the_column() {
@@ -539,65 +441,9 @@ mod tests {
         assert_eq!(state.folder_sel, 1);
     }
 
-    /// Схемы: ←/→ идут по кольцу чипов, ↑ со второго ряда — на первый.
+    /// ↑ с первого ряда заворачивает на последний: по вертикали кольцо.
     #[test]
-    fn schemes_ring_horizontally_and_step_up_between_rows() {
-        let mut state = mock_state();
-        state.zone = Zone::Schemes;
-        let len = state.schemes.len();
-        assert!(len > super::super::layout::SCHEME_COLS);
-
-        state.scheme_sel = 0;
-        apply(&mut state, WpInput::Move(Dir::Left));
-        assert_eq!(state.scheme_sel, len - 1);
-        apply(&mut state, WpInput::Move(Dir::Right));
-        assert_eq!(state.scheme_sel, 0);
-
-        // ↑ со второго ряда держит колонку и поднимает на первый ряд.
-        state.scheme_sel = super::super::layout::SCHEME_COLS + 1;
-        apply(&mut state, WpInput::Move(Dir::Up));
-        assert_eq!(
-            state.scheme_sel, 1,
-            "вверх со второго ряда — первый, та же колонка"
-        );
-    }
-
-    /// ↓ из последнего ряда сетки уводит в схемы, ↑ из первого ряда схем
-    /// возвращает в сетку. Раньше схемы были тупиком: попасть туда мог
-    /// было только Tab.
-    #[test]
-    fn down_from_last_row_reaches_schemes_and_up_comes_back() {
-        let mut state = mock_state();
-        state.select_folder(0);
-        state.filtered = (0..8)
-            .map(|i| PathBuf::from(format!("/tmp/wall-{i}.png")))
-            .collect();
-        state.grid = super::super::grid::Grid::new(4, 3, 8);
-        state.zone = Zone::Grid;
-
-        // 8 плиток при cols=4 — это два ряда, второй полностью заполнен.
-        state.grid.sel = 4;
-        apply(&mut state, WpInput::Move(Dir::Down));
-        assert_eq!(state.zone, Zone::Schemes, "↓ из последнего ряда — в схемы");
-
-        // Схемы лежат в два ряда, поэтому ↑ со второго ряда сперва поднимает
-        // на первый, и только следующий ↑ уходит из зоны.
-        state.scheme_sel = layout::SCHEME_COLS + 1;
-        apply(&mut state, WpInput::Move(Dir::Up));
-        assert_eq!(state.scheme_sel, 1, "↑ со второго ряда — на первый");
-        assert_eq!(state.zone, Zone::Schemes, "зона ещё не покинута");
-        apply(&mut state, WpInput::Move(Dir::Up));
-        assert_eq!(state.zone, Zone::Grid, "↑ из первого ряда схем — в сетку");
-        assert_eq!(
-            state.grid.sel, 4,
-            "выбор сетки сохранился, вернулись туда же"
-        );
-    }
-
-    /// ↑ с первого ряда сетки по-прежнему заворачивает на последний, даже
-    /// когда ↓ из него уводит в схемы: по вертикали кольцо не теряется.
-    #[test]
-    fn up_from_first_row_still_wraps_to_the_last() {
+    fn up_from_first_row_wraps_to_the_last() {
         let mut state = mock_state();
         state.filtered = (0..8)
             .map(|i| PathBuf::from(format!("/tmp/wall-{i}.png")))
@@ -611,9 +457,9 @@ mod tests {
         assert_eq!(state.grid.sel, 5, "вверх с первого ряда — последний ряд");
     }
 
-    /// ↓ не из последнего ряда двигает по сетке, а не уводит в схемы.
+    /// ↓ двигает по сетке и никуда из неё не уводит: схемы уехали в своё окно.
     #[test]
-    fn down_above_the_last_row_stays_in_the_grid() {
+    fn down_stays_in_the_grid() {
         let mut state = mock_state();
         state.filtered = (0..8)
             .map(|i| PathBuf::from(format!("/tmp/wall-{i}.png")))
@@ -644,33 +490,6 @@ mod tests {
         apply(&mut state, WpInput::Move(Dir::Left));
         assert_eq!(state.zone, Zone::Grid);
         assert_eq!(state.grid.sel, 4);
-    }
-
-    /// Enter в сетке применяет файл со схемой, в папках и схемах — выбирает.
-    #[test]
-    fn enter_applies_in_grid_and_selects_elsewhere() {
-        let mut state = mock_state();
-        state.select_folder(0);
-        state.zone = Zone::Grid;
-        state.filtered = vec![PathBuf::from("/tmp/wall.png")];
-        state.grid = super::super::grid::Grid::new(4, 3, 1);
-        let outcome = apply(&mut state, WpInput::Activate);
-        match outcome {
-            Outcome::Apply { path, scheme } => {
-                assert_eq!(path, PathBuf::from("/tmp/wall.png"));
-                assert!(!scheme.is_empty());
-            }
-            other => panic!("ожидали Apply, получили {other:?}"),
-        }
-        state.zone = Zone::Schemes;
-        let before = state.current_scheme.clone();
-        state.scheme_sel = 3;
-        apply(&mut state, WpInput::Activate);
-        assert_ne!(state.current_scheme, before, "схема выбралась");
-        state.zone = Zone::Folders;
-        state.folder_sel = 1;
-        apply(&mut state, WpInput::Activate);
-        assert_eq!(state.current_folder, state.folders[1].name);
     }
 
     /// Печать уводит фокус в сетку и ставит выбор на первый результат.
@@ -704,23 +523,6 @@ mod tests {
             matches!(outcome, Outcome::Apply { .. }),
             "второй клик применяет: {outcome:?}"
         );
-    }
-
-    /// Клик по папке переключает содержимое, по схеме — выбирает её.
-    #[test]
-    fn click_on_folder_and_scheme_selects_them() {
-        let mut state = mock_state();
-        let card = card();
-        let zones = layout::zones(card);
-        let row = layout::folder_row(zones, 2).expect("строка");
-        click(&mut state, card, row.x + 1.0, row.y + 1.0);
-        assert_eq!(state.zone, Zone::Folders);
-        assert_eq!(state.folder_sel, 2);
-        let chip = layout::chip(zones, 4).expect("плитка схемы");
-        click(&mut state, card, chip.x + 1.0, chip.y + 1.0);
-        assert_eq!(state.zone, Zone::Schemes);
-        assert_eq!(state.scheme_sel, 4);
-        assert_eq!(state.current_scheme, state.schemes[4]);
     }
 
     /// Hover только подсвечивает: выбор и зона стоят.

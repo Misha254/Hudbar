@@ -28,6 +28,10 @@ name = "hud-wallpaper-rs"
 path = "src/bin/hud_wallpaper.rs"
 
 [[bin]]
+name = "hud-schemes-rs"
+path = "src/bin/hud_schemes.rs"
+
+[[bin]]
 name = "hud-keybinds-rs"
 path = "src/bin/hud_keybinds.rs"
 

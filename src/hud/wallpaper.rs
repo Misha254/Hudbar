@@ -184,6 +184,40 @@ pub fn apply_detached(file: &str, scheme: &str) {
     });
 }
 
+/// Применяет обои и, когда смена закончилась, открывает окно выбора схемы.
+///
+/// Окно ждёт конца `wall.sh` сознательно: пересчёт matugen занимает секунды,
+/// и схема, выбранная раньше, применилась бы к старой картинке. Если смена
+/// сорвалась, окно не открывается: выбирать схему не для чего.
+pub fn apply_then_open_schemes(file: &str, scheme: &str) {
+    let (file, scheme) = (file.to_string(), scheme.to_string());
+    std::thread::spawn(move || {
+        if let Err(error) = apply(&file, &scheme) {
+            super::log::warn(format!("обои не применились: {error}"));
+            return;
+        }
+        open_schemes_window();
+    });
+}
+
+/// Запуск окна схем отсоединённо: окно обоев к этому моменту закрывается, и
+/// его выход не должен тащить за собой новое окно.
+fn open_schemes_window() {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        super::log::warn("окно схем не открылось: нет HOME");
+        return;
+    };
+    let binary = home.join(".local/bin/hud-schemes-rs");
+    if let Err(error) = std::process::Command::new(&binary)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        super::log::warn(format!("окно схем не открылось: {error}"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

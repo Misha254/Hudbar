@@ -29,29 +29,15 @@ pub const MAIN_GAP: f32 = spacing::MD;
 pub const ZONE_INSET: f32 = spacing::MD;
 /// Число колонок и рядов сетки.
 pub const GRID_COLS: usize = 4;
-pub const GRID_ROWS: usize = 3;
+pub const GRID_ROWS: usize = 4;
 /// Зазор между плитками сетки.
 pub const CELL_GAP: f32 = spacing::SM;
 /// Высота миниатюры.
-pub const THUMB_H: f32 = 72.0;
+pub const THUMB_H: f32 = 86.0;
 /// Высота подписи под миниатюрой.
 pub const LABEL_H: f32 = 20.0;
 /// Промежуток между рядами сетки.
 pub const ROW_GAP: f32 = spacing::SM;
-/// Высота заголовка над зоной схем.
-pub const SCHEMES_TITLE_H: f32 = 24.0;
-/// Высота плитки схемы.
-pub const CHIP_H: f32 = 48.0;
-/// Зазор между точками и подписью внутри плитки.
-pub const CHIP_INNER_GAP: f32 = 6.0;
-/// Зазор между плитками схем.
-pub const CHIP_GAP: f32 = spacing::SM;
-/// Плиток схем в одном ряду.
-pub const SCHEME_COLS: usize = 5;
-/// Диаметр точки в плитке схемы.
-pub const SWATCH_D: f32 = 8.0;
-/// Зазор между точками.
-pub const SWATCH_GAP: f32 = 4.0;
 /// Высота строки каталога.
 pub const FOLDER_ROW_H: f32 = 28.0;
 /// Промежуток между строками каталога.
@@ -76,7 +62,6 @@ pub const TICK: f32 = 18.0;
 pub enum Area {
     Folders,
     Grid,
-    Schemes,
 }
 
 /// Рамки трёх зон внутри карточки.
@@ -84,17 +69,11 @@ pub enum Area {
 pub struct Zones {
     pub folders: Rect,
     pub grid: Rect,
-    pub schemes: Rect,
 }
 
 /// Высота, которую занимает сетка: три ряда миниатюр с подписями.
 pub fn grid_height() -> f32 {
     GRID_ROWS as f32 * (THUMB_H + LABEL_H) + (GRID_ROWS - 1) as f32 * ROW_GAP
-}
-
-/// Высота полосы схем без заголовка.
-pub fn schemes_height() -> f32 {
-    2.0 * CHIP_H + CHIP_GAP
 }
 
 /// Раскладывает окно: шапка, зоны и подвал. Все прямоугольники — логические.
@@ -105,21 +84,11 @@ pub fn zones(card: Rect) -> Zones {
     let main_x = card.x + PAD + FOLDERS_W + MAIN_GAP;
     let main_w = card.w - PAD * 2.0 - FOLDERS_W - MAIN_GAP;
 
-    // Заголовок схем стоит над зоной, поэтому зона начинается ниже него.
-    // Рамка зоны = отступ + содержимое + отступ. Заголовок схем стоит в
-    // промежутке между зонами, поэтому зона схем начинается ниже него.
-    let grid_h = grid_height() + ZONE_INSET * 2.0;
-    let schemes_top = body_top + grid_h + SCHEMES_TITLE_H;
-
+    // Сетка занимает всю высоту тела: схемы уехали в отдельное окно, и
+    // освободившийся низ ушёл под более крупные миниатюры.
     Zones {
         folders: Rect::new(card.x + PAD, body_top, FOLDERS_W, body_bottom - body_top),
-        grid: Rect::new(main_x, body_top, main_w, grid_h),
-        schemes: Rect::new(
-            main_x,
-            schemes_top,
-            main_w,
-            schemes_height() + ZONE_INSET * 2.0,
-        ),
+        grid: Rect::new(main_x, body_top, main_w, body_bottom - body_top - PAD),
     }
 }
 
@@ -152,32 +121,6 @@ pub fn cell(zones: Zones, row: usize, col: usize) -> Option<Rect> {
 /// Полоса подписи под миниатюрой: та же ширина, что у плитки.
 pub fn cell_label(thumb: Rect) -> Rect {
     Rect::new(thumb.x, thumb.y + THUMB_H, thumb.w, LABEL_H)
-}
-
-/// Прямоугольник плитки схемы по индексу. `None`, если за пределами зоны.
-pub fn chip(zones: Zones, index: usize) -> Option<Rect> {
-    if index >= SCHEME_COLS * 2 {
-        return None;
-    }
-    let inner_w = zones.schemes.w - ZONE_INSET * 2.0;
-    let chip_w = (inner_w - CHIP_GAP * (SCHEME_COLS - 1) as f32) / SCHEME_COLS as f32;
-    let row = index / SCHEME_COLS;
-    let col = index % SCHEME_COLS;
-    let x = zones.schemes.x + ZONE_INSET + col as f32 * (chip_w + CHIP_GAP);
-    let y = zones.schemes.y + ZONE_INSET + row as f32 * (CHIP_H + CHIP_GAP);
-    Some(Rect::new(x, y, chip_w, CHIP_H))
-}
-
-/// Половина плитки под точки: верхняя, с отступом от края.
-pub fn chip_dots(chip: Rect) -> Rect {
-    let h = (CHIP_H - CHIP_INNER_GAP) / 2.0;
-    Rect::new(chip.x, chip.y, chip.w, h)
-}
-
-/// Половина плитки под подпись: нижняя, с тем же зазором.
-pub fn chip_label(chip: Rect) -> Rect {
-    let h = (CHIP_H - CHIP_INNER_GAP) / 2.0;
-    Rect::new(chip.x, chip.y + h + CHIP_INNER_GAP, chip.w, h)
 }
 
 /// Прямоугольник бейджа ACTIVE: правый верхний угол миниатюры.
@@ -252,18 +195,6 @@ pub fn cell_at(zones: Zones, top_row: usize, len: usize, x: f32, y: f32) -> Opti
     None
 }
 
-/// Плитка схемы под курсором.
-pub fn chip_at(zones: Zones, x: f32, y: f32) -> Option<usize> {
-    for index in 0..SCHEME_COLS * 2 {
-        match chip(zones, index) {
-            Some(rect) if rect.contains(x, y) => return Some(index),
-            None => return None,
-            _ => {}
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,7 +207,7 @@ mod tests {
     #[test]
     fn every_zone_element_stays_inside_its_frame() {
         let z = zones(card());
-        for (index, area) in [z.folders, z.grid, z.schemes].into_iter().enumerate() {
+        for (index, area) in [z.folders, z.grid].into_iter().enumerate() {
             let _ = index;
             assert!(area.w > 0.0 && area.h > 0.0, "зона не вырождена");
         }
@@ -299,66 +230,6 @@ mod tests {
                 assert!(thumb.x >= z.grid.x && thumb.right() <= z.grid.right());
             }
         }
-        for index in 0..SCHEME_COLS * 2 {
-            let chip = chip(z, index).expect("плитка схемы");
-            assert!(
-                chip.y >= z.schemes.y && chip.bottom() <= z.schemes.bottom(),
-                "плитка схемы {index} вышла за зону"
-            );
-            assert!(chip.x >= z.schemes.x && chip.right() <= z.schemes.right());
-        }
-    }
-
-    /// Пункт 2: заголовок схем — отдельная полоса между зонами, а не строка
-    /// поверх рамки. Его высота ровно `SCHEMES_TITLE_H`.
-    #[test]
-    fn schemes_title_sits_between_the_two_zones() {
-        let z = zones(card());
-        let title_top = z.grid.bottom();
-        let title_bottom = z.schemes.y;
-        assert!(title_bottom > title_top, "зона схем не ниже зоны сетки");
-        assert_eq!(
-            title_bottom - title_top,
-            SCHEMES_TITLE_H,
-            "заголовок должен занимать свою полосу"
-        );
-        // Полоса заголовка не должна налезать на подвал.
-        let card = card();
-        assert!(z.schemes.bottom() <= card.y + CARD_H - FOOTER_H);
-    }
-
-    /// Пункт 3: точки в верхней половине, подпись в нижней, зазор 6 px.
-    #[test]
-    fn scheme_chip_splits_into_dots_and_label() {
-        let z = zones(card());
-        let chip = chip(z, 0).unwrap();
-        let dots = chip_dots(chip);
-        let label = chip_label(chip);
-        assert_eq!(CHIP_H, 48.0, "высота плитки схемы");
-        assert_eq!(CHIP_INNER_GAP, 6.0, "зазор между точками и подписью");
-        assert!(dots.bottom() <= label.y, "половины не наезжают");
-        assert_eq!(
-            label.bottom(),
-            chip.bottom(),
-            "нижняя половина упирается в край"
-        );
-        assert!(chip_dots(chip).h > 0.0 && chip_label(chip).h > 0.0);
-    }
-
-    /// Пункт 8: подпись занимает всю ширину плитки, резерв под ratio есть.
-    #[test]
-    fn cell_label_matches_thumb_width_and_keeps_ratio_reserve() {
-        let z = zones(card());
-        let thumb = cell(z, 0, 0).unwrap();
-        let label = cell_label(thumb);
-        assert_eq!(label.w, thumb.w, "подпись по ширине миниатюры");
-        // Под имя и ratio должно оставаться больше, чем сам резерв.
-        assert!(
-            thumb.w - RATIO_RESERVE > 40.0,
-            "плитка уже для имени и ratio: {} px",
-            thumb.w - RATIO_RESERVE
-        );
-        assert_eq!(label.y, thumb.bottom(), "подпись сразу под миниатюрой");
     }
 
     /// Пункт 4: колонка каталогов ровно 200 px, а строка не выходит за неё.
@@ -412,12 +283,11 @@ mod tests {
         let z = zones(card());
         assert_eq!(folder_row(z, 10_000), None, "строка за пределами зоны");
         assert_eq!(cell(z, GRID_ROWS, 0), None);
-        assert_eq!(chip(z, SCHEME_COLS * 2), None);
     }
 
-    /// Hit-test: строка, плитка и чип находятся, мимо — None.
+    /// Hit-test: строка и плитка находятся, мимо — None.
     #[test]
-    fn hit_test_finds_rows_cells_and_chips() {
+    fn hit_test_finds_rows_and_cells() {
         let z = zones(card());
         let row = folder_row(z, 2).unwrap();
         assert_eq!(folder_at(z, 10, row.x + 1.0, row.y + 1.0), Some(2));
@@ -449,8 +319,5 @@ mod tests {
         );
         let top = cell_at(z, 3, 100, thumb.x + 1.0, thumb.y + 1.0).unwrap();
         assert_eq!(top, (3 + 1) * GRID_COLS + 2, "top_row сдвигает индексы");
-        let chip = chip(z, 7).unwrap();
-        assert_eq!(chip_at(z, chip.x + 1.0, chip.y + 1.0), Some(7));
-        assert_eq!(chip_at(z, z.schemes.x - 50.0, z.schemes.y - 50.0), None);
     }
 }

@@ -12,7 +12,7 @@
 //!
 //! Запуск:
 //!   hud-wallpaper-rs [папка]  — открыть выбор, сразу в папке (`all`, если нет)
-//!   hud-wallpaper-rs --snapshot <default|search|schemes|empty> <out.png>
+//!   hud-wallpaper-rs --snapshot <default|search|empty> <out.png>
 
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
@@ -64,6 +64,10 @@ mod log;
 mod palette;
 #[path = "../hud/repeat.rs"]
 mod repeat;
+// Нужен state.rs ради текущей схемы, но само окно обоев схемы уже не рисует.
+#[allow(dead_code)]
+#[path = "../hud/schemes.rs"]
+mod schemes;
 #[allow(dead_code)]
 #[path = "../hud/settings.rs"]
 mod settings;
@@ -113,7 +117,7 @@ hud-wallpaper-rs — выбор обоев HUDbar
   hud-wallpaper-rs [папка]
       Открыть выбор. Папка: имя из колонки (anime, nature, …).
       Нет такой папки — корневой вид «all».
-  hud-wallpaper-rs --snapshot <default|search|schemes|empty> <out.png> [--theme normal|pixel]
+  hud-wallpaper-rs --snapshot <default|search|empty> <out.png> [--theme normal|pixel]
       Снимок состояния без Wayland.
   -h, --help
       Эта справка.";
@@ -205,7 +209,9 @@ impl WpApp {
             Outcome::Apply { path, scheme } => {
                 // Окно закрывается сразу: смена занимает секунды, а wall.sh
                 // сам уведомляет. Ошибка — в журнал, не молча.
-                wallpaper::apply_detached(&path.to_string_lossy(), &scheme);
+                // Схемы уехали в своё окно: оно откроется, когда смена
+                // закончится, иначе схема легла бы на старую картинку.
+                wallpaper::apply_then_open_schemes(&path.to_string_lossy(), &scheme);
                 self.close();
             }
         }
@@ -611,7 +617,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     // --snapshot <default|search|schemes|empty> <out.png> [--theme ...]
     if args.len() < 2 {
         return Err(
-            "hud-wallpaper-rs --snapshot <default|search|schemes|empty> <out.png> [--theme normal|pixel]"
+            "hud-wallpaper-rs --snapshot <default|search|empty> <out.png> [--theme normal|pixel]"
                 .to_string(),
         );
     }
@@ -639,12 +645,6 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             // После смены набора выбран первый результат, а не индекс из
             // прошлого состояния — иначе подсветка уезжает за пределы списка.
             state.grid.select_first();
-            state
-        }
-        "schemes" => {
-            let mut state = State::open();
-            state.zone = wallpaper::state::Zone::Schemes;
-            // keep filtered for grid view, but focus schemes
             state
         }
         "empty" => {

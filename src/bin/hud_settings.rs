@@ -54,6 +54,9 @@ mod dunst;
 mod log;
 #[path = "../hud/palette.rs"]
 mod palette;
+#[allow(dead_code)]
+#[path = "../hud/schemes.rs"]
+mod schemes;
 #[path = "../hud/settings.rs"]
 #[allow(dead_code)]
 mod settings;

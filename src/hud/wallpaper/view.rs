@@ -55,7 +55,7 @@ impl<'a, 'b> Canvas<'a, 'b> {
     }
 
     /// Заливка прямоугольника в логических координатах.
-    fn fill(&mut self, rect: Rect, radius: f32, color: palette::Rgba) {
+    pub fn fill(&mut self, rect: Rect, radius: f32, color: palette::Rgba) {
         let radius = if self.pixel { 0.0 } else { radius };
         fill_round_rect(
             self.pixmap,
@@ -69,7 +69,7 @@ impl<'a, 'b> Canvas<'a, 'b> {
     }
 
     /// Рамка толщиной `width` логических пикселей.
-    fn outline(&mut self, rect: Rect, color: palette::Rgba, width: f32) {
+    pub fn outline(&mut self, rect: Rect, color: palette::Rgba, width: f32) {
         stroke_rect(
             self.pixmap,
             rect.x * SCALE,
@@ -82,7 +82,7 @@ impl<'a, 'b> Canvas<'a, 'b> {
     }
 
     /// Текст с многоточием: длинные имена не должны вылезать за плитку.
-    fn label(&mut self, text: &str, size: f32, color: palette::Rgba, rect: Rect, align: Align) {
+    pub fn label(&mut self, text: &str, size: f32, color: palette::Rgba, rect: Rect, align: Align) {
         self.text
             .paint_boxed(self.pixmap, text, size, color, rect, align);
     }
@@ -209,8 +209,6 @@ pub fn draw_card(canvas: &mut Canvas<'_, '_>, frame: &Frame<'_>) {
     zone_frames(canvas, frame.state, zones);
     folders(canvas, frame.state, zones, ts);
     grid(canvas, frame.state, zones, ts, frame.lang, frame.provider);
-    schemes_title(canvas, zones, ts, frame.lang);
-    schemes(canvas, frame.state, zones, ts);
     footer(canvas, frame.state, frame.card, ts, frame.lang);
 }
 
@@ -400,11 +398,7 @@ fn search_field(
 
 /// Пункт 9: активная зона — `border_focus`, остальные — `border_subtle`.
 fn zone_frames(canvas: &mut Canvas<'_, '_>, state: &State, zones: Zones) {
-    for (area, rect) in [
-        (Area::Folders, zones.folders),
-        (Area::Grid, zones.grid),
-        (Area::Schemes, zones.schemes),
-    ] {
+    for (area, rect) in [(Area::Folders, zones.folders), (Area::Grid, zones.grid)] {
         let active = state.zone == zone_of(area);
         // В Pixel различие держим толщиной и цветом, а не только углом.
         let (color, width) = if active {
@@ -420,7 +414,6 @@ fn zone_of(area: Area) -> Zone {
     match area {
         Area::Folders => Zone::Folders,
         Area::Grid => Zone::Grid,
-        Area::Schemes => Zone::Schemes,
     }
 }
 
@@ -682,97 +675,6 @@ fn caption(
         Align::End,
     );
 }
-
-/// Пункт 2: заголовок полосы схем стоит между зонами, а не на рамке.
-fn schemes_title(
-    canvas: &mut Canvas<'_, '_>,
-    zones: Zones,
-    ts: ui_tokens::TypeScale,
-    lang: Language,
-) {
-    let title = match lang {
-        Language::Ru => super::strings::SCHEME_MATUGEN,
-        Language::En => super::strings::SCHEME_MATUGEN_EN,
-    };
-    canvas.label(
-        title,
-        ts.label,
-        canvas.ui.text,
-        Rect::new(
-            zones.schemes.x + layout::ZONE_INSET,
-            zones.grid.bottom(),
-            zones.schemes.w - layout::ZONE_INSET * 2.0,
-            layout::SCHEMES_TITLE_H,
-        ),
-        Align::Start,
-    );
-}
-
-/// Пункт 3: плитки 48 px, точки в верхней половине, подпись в нижней.
-// Цвета — из карты, прочитанной один раз при открытии, а не из файла в кадре.
-fn schemes(canvas: &mut Canvas<'_, '_>, state: &State, zones: Zones, ts: ui_tokens::TypeScale) {
-    let palette_map = state.swatch_map.as_ref();
-    for index in 0..layout::SCHEME_COLS * 2 {
-        let Some(name) = state.schemes.get(index) else {
-            break;
-        };
-        let Some(chip) = layout::chip(zones, index) else {
-            continue;
-        };
-        let selected = state.zone == Zone::Schemes && index == state.scheme_sel;
-        let fill = if selected || state.hover == Hover::Scheme(index) {
-            canvas.ui.surface_hover
-        } else {
-            canvas.ui.surface
-        };
-        canvas.fill(chip, ui_tokens::radii::SM, fill);
-        let (border, width) = if selected {
-            (canvas.ui.border_focus, layout::ZONE_BORDER)
-        } else {
-            (canvas.ui.border_subtle, layout::HAIRLINE)
-        };
-        canvas.outline(chip, border, width);
-
-        // Точки: центрируются по своей половине, шаг = диаметр + зазор.
-        let colors = swatches_for(name, palette_map);
-        let dots = layout::chip_dots(chip);
-        let step = layout::SWATCH_D + layout::SWATCH_GAP;
-        let span = colors.len() as f32 * step - layout::SWATCH_GAP;
-        let mut x = chip.x + (chip.w - span) / 2.0;
-        let d = layout::SWATCH_D;
-        let y = dots.y + (dots.h - d) / 2.0;
-        for color in &colors {
-            if let Some(rgba) = parse_hex(color) {
-                let rect = Rect::new(x, y, d, d);
-                fill_round_rect(
-                    canvas.pixmap,
-                    rect.x * SCALE,
-                    rect.y * SCALE,
-                    rect.w * SCALE,
-                    rect.h * SCALE,
-                    (d / 2.0) * SCALE,
-                    rgba,
-                );
-            }
-            x += step;
-        }
-
-        let label = layout::chip_label(chip);
-        canvas.label(
-            name.trim_start_matches("scheme-"),
-            ts.caption,
-            if selected {
-                canvas.ui.text
-            } else {
-                canvas.ui.muted
-            },
-            label,
-            Align::Center,
-        );
-    }
-}
-
-/// Пункт 6: подвал — hairline, подсказки и счётчик.
 fn footer(
     canvas: &mut Canvas<'_, '_>,
     state: &State,
@@ -818,28 +720,7 @@ fn footer(
 }
 
 /// Цвета схемы: из файла, иначе встроенный образец (генерация — W4).
-fn swatches_for(name: &str, from_file: Option<&super::swatches::Swatches>) -> Vec<String> {
-    if let Some(list) = from_file.and_then(|map| map.get(name)) {
-        return list.clone();
-    }
-    match name {
-        "scheme-tonal-spot" => vec!["#b5c4ff", "#c1c5dd", "#121318", "#ffb4ab"],
-        "scheme-expressive" => vec!["#b4aff9", "#c1c5dd", "#171a21", "#d1aaff"],
-        "scheme-fidelity" => vec!["#a4d5ff", "#b4d0d5", "#131a20", "#9dbaff"],
-        "scheme-fruit-salad" => vec!["#ff9ce2", "#d0c6d5", "#141219", "#ffb48f"],
-        "scheme-monochrome" => vec!["#b4b4b4", "#c6c6c6", "#101010", "#ffffff"],
-        "scheme-neutral" => vec!["#a1c4fd", "#c2d1d8", "#14181e", "#c6c6c6"],
-        "scheme-rainbow" => vec!["#ff6b6b", "#4ecdc4", "#45b7d1", "#96ceb4"],
-        "scheme-content" => vec!["#48c6ef", "#6f86d6", "#091a26", "#f3a847"],
-        "scheme-vibrant" => vec!["#ff785a", "#ffbc42", "#2a1a00", "#7343e0"],
-        _ => vec!["#c5c6c7", "#c6c6c6", "#141414", "#d7d7d7"],
-    }
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
-fn parse_hex(text: &str) -> Option<palette::Rgba> {
+pub fn parse_hex(text: &str) -> Option<palette::Rgba> {
     let text = text.strip_prefix('#')?;
     if text.len() != 6 {
         return None;
@@ -947,20 +828,7 @@ mod tests {
         );
     }
 
-    /// Пункт 3: точки не наезжают на подпись, обе половины непустые.
-    #[test]
-    fn chip_halves_do_not_overlap() {
-        let card = Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H);
-        let zones = layout::zones(card);
-        let chip = layout::chip(zones, 0).expect("плитка");
-        let dots = layout::chip_dots(chip);
-        let label = layout::chip_label(chip);
-        assert!(dots.bottom() <= label.y);
-        assert_eq!(chip.h, layout::CHIP_H);
-        assert_eq!(label.bottom(), chip.bottom());
-    }
-
-    /// Пункт 9: у трёх зон разные прямоугольники, иначе рамки совпадут.
+    /// Пункт 9: зоны не наезжают друг на друга и не залезают в подвал.
     #[test]
     fn zones_do_not_overlap_each_other() {
         let card = Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H);
@@ -969,8 +837,10 @@ mod tests {
             z.folders.right() <= z.grid.x,
             "колонка папок заходит в сетку"
         );
-        assert!(z.grid.bottom() <= z.schemes.y, "сетка заходит в схемы");
-        assert!(z.schemes.bottom() <= card.y + layout::CARD_H - layout::FOOTER_H);
+        assert!(
+            z.grid.bottom() <= card.y + layout::CARD_H - layout::FOOTER_H,
+            "сетка заходит в подвал"
+        );
     }
 
     /// Пункт 1: содержимое зон отделено от рамки отступом MD.
@@ -983,15 +853,13 @@ mod tests {
         assert!(row.y - z.folders.y >= layout::ZONE_INSET);
         let thumb = layout::cell(z, 0, 0).unwrap();
         assert!(thumb.y - z.grid.y >= layout::ZONE_INSET);
-        let chip = layout::chip(z, 0).unwrap();
-        assert!(chip.y - z.schemes.y >= layout::ZONE_INSET);
     }
 
     /// Снимок обеих тем рисуется без паники: значит координаты в границах.
     #[test]
-    fn render_survives_both_themes_and_all_zones() {
+    fn render_survives_both_themes_and_both_zones() {
         for pixel in [false, true] {
-            for zone in [Zone::Folders, Zone::Grid, Zone::Schemes] {
+            for zone in [Zone::Folders, Zone::Grid] {
                 let mut state = super::super::state::State::open();
                 state.zone = zone;
                 let pixmap = render(&state, pixel, palette::Palette::default(), Language::Ru);

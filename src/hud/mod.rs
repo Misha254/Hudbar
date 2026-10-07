@@ -24,6 +24,9 @@ pub mod palette;
 // Не каждый бинарь использует автоповтор: панели список не листать.
 #[allow(dead_code)]
 pub mod repeat;
+// Окно схем отдельное; панели и прочим бинарям модуль не нужен.
+#[allow(dead_code)]
+pub mod schemes;
 pub mod settings;
 // Снимки окна настроек в PNG без Wayland.
 #[allow(dead_code)]

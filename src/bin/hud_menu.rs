@@ -90,6 +90,9 @@ mod palette;
 #[path = "../hud/repeat.rs"]
 mod repeat;
 #[allow(dead_code)]
+#[path = "../hud/schemes.rs"]
+mod schemes;
+#[allow(dead_code)]
 #[path = "../hud/settings.rs"]
 mod settings;
 #[allow(dead_code)]

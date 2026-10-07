@@ -1,35 +1,19 @@
-//! Модель состояния wallpaper-окна: зона, папка, фильтр, сетка, схемы и
-//! исходы действий. Никакого Wayland: только данные и переходы.
+//! Модель состояния wallpaper-окна: зона, папка, фильтр, сетка и исходы
+//! действий. Никакого Wayland: только данные и переходы.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::super::bind_data::transliterate;
 use super::grid::{Dir, Grid};
-use super::layout::SCHEME_COLS;
 use super::scan::{ALL, Folder};
 
-/// Три активные области окна (фокус выбора).
+/// Две активные области окна (фокус выбора). Схемы уехали в своё окно.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Zone {
     Folders,
     Grid,
-    Schemes,
 }
-
-/// Куда перечислять по экрану.
-pub const SCHEMES: [&str; 10] = [
-    "scheme-tonal-spot",
-    "scheme-expressive",
-    "scheme-fidelity",
-    "scheme-fruit-salad",
-    "scheme-monochrome",
-    "scheme-neutral",
-    "scheme-rainbow",
-    "scheme-content",
-    "scheme-vibrant",
-    "scheme-smart",
-];
 
 /// Подсветка под курсором: выбор не трогает, только вид. Клик уже решает,
 // выбирать или применять, глядя и на неё, и на выбор.
@@ -39,7 +23,6 @@ pub enum Hover {
     None,
     Folder(usize),
     Cell(usize),
-    Scheme(usize),
 }
 
 /// Чем завершилось действие.
@@ -63,8 +46,6 @@ pub struct State {
     pub files: Vec<PathBuf>,
     pub filtered: Vec<PathBuf>,
     pub grid: Grid,
-    pub schemes: Vec<String>,
-    pub scheme_sel: usize,
     pub current_scheme: String,
     pub current_wallpaper: Option<PathBuf>,
     pub query: String,
@@ -104,16 +85,10 @@ impl State {
     pub fn open_at(root: &Path) -> Self {
         let scan = super::scan::scan(root);
         let current_wallpaper = read_current_wallpaper();
-        let current_scheme = read_current_scheme()
-            .and_then(|name| schemes_have(&name, name.as_str()).then_some(name));
-        let schemes = SCHEMES
-            .iter()
-            .map(|name| (*name).to_string())
-            .collect::<Vec<_>>();
-        let scheme_sel = SCHEMES
-            .iter()
-            .position(|name| current_scheme.as_deref() == Some(*name))
-            .unwrap_or(0);
+        // Схема не выбирается в этом окне, но нужна для применения: обои и
+        // схема уходят в wall.sh одной командой. Берём текущую.
+        let current_scheme = super::super::schemes::current()
+            .unwrap_or_else(|| super::super::schemes::SCHEMES[0].to_string());
 
         let mut folders = Vec::with_capacity(scan.folders.len() + 1);
         folders.push(Folder {
@@ -132,9 +107,7 @@ impl State {
             files: Vec::new(),
             filtered: Vec::new(),
             grid: Grid::new(4, 3, 0),
-            schemes,
-            scheme_sel,
-            current_scheme: current_scheme.unwrap_or_else(|| SCHEMES[0].to_string()),
+            current_scheme,
             current_wallpaper,
             query: String::new(),
             folder_sel: 0,
@@ -159,7 +132,6 @@ impl State {
         }
         new.select_folder(new.folder_sel);
         new.focus_current();
-        new.set_current_scheme_index(new.scheme_sel);
         new
     }
 
@@ -243,8 +215,7 @@ impl State {
     pub fn tab(&mut self) {
         self.zone = match self.zone {
             Zone::Folders => Zone::Grid,
-            Zone::Grid => Zone::Schemes,
-            Zone::Schemes => Zone::Folders,
+            Zone::Grid => Zone::Folders,
         };
     }
 
@@ -272,45 +243,6 @@ impl State {
                 _ => {}
             },
             Zone::Grid => self.grid.move_dir(dir),
-            Zone::Schemes => match dir {
-                // Схемы — кольцо из чипов: ←/→ идут по кругу, ↑/↓ держат
-                // колонку и тоже заворачивают с края на край.
-                Dir::Left => {
-                    let len = self.schemes.len();
-                    if len > 0 {
-                        self.scheme_sel = (self.scheme_sel + len - 1) % len;
-                    }
-                }
-                Dir::Right => {
-                    let len = self.schemes.len();
-                    if len > 0 {
-                        self.scheme_sel = (self.scheme_sel + 1) % len;
-                    }
-                }
-                Dir::Up => {
-                    let len = self.schemes.len();
-                    if len > 0 {
-                        if self.scheme_sel >= SCHEME_COLS {
-                            self.scheme_sel -= SCHEME_COLS;
-                        } else {
-                            let col = self.scheme_sel % SCHEME_COLS;
-                            self.scheme_sel =
-                                ((len - 1) / SCHEME_COLS * SCHEME_COLS + col).min(len - 1);
-                        }
-                    }
-                }
-                Dir::Down => {
-                    let len = self.schemes.len();
-                    if len > 0 {
-                        if self.scheme_sel + SCHEME_COLS < len {
-                            self.scheme_sel += SCHEME_COLS;
-                        } else {
-                            self.scheme_sel = (self.scheme_sel % SCHEME_COLS).min(len - 1);
-                        }
-                    }
-                }
-                _ => {}
-            },
         }
     }
 
@@ -329,26 +261,11 @@ impl State {
         self.recalc();
     }
 
-    pub fn set_scheme(&mut self, scheme_index: usize) {
-        self.scheme_sel = scheme_index.min(self.schemes.len().saturating_sub(1));
-        self.set_current_scheme_index(self.scheme_sel);
-    }
-
-    fn set_current_scheme_index(&mut self, index: usize) {
-        if let Some(scheme) = self.schemes.get(index) {
-            self.current_scheme = scheme.clone();
-        }
-    }
-
     /// Enter в активной зоне.
     pub fn enter(&mut self) -> Outcome {
         match self.zone {
             Zone::Folders => {
                 self.select_folder(self.folder_sel);
-                Outcome::None
-            }
-            Zone::Schemes => {
-                self.set_scheme(self.scheme_sel);
                 Outcome::None
             }
             Zone::Grid => {
@@ -375,10 +292,6 @@ impl State {
     }
 }
 
-fn schemes_have(cur: &str, name: &str) -> bool {
-    cur == name
-}
-
 /// Заголовки всех файлов папки: один `open` + префикс на файл. Вызывается при
 /// смене папки, а не в кадре — рендер диска не касается.
 fn load_ratios(files: &[PathBuf]) -> HashMap<PathBuf, (u32, u32)> {
@@ -398,20 +311,6 @@ fn read_current_wallpaper() -> Option<PathBuf> {
     let text = std::fs::read_to_string(path).ok()?;
     let trimmed = text.trim();
     (!trimmed.is_empty()).then_some(PathBuf::from(trimmed))
-}
-
-fn read_current_scheme() -> Option<String> {
-    let path = std::env::var_os("HOME")
-        .map(PathBuf::from)?
-        .join(".config/hudbar/scheme");
-    std::fs::read_to_string(path).ok().and_then(|name| {
-        let name = name.trim();
-        if SCHEMES.contains(&name) {
-            Some(name.to_string())
-        } else {
-            None
-        }
-    })
 }
 
 #[cfg(test)]
@@ -461,8 +360,6 @@ mod tests {
         state.zone = Zone::Folders;
         state.tab();
         assert_eq!(state.zone, Zone::Grid);
-        state.tab();
-        assert_eq!(state.zone, Zone::Schemes);
         state.tab();
         assert_eq!(state.zone, Zone::Folders);
     }
@@ -535,7 +432,7 @@ mod tests {
     #[test]
     fn escape_closes_from_any_zone() {
         let mut state = State::open();
-        for zone in [Zone::Folders, Zone::Grid, Zone::Schemes] {
+        for zone in [Zone::Folders, Zone::Grid] {
             state.zone = zone;
             assert_eq!(state.escape(), Outcome::Close);
         }
