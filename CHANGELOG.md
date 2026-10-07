@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2] - 2026-10-07
+
+### Fixed
+- Menu: a snapshot arriving while a nested submenu of a dynamic section was open no longer left stale rows — the dynamic level and everything stacked above it are rebuilt together.
+- Menu: when the node a nested level was opened through disappears from the new snapshot, the menu returns to the last level that still exists instead of showing an empty screen.
+- Menu: the "working…" marker on a busy row survives a background snapshot refresh of its section.
+
 ## [0.4.1] - 2026-10-07
 
 ### Fixed

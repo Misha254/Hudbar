@@ -768,11 +768,8 @@ impl Menu {
             }
             None => (false, None),
         };
-        if accepted
-            && let (Some(nodes), Some(current)) = (nodes, self.levels.last())
-            && current.dynamic() == Some(key)
-        {
-            self.current_mut().rebuild(&nodes, lang);
+        if accepted && nodes.is_some() {
+            self.rebuild_open_levels(key);
         }
         accepted
     }
@@ -782,17 +779,9 @@ impl Menu {
     /// действия «Загрузка…» мигала бы вместо только что прочитанного списка.
     /// Если снимка ещё не было — уровень покажет «Загрузка…», это честно.
     pub fn refresh_dynamic(&mut self, key: ProviderKey) -> Option<Generation> {
-        let lang = self.lang;
         let generation = self.dynamics.get_mut(&key)?.refresh_soft()?;
         self.pending.push((key, generation));
-        if self.current().dynamic() == Some(key) {
-            let nodes = self
-                .dynamics
-                .get(&key)
-                .map(|slot| slot_nodes(key, slot.state(), lang))
-                .unwrap_or_default();
-            self.current_mut().rebuild(&nodes, lang);
-        }
+        self.rebuild_open_levels(key);
         Some(generation)
     }
 
@@ -801,25 +790,57 @@ impl Menu {
     /// уровень не имеет детей в статическом дереве: его строки лежат в
     /// слоте провайдера, поэтому спуск через него идёт по `dynamics`.
     fn nodes_at(&self, depth: usize) -> Vec<Node> {
+        self.nodes_at_opt(depth).unwrap_or_default()
+    }
+
+    /// Как `nodes_at`, но отличает «узла больше нет» (`None`) от «детей нет».
+    fn nodes_at_opt(&self, depth: usize) -> Option<Vec<Node>> {
         let mut nodes: Vec<Node> = self.root.clone();
         for level in self.levels.get(1..=depth).unwrap_or_default() {
             match &level.key {
                 LevelKey::Node(identity) => {
-                    let Some(parent) = nodes.iter().find(|node| node.identity() == identity) else {
-                        return Vec::new();
-                    };
-                    let Some(children) = parent.children() else {
-                        return Vec::new();
-                    };
-                    nodes = children.to_vec();
+                    let parent = nodes.iter().find(|node| node.identity() == identity)?;
+                    nodes = parent.children()?.to_vec();
                 }
                 LevelKey::Dynamic(key) => match self.dynamics.get(key).map(ProviderSlot::state) {
                     Some(SlotState::Ready(snapshot)) => nodes = snapshot.clone(),
-                    _ => return Vec::new(),
+                    _ => return None,
                 },
             }
         }
-        nodes
+        Some(nodes)
+    }
+
+    /// Пересобирает динамический уровень и всё, что открыто над ним. Окно
+    /// применяет снимок прямо, без `position/restore`, пока пользователь может
+    /// стоять во вложенном подменю: без этого и оно, и родитель после «назад»
+    /// показывали бы устаревшие строки. Если вложенный узел исчез из нового
+    /// снимка, меню возвращается на последний живой уровень.
+    fn rebuild_open_levels(&mut self, key: ProviderKey) {
+        let lang = self.lang;
+        let Some(start) = self.levels.iter().position(|l| l.dynamic() == Some(key)) else {
+            return;
+        };
+        let mut index = start;
+        while index < self.levels.len() {
+            let nodes = if index == start {
+                self.dynamics
+                    .get(&key)
+                    .map(|slot| slot_nodes(key, slot.state(), lang))
+                    .unwrap_or_default()
+            } else {
+                match self.nodes_at_opt(self.levels[index].depth) {
+                    Some(nodes) => nodes,
+                    None => {
+                        self.levels.truncate(index);
+                        break;
+                    }
+                }
+            };
+            self.levels[index].rebuild(&nodes, lang);
+            self.mark_busy_level(index);
+            index += 1;
+        }
     }
 
     /// Открытое положение меню: уровни по личностям и выбранная строка
@@ -924,19 +945,24 @@ impl Menu {
     /// Навесить отметки «выполняется» на строки текущего уровня. Вызывается
     /// после каждой пересборки уровня: и списка, и после `restore`.
     fn mark_busy(&mut self) {
-        let busy = self.busy.clone();
-        if !busy.is_empty() {
-            self.mark_busy_current(&busy);
+        let last = self.levels.len().saturating_sub(1);
+        self.mark_busy_level(last);
+    }
+
+    fn mark_busy_level(&mut self, index: usize) {
+        if self.busy.is_empty() {
+            return;
         }
+        let busy = self.busy.clone();
+        self.mark_busy_at(index, &busy);
     }
 
     /// Отметка «выполняется» на занятых строках текущего уровня. Живёт в
     /// модели, а не в провайдере: провайдер о команде, запущенной из его
     /// строки, ничего не знает.
-    fn mark_busy_current(&mut self, busy: &HashSet<String>) {
+    fn mark_busy_at(&mut self, index: usize, busy: &HashSet<String>) {
         let note = busy_note(self.lang);
-        let items: Vec<Item> = self
-            .current()
+        let items: Vec<Item> = self.levels[index]
             .list
             .items()
             .iter()
@@ -949,7 +975,7 @@ impl Menu {
                 item
             })
             .collect();
-        self.current_mut().list.replace_items(items);
+        self.levels[index].list.replace_items(items);
     }
 }
 
@@ -2281,5 +2307,73 @@ mod tests {
             let pixmap = render_menu_card(&menu, false);
             assert!(pixmap.width() > 0 && pixmap.height() > 0);
         }
+    }
+
+    fn nested_nodes(state: &str) -> Vec<Node> {
+        vec![Node::submenu(
+            "p",
+            "Устройства",
+            vec![Node::info("d", state).with_id("dev/1")],
+        )]
+    }
+
+    /// Путь окна — apply_dynamic без position/restore, пока открыт вложенный уровень.
+    #[test]
+    fn nested_level_follows_a_fresh_snapshot() {
+        let key = ProviderKey::BLUETOOTH;
+        let mut menu = Menu::new(vec![Node::dynamic("b", "Bluetooth", key)]);
+        menu.enter();
+        let (_, g) = menu.take_dynamic_requests()[0];
+        assert!(menu.apply_dynamic(key, g, Ok(nested_nodes("не подключено"))));
+        assert_eq!(menu.enter(), Outcome::Pushed); // вошли в «Устройства»
+        assert_eq!(menu.depth(), 2);
+        let fresh = menu.refresh_dynamic(key).expect("refresh");
+        assert!(menu.apply_dynamic(key, fresh, Ok(nested_nodes("подключено"))));
+        let shown = menu.current().list.items()[0].title.clone();
+        assert_eq!(shown, "подключено", "вложенный уровень не обновился");
+    }
+
+    #[test]
+    fn vanished_nested_node_returns_to_the_live_level() {
+        let key = ProviderKey::BLUETOOTH;
+        let mut menu = Menu::new(vec![Node::dynamic("b", "Bluetooth", key)]);
+        menu.enter();
+        let (_, g) = menu.take_dynamic_requests()[0];
+        menu.apply_dynamic(key, g, Ok(nested_nodes("не подключено")));
+        menu.enter();
+        let fresh = menu.refresh_dynamic(key).expect("refresh");
+        menu.apply_dynamic(key, fresh, Ok(vec![Node::info("x", "СОВСЕМ НОВЫЙ СПИСОК")]));
+        assert_eq!(
+            menu.depth(),
+            1,
+            "исчезнувший узел возвращает на живой уровень"
+        );
+        let shown = menu.current().list.items()[0].title.clone();
+        assert_eq!(shown, "СОВСЕМ НОВЫЙ СПИСОК", "родитель не обновился");
+    }
+
+    #[test]
+    fn busy_marker_survives_a_plain_snapshot() {
+        let key = ProviderKey::new("test-wifi");
+        let mut menu = Menu::new(vec![Node::dynamic("w", "Wi-Fi", key)]);
+        menu.enter();
+        let (_, g) = menu.take_dynamic_requests()[0];
+        menu.apply_dynamic(key, g, Ok(wifi_nodes("net0", "net1")));
+        menu.move_sel(1);
+        assert_eq!(menu.enter(), Outcome::Changed); // net0 busy
+        let _ = menu.take_pending_commands();
+        // приходит чужой снимок (например, ручной rescan), без restore — как в окне
+        let fresh = menu.refresh_dynamic(key).expect("refresh");
+        assert!(menu.apply_dynamic(key, fresh, Ok(wifi_nodes("net0", "net1"))));
+        let t = menu
+            .current()
+            .list
+            .items()
+            .iter()
+            .find(|i| i.id == "wifi/net/net0")
+            .unwrap()
+            .title
+            .clone();
+        assert!(t.contains(busy_note(Language::Ru)), "метка потеряна: {t}");
     }
 }
