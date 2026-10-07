@@ -6,7 +6,8 @@
 //!
 //! Правила из W3: стрелки по сетке; Tab / Shift+Tab — папки → сетка → схемы;
 //! ← из первой колонки сетки — в папки, → из папок — в сетку; ↓ из последнего
-//! ряда сетки — в схемы, ↑ из первого ряда схем — в сетку; Enter —
+//! ряда сетки или с последней папки — в схемы, ↑ из первого ряда схем — в
+//! сетку; Enter —
 //! применить в сетке или выбрать схему/папку; PgUp/PgDn, Home/End; печатные
 //! символы — в поиск; Esc чистит запрос, иначе закрывает. Мышь: клик по плитке
 //! выбирает, второй клик по выбранной применяет; клик по папке и схеме
@@ -220,10 +221,17 @@ fn move_in_zone(state: &mut State, dir: Dir) -> Outcome {
                 Outcome::None
             }
             Dir::Down => {
-                // Вниз с последней — на первую.
+                // С последней папки ↓ уводит в схемы — так же, как из
+                // последнего ряда сетки: жест в сторону соседней зоны
+                // уходит из зоны. Обход колонки кольцом не теряется: ↑ с
+                // первой папки по-прежнему заворачивает на последнюю.
                 let len = state.folders.len();
                 if len > 0 {
-                    state.folder_sel = (state.folder_sel + 1) % len;
+                    if state.folder_sel + 1 < len {
+                        state.folder_sel += 1;
+                    } else {
+                        state.zone = Zone::Schemes;
+                    }
                 }
                 Outcome::None
             }
@@ -472,19 +480,63 @@ mod tests {
         assert_eq!(state.zone, Zone::Folders);
     }
 
-    /// Папки зациклены: ↑ с первой — на последнюю, ↓ с последней — на первую.
+    /// Весь обход зон стрелками, без Tab: папки → схемы → сетка. Схемы лежат
+    /// под сеткой, но ↓ с последней папки тоже ведёт туда: пользователю не
+    /// нужно знать, что сетка стоит между ними, — он просто жмёт вниз.
     #[test]
-    fn folders_wrap_around_on_up_and_down() {
+    fn arrows_reach_schemes_from_the_folders_column() {
+        let mut state = mock_state();
+        state.select_folder(0);
+        state.filtered = (0..8)
+            .map(|i| PathBuf::from(format!("/tmp/wall-{i}.png")))
+            .collect();
+        state.grid = super::super::grid::Grid::new(4, 3, 8);
+        state.zone = Zone::Folders;
+        state.folder_sel = state.folders.len() - 1;
+
+        apply(&mut state, WpInput::Move(Dir::Down));
+        assert_eq!(state.zone, Zone::Schemes, "↓ с последней папки — в схемы");
+
+        state.scheme_sel = 0;
+        apply(&mut state, WpInput::Move(Dir::Up));
+        assert_eq!(state.zone, Zone::Grid, "↑ из схем — в сетку");
+    }
+
+    /// ↑ с первой папки заворачивает на последнюю, ↓ по списку идёт вниз, а с
+    /// последней уходит в схемы.
+    #[test]
+    fn folders_wrap_on_up_and_leave_to_schemes_from_the_last() {
         let mut state = mock_state();
         state.select_folder(0);
         state.zone = Zone::Folders;
         assert!(state.folders.len() >= 2, "нужны хотя бы две папки");
 
         apply(&mut state, WpInput::Move(Dir::Up));
-        assert_eq!(state.folder_sel, state.folders.len() - 1);
+        assert_eq!(
+            state.folder_sel,
+            state.folders.len() - 1,
+            "↑ с первой — на последнюю"
+        );
 
         apply(&mut state, WpInput::Move(Dir::Down));
-        assert_eq!(state.folder_sel, 0);
+        assert_eq!(
+            state.zone,
+            Zone::Schemes,
+            "↓ с последней папки — в схемы, а не замыкание на первую"
+        );
+    }
+
+    /// ↓ в середине колонки просто идёт по списку, зона не меняется.
+    #[test]
+    fn folders_down_moves_inside_the_column() {
+        let mut state = mock_state();
+        state.select_folder(0);
+        state.zone = Zone::Folders;
+        state.folder_sel = 0;
+
+        apply(&mut state, WpInput::Move(Dir::Down));
+        assert_eq!(state.zone, Zone::Folders, "зона не сменилась");
+        assert_eq!(state.folder_sel, 1);
     }
 
     /// Схемы: ←/→ идут по кольцу чипов, ↑ со второго ряда — на первый.
