@@ -3,6 +3,18 @@ name = "hudbar"
 version = "0.4.2"
 edition = "2024"
 
+# Release-профиль панели и окон: сборки одноразовые, поэтому единый codegen-unit
+# и thin-LTO дают меньший и быстрее работающий бинарник ценой времени сборки.
+# strip убирает символы — они нужны только при отладке.
+#
+# `panic = "abort"` здесь НЕ включён намеренно: catch_unwind в проекте нет ни
+# разу, а потоков много (tray, actions, workers), и паника в одном из них при
+# abort уронила бы весь процесс, тогда как при unwind умирает только этот поток.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [[bin]]
 name = "hud-settings-rs"
 path = "src/bin/hud_settings.rs"
