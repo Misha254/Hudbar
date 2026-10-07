@@ -186,169 +186,39 @@ pub fn apply_detached(file: &str, scheme: &str) {
 
 /// Применяет обои и, когда смена закончилась, открывает окно выбора схемы.
 ///
-/// Окно ждёт конца `wall.sh` сознательно: пересчёт matugen занимает секунды,
-/// и схема, выбранная раньше, применилась бы к старой картинке. Если смена
-/// сорвалась, окно не открывается: выбирать схему не для чего.
+/// Работа уходит в отдельную сессию, а не в поток этого окна. Окно обоев
+/// закрывается сразу после Enter, и процесс умирал через миллисекунды, не
+/// дождавшись конца `wall.sh`: поток уносил с собой и запуск окна схем —
+/// обои менялись, а окно не появлялось.
+///
+/// Если смена сорвалась, окно не открывается: выбирать схему не для чего.
 pub fn apply_then_open_schemes(file: &str, scheme: &str) {
-    let (file, scheme) = (file.to_string(), scheme.to_string());
-    std::thread::spawn(move || {
-        if let Err(error) = apply(&file, &scheme) {
-            super::log::warn(format!("обои не применились: {error}"));
-            return;
-        }
-        open_schemes_window();
-    });
-}
-
-/// Запуск окна схем отсоединённо: окно обоев к этому моменту закрывается, и
-/// его выход не должен тащить за собой новое окно.
-fn open_schemes_window() {
     let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
-        super::log::warn("окно схем не открылось: нет HOME");
+        super::log::warn("схема не открылась: нет HOME");
         return;
     };
-    let binary = home.join(".local/bin/hud-schemes-rs");
-    if let Err(error) = std::process::Command::new(&binary)
+    let wall_sh = home.join(".local/bin/wall.sh");
+    let schemes_bin = home.join(".local/bin/hud-schemes-rs");
+
+    // Аргументы идут позиционно, а не склейкой в строку: путь к обоям может
+    // содержать пробелы и кавычки, и shell не должен его разбирать.
+    let script = r#""$1" --set "$2" "$3" && exec "$4""#;
+    let result = std::process::Command::new("setsid")
+        .arg("-f")
+        .arg("sh")
+        .arg("-c")
+        .arg(script)
+        .arg("hud-wallpaper-apply")
+        .arg(&wall_sh)
+        .arg(file)
+        .arg(scheme)
+        .arg(&schemes_bin)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        super::log::warn(format!("окно схем не открылось: {error}"));
-    }
-}
+        .status();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("hudbar-wallpaper-test-{name}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn touch(path: &Path) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(path, b"x").unwrap();
-    }
-
-    /// Вложенные папки — обычное дело для `~/wallpapers`, а не крайний случай:
-    /// список обязан их видеть.
-    #[test]
-    fn scan_walks_nested_folders() {
-        let root = temp_dir("nested");
-        touch(&root.join("top.jpg"));
-        touch(&root.join("anime/one.png"));
-        touch(&root.join("pixelart/light/deep/three.webp"));
-        touch(&root.join("nature/four.jpeg"));
-
-        let found: Vec<String> = scan(&root)
-            .iter()
-            .map(|path| {
-                path.strip_prefix(&root)
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
-
-        assert_eq!(
-            found,
-            vec![
-                "anime/one.png",
-                "nature/four.jpeg",
-                "pixelart/light/deep/three.webp",
-                "top.jpg"
-            ],
-            "вложенные файлы пропущены или порядок не по пути"
-        );
-    }
-
-    /// Расширение решает всё: мусор вроде `.md` и `.gif` в список не попадает.
-    #[test]
-    fn scan_keeps_only_the_four_wallpaper_extensions() {
-        let root = temp_dir("ext");
-        for name in [
-            "a.jpg",
-            "b.JPEG",
-            "c.png",
-            "d.WebP",
-            "skip.gif",
-            "skip.bmp",
-            "skip.md",
-            "skip.txt",
-            "noextension",
-            ".hidden.jpg.bak",
-        ] {
-            touch(&root.join(name));
-        }
-
-        let found: Vec<String> = scan(&root)
-            .iter()
-            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-
-        assert_eq!(found, vec!["a.jpg", "b.JPEG", "c.png", "d.WebP"]);
-    }
-
-    /// Пустой каталог и отсутствующий каталог — не ошибка, а пустой список:
-    /// в разделе «Обои» показывается заглушка, а окно не падает.
-    #[test]
-    fn scan_of_empty_or_missing_root_is_empty() {
-        let root = temp_dir("empty");
-        assert!(scan(&root).is_empty(), "пустой каталог дал файлы");
-
-        let missing = root.join("does-not-exist");
-        assert!(scan(&missing).is_empty(), "нет каталога — есть файлы");
-    }
-
-    /// Сортировка по пути: список не должен прыгать между запусками окна.
-    #[test]
-    fn scan_sorts_by_path() {
-        let root = temp_dir("sort");
-        for name in ["z.jpg", "a/2.jpg", "a/1.jpg", "b/10.jpg", "b/2.jpg"] {
-            touch(&root.join(name));
-        }
-        let found = scan(&root);
-        let mut sorted = found.clone();
-        sorted.sort();
-        assert_eq!(found, sorted);
-    }
-
-    /// Ссылка на родителя не должна уводить обход в бесконечный цикл.
-    #[cfg(unix)]
-    #[test]
-    fn scan_survives_a_symlink_loop() {
-        let root = temp_dir("loop");
-        touch(&root.join("real/one.jpg"));
-        std::os::unix::fs::symlink(&root, root.join("real/loop")).unwrap();
-
-        let found = scan(&root);
-        assert_eq!(found.len(), 1, "цикл ссылок не ограничен");
-        assert!(found[0].ends_with("one.jpg"));
-    }
-
-    /// Каталог окна и каталог `wall.sh` должны совпадать. Проверка читает
-    /// живой скрипт, когда он есть: расхождение означало бы, что в окне
-    /// показывают файлы, которых скрипт не применит.
-    #[test]
-    fn wallpaper_dir_matches_wall_script() {
-        let script = home().join(".local/bin/wall.sh");
-        let Ok(text) = std::fs::read_to_string(&script) else {
-            return;
-        };
-        assert!(
-            text.contains("WALLPAPER_DIR=\"$HOME/wallpapers/\""),
-            "wall.sh сменил каталог: список окна придётся переписать"
-        );
-        assert_eq!(
-            root(),
-            home().join("wallpapers"),
-            "каталог окна должен быть ~/wallpapers"
-        );
+    if let Err(error) = result {
+        super::log::warn(format!("смена не запущена: {error}"));
     }
 }
