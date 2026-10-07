@@ -104,9 +104,8 @@ const NAMESPACE: &str = "hudschemes";
 /// Свой pid-файл: окно схем не должно закрывать окно обоев и наоборот.
 const PID_FILE: &str = "hudbar-schemes.pid";
 const WIDTH: u32 = CARD_W as u32;
-/// Высота карточки из содержимого: заголовок + список схем + подсказки.
 fn height() -> u32 {
-    (schemes::HEADER_H + SCHEMES.len() as f32 * schemes::ROW_H + FOOTER_H + PAD * 2.0) as u32
+    schemes::card_height().round() as u32
 }
 
 /// Коды XKB — те же значения, что в окне обоев. Список вертикальный, поэтому
