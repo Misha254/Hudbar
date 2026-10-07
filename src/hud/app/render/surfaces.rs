@@ -33,6 +33,10 @@ impl App {
         if self.tooltip.is_some() {
             self.draw_tooltip();
         }
+
+        if self.osd.is_some() {
+            self.draw_osd();
+        }
     }
 
     pub fn draw_grab(&mut self) {

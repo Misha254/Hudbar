@@ -10,6 +10,16 @@ pub const FONT_SIZE_MIN: u32 = 10;
 pub const FONT_SIZE_MAX: u32 = 18;
 pub const LINE_HEIGHT_MIN: u32 = 14;
 pub const LINE_HEIGHT_MAX: u32 = 28;
+/// Границы длительности окна OSD. По умолчанию — значение для новых установок.
+pub const OSD_DURATION_MIN_MS: u32 = 600;
+pub const OSD_DURATION_MAX_MS: u32 = 4000;
+pub const OSD_DURATION_DEFAULT_MS: u32 = 1600;
+/// Адрес external controller Mihomo по умолчанию.
+pub const VPN_CONTROLLER_DEFAULT: &str = "127.0.0.1:9090";
+/// Границы таймаута обращения к контроллеру.
+pub const VPN_TIMEOUT_MIN_MS: u32 = 300;
+pub const VPN_TIMEOUT_MAX_MS: u32 = 5000;
+pub const VPN_TIMEOUT_DEFAULT_MS: u32 = 1500;
 
 /// Модули панели в порядке по умолчанию. Единственный список на весь проект:
 /// и панель, и окно настроек, и `hud-setting` берут порядок отсюда.
@@ -214,6 +224,14 @@ pub struct Settings {
     pub font_size: u32,
     pub line_height: u32,
     pub position: NotificationPosition,
+    /// Показывать ли своё окно громкости/микрофона вместо уведомления dunst.
+    pub osd: bool,
+    /// Сколько миллисекунд висит окно OSD.
+    pub osd_duration_ms: u32,
+    /// Адрес external controller Mihomo для VPN-окна.
+    pub vpn_controller: String,
+    /// Таймаут обращения к контроллеру.
+    pub vpn_timeout_ms: u32,
 }
 
 impl Settings {
@@ -259,6 +277,27 @@ impl Settings {
     pub fn line_height(&self) -> u32 {
         clamp(self.line_height as i64, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX)
     }
+
+    /// Длительность окна OSD с учётом границ: значение могли прийти из правки
+    /// файла руками, и панель не должна показывать окно дольше или короче
+    /// пределов ползунка.
+    /// Таймаут контроллера для VPN-окна.
+    pub fn vpn_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(clamp(
+            self.vpn_timeout_ms as i64,
+            VPN_TIMEOUT_MIN_MS,
+            VPN_TIMEOUT_MAX_MS,
+        ) as u64)
+    }
+
+    /// Длительность окна OSD с учётом границ: значение могли прийти из правки
+    pub fn osd_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(clamp(
+            self.osd_duration_ms as i64,
+            OSD_DURATION_MIN_MS,
+            OSD_DURATION_MAX_MS,
+        ) as u64)
+    }
 }
 
 impl Default for Settings {
@@ -282,6 +321,13 @@ impl Default for Settings {
             font_size: 13,
             line_height: 15,
             position: NotificationPosition::TopRight,
+            // Выключено по умолчанию: окно создаёт и уничтожает слой
+            // layer-shell, а на nvidia с niri такое churn — лишний риск.
+            // Включается пользователем в Control Center.
+            osd: false,
+            osd_duration_ms: OSD_DURATION_DEFAULT_MS,
+            vpn_controller: VPN_CONTROLLER_DEFAULT.to_string(),
+            vpn_timeout_ms: VPN_TIMEOUT_DEFAULT_MS,
         }
     }
 }
@@ -373,13 +419,38 @@ fn parse_into(settings: &mut Settings, content: &str) {
             settings.position = position;
         }
     }
+
+    // Секция `vpn`: адрес и таймаут контроллера. Секрета здесь нет и быть не
+    // должно — он читается из окружения или файла, а не из `settings.json`.
+    if let Some(vpn) = value.get("vpn").and_then(Value::as_object) {
+        if let Some(controller) = vpn.get("controller").and_then(Value::as_str) {
+            let controller = controller.trim();
+            if !controller.is_empty() {
+                settings.vpn_controller = controller.to_string();
+            }
+        }
+        if let Some(timeout) = vpn.get("timeout_ms").and_then(Value::as_u64) {
+            settings.vpn_timeout_ms = clamp(timeout as i64, VPN_TIMEOUT_MIN_MS, VPN_TIMEOUT_MAX_MS);
+        }
+    }
+
+    // Секция `osd` необязательна: старый файл без неё даёт значения по
+    // умолчанию, поэтому включённость выключается только явным `false`.
+    if let Some(osd) = value.get("osd").and_then(Value::as_object) {
+        settings.osd = get_bool(osd, "enabled", settings.osd);
+        if let Some(duration) = osd.get("duration_ms").and_then(Value::as_u64) {
+            settings.osd_duration_ms =
+                clamp(duration as i64, OSD_DURATION_MIN_MS, OSD_DURATION_MAX_MS);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        FONT_SIZE_MAX, Language, MODULE_KEYS, Module, NotificationPosition, Settings, Zone,
-        default_module_order, normalize_module_order, parse_into,
+        FONT_SIZE_MAX, Language, MODULE_KEYS, Module, NotificationPosition,
+        OSD_DURATION_DEFAULT_MS, OSD_DURATION_MAX_MS, Settings, Zone, default_module_order,
+        normalize_module_order, parse_into,
     };
 
     #[test]
@@ -393,6 +464,39 @@ mod tests {
         assert_eq!(settings.height, 48);
         assert!(!settings.weather);
         assert!(settings.tray);
+    }
+
+    #[test]
+    fn reads_the_osd_section_and_defaults_when_it_is_absent() {
+        let mut with_section = Settings::default();
+        parse_into(
+            &mut with_section,
+            r#"{"osd":{"enabled":false,"duration_ms":2400}}"#,
+        );
+        let mut without_section = Settings::default();
+        parse_into(&mut without_section, r#"{"hudbar":{"height":27}}"#);
+
+        assert!(!with_section.osd);
+        assert_eq!(with_section.osd_duration().as_millis(), 2400);
+        assert!(
+            !without_section.osd,
+            "старый файл без секции: OSD выключен по умолчанию"
+        );
+        assert_eq!(
+            without_section.osd_duration().as_millis(),
+            OSD_DURATION_DEFAULT_MS as u128
+        );
+    }
+
+    #[test]
+    fn clamps_an_out_of_range_osd_duration() {
+        let mut settings = Settings::default();
+        parse_into(&mut settings, r#"{"osd":{"duration_ms":99999}}"#);
+
+        assert_eq!(
+            settings.osd_duration().as_millis(),
+            OSD_DURATION_MAX_MS as u128
+        );
     }
 
     #[test]

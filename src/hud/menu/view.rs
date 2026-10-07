@@ -33,6 +33,7 @@ use super::super::ui_tokens::{
     TypeScale, UiPalette, mix, radii, radius, spacing, type_scale, ui_palette,
 };
 use super::item::Item;
+use super::settings::Language;
 use super::state::Frame;
 use super::strings;
 
@@ -107,6 +108,16 @@ pub fn row_band(view: &MenuView<'_>) -> f32 {
 }
 
 /// Сколько строк показывает карточка: от `MIN_ROWS` до `MAX_ROWS`.
+/// Сколько строк рисует карточка: в режиме ввода пароля список сетей скрыт,
+/// и высоту задаёт сам ввод.
+pub fn rows_for(frame: &Frame) -> usize {
+    if frame.secret.is_some() {
+        SECRET_ROWS
+    } else {
+        rows_shown(frame.items.len())
+    }
+}
+
 pub fn rows_shown(count: usize) -> usize {
     count.clamp(MIN_ROWS, MAX_ROWS)
 }
@@ -120,6 +131,17 @@ pub fn card_height_for(rows: usize, search: bool) -> f32 {
 /// Высота карточки в обычном режиме.
 pub fn card_height(rows: usize) -> f32 {
     card_height_for(rows, false)
+}
+
+/// Размер слоя для `set_size`. Обе оси строго больше нуля: слой без якорей
+/// не имеет права получить `0` ни по ширине, ни по высоте, и композитор
+/// рвёт протокол на первом же commit. Высота берётся из карточки своего
+/// режима, поэтому поиск и пустой список тоже дают честный размер.
+pub fn layer_size(count: usize, search: bool) -> (u32, u32) {
+    let rows = rows_shown(count);
+    let width = CARD_W.round().max(1.0) as u32;
+    let height = card_height_for(rows, search).round().max(1.0) as u32;
+    (width, height)
 }
 
 /// Фон выбранной строки: смесь поверхности с акцентом. Проверено на обеих
@@ -137,12 +159,7 @@ pub fn luminance(color: palette::Rgba) -> f32 {
 /// Прямоугольник подсветки выбранной строки: та же полоса списка, но с отступом
 /// от краёв карточки, чтобы hairline остался целым.
 pub fn highlight_rect(row: Rect) -> Rect {
-    Rect::new(
-        row.x + CARD_INSET,
-        row.y,
-        row.w - CARD_INSET * 2.0,
-        row.h,
-    )
+    Rect::new(row.x + CARD_INSET, row.y, row.w - CARD_INSET * 2.0, row.h)
 }
 
 /// Прямоугольник акцентной полосы выбранной строки — та же подсветка, но
@@ -164,7 +181,12 @@ pub fn center_band(rect: Rect, height: f32) -> Rect {
 /// номер видимой строки: с прокруткой они разойдутся, и клик уедет.
 pub fn row_at(frame: &Frame, card: Rect, x: f32, y: f32) -> Option<usize> {
     let row_h = row_height(search_mode(frame));
-    let list = Rect::new(card.x, card.y + HEADER_H, card.w, rows_shown(frame.items.len()) as f32 * row_h);
+    let list = Rect::new(
+        card.x,
+        card.y + HEADER_H,
+        card.w,
+        rows_shown(frame.items.len()) as f32 * row_h,
+    );
     if x < card.x || x > card.right() || y < list.y || y >= list.bottom() {
         return None;
     }
@@ -311,7 +333,7 @@ impl<'a> MenuView<'a> {
 pub fn render(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
     let surface = Rect::new(0.0, 0.0, frame_w(view), frame_h(view));
     let search = search_mode(frame);
-    let rows = rows_shown(frame.items.len());
+    let rows = rows_for(frame);
     let card = card_rect(surface.w, surface.h, rows, search);
     view.scrim(surface.w, surface.h);
     paint(view, card, frame);
@@ -324,7 +346,7 @@ pub fn render(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
 /// `apply_card_alpha`.
 pub fn render_window(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
     let search = search_mode(frame);
-    let rows = rows_shown(frame.items.len());
+    let rows = rows_for(frame);
     let card = Rect::new(0.0, 0.0, CARD_W, card_height_for(rows, search));
     view.card(card);
     paint(view, card, frame);
@@ -334,12 +356,167 @@ pub fn render_window(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
 /// Содержимое карточки: шапка, строки, подвал. Общая часть для снимка и окна —
 /// расхождение только в фоне вокруг.
 fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
+    if let Some(secret) = frame.secret.as_ref() {
+        secret_view(view, card, frame, secret);
+        return;
+    }
     let search = search_mode(frame);
     let rows = rows_shown(frame.items.len());
     let row_h = row_height(search);
     header(view, card, frame);
     rows_view(view, card, frame, rows, row_h);
     footer(view, card, frame);
+}
+
+/// Сколько строк занимает режим ввода пароля: «что подключаем» и «пароль».
+pub const SECRET_ROWS: usize = 2;
+
+/// Режим ввода пароля в той же карточке: крошки, имя сети, поле с точками и
+/// курсором, подвал с подсказками. Отдельного окна нет и пароль рисуется
+/// только точками — в кадре его нет даже в принципе.
+fn secret_view(
+    view: &mut MenuView<'_>,
+    card: Rect,
+    frame: &Frame,
+    secret: &super::secret::SecretFrame,
+) {
+    header(view, card, frame);
+    let body = Rect::new(
+        card.x,
+        card.y + HEADER_H,
+        card.w,
+        SECRET_ROWS as f32 * ROW_H,
+    );
+    let chrome = strings::chrome(frame.lang);
+
+    // Строка «что подключаем»: имя сети из эфира, оно не секрет.
+    view.text_clipped(
+        &format!("{}: {}", chrome.password, secret.subject),
+        view.scale.label,
+        view.ui.text,
+        center_band(
+            Rect::new(body.x + PAD, body.y, body.w - PAD * 2.0, ROW_H),
+            view.scale.label * 2.0,
+        ),
+        Align::Start,
+    );
+
+    // Поле пароля: рамка в фокусе, точки и курсор в конце.
+    let field = Rect::new(
+        body.x + PAD,
+        body.y + ROW_H + spacing::SM,
+        body.w - PAD * 2.0,
+        ROW_H - spacing::MD,
+    );
+    fill_round_rect(
+        view.pixmap,
+        field.x * SCALE,
+        field.y * SCALE,
+        field.w * SCALE,
+        field.h * SCALE,
+        radius(view.pixel, radii::SM) * SCALE,
+        view.ui.idle_panel,
+    );
+    stroke_rect(
+        view.pixmap,
+        field.x * SCALE,
+        field.y * SCALE,
+        field.w * SCALE,
+        field.h * SCALE,
+        view.ui.border_focus,
+        SCALE,
+    );
+    let text_x = field.x + spacing::SM;
+    let text_w = field.w - spacing::SM * 2.0;
+    if secret.len == 0 {
+        view.text_clipped(
+            chrome.password_placeholder,
+            view.scale.caption,
+            view.ui.text_disabled,
+            center_band(field, view.scale.caption * 2.0),
+            Align::Start,
+        );
+    } else {
+        view.text_clipped(
+            &secret.masked,
+            view.scale.label,
+            view.ui.text,
+            center_band(field, view.scale.label * 2.0),
+            Align::Start,
+        );
+        let caret_x = text_x + view.painter.text_width(&secret.masked, view.scale.label);
+        let caret = Rect::new(
+            caret_x + 1.0,
+            field.y + spacing::SM,
+            2.0,
+            field.h - spacing::SM * 2.0,
+        );
+        fill_rect(
+            view.pixmap,
+            caret.x * SCALE,
+            caret.y * SCALE,
+            caret.w * SCALE,
+            caret.h * SCALE,
+            view.ui.accent,
+        );
+    }
+    let _ = text_w;
+    secret_footer(view, card, frame);
+}
+
+/// Подвал режима ввода: вместо счётчика строк — что делает `Enter` и `Esc`.
+fn secret_footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
+    let rect = Rect::new(card.x, card.bottom() - FOOTER_H, card.w, FOOTER_H);
+    let line = Rect::new(card.x, rect.y, card.w, 1.0);
+    fill_rect(
+        view.pixmap,
+        line.x * SCALE,
+        line.y * SCALE,
+        line.w * SCALE,
+        line.h * SCALE,
+        view.ui.border_subtle,
+    );
+    let chrome = strings::chrome(frame.lang);
+    let band = center_band(rect, view.scale.caption * 2.0);
+    let mut x = rect.x + PAD;
+    for hint in [chrome.password_connect, chrome.password_cancel] {
+        let width = view.painter.text_width(hint, view.scale.caption);
+        view.text_clipped(
+            hint,
+            view.scale.caption,
+            view.ui.muted,
+            Rect::new(x, band.y, width, band.h),
+            Align::Start,
+        );
+        x += width + spacing::LG;
+    }
+    if let Some(status) = frame.status.as_ref() {
+        let color = if status.is_failed() {
+            mix(view.ui.accent, view.ui.muted, 0.5)
+        } else {
+            view.ui.accent
+        };
+        let right = Rect::new(rect.right() - PAD - 200.0, rect.y, 200.0, rect.h);
+        view.disc(
+            center_band(Rect::new(right.x, rect.y, 8.0, rect.h), 8.0),
+            color,
+        );
+        let label = if status.is_failed() {
+            chrome.failed
+        } else {
+            chrome.applied
+        };
+        view.text_clipped(
+            label,
+            view.scale.caption,
+            view.ui.muted,
+            center_band(
+                Rect::new(right.x + 8.0 + spacing::XS, rect.y, right.w, rect.h),
+                view.scale.caption * 2.0,
+            ),
+            Align::End,
+        );
+    }
 }
 
 /// Ширина кадра: логические пиксели из буфера.
@@ -479,7 +656,7 @@ fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
     );
     if frame.query.is_empty() {
         view.text_clipped(
-            strings::SEARCH_PLACEHOLDER,
+            strings::chrome(frame.lang).search,
             view.scale.caption,
             view.ui.text_disabled,
             text_rect,
@@ -552,11 +729,11 @@ fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize, ro
                 view.ui.border_subtle,
             );
         }
-        row(view, rect, item, *position == selected_row);
+        row(view, rect, item, *position == selected_row, frame.lang);
     }
     if frame.items.is_empty() {
         view.text_clipped(
-            strings::NOTHING_FOUND,
+            strings::chrome(frame.lang).nothing,
             view.scale.label,
             view.ui.muted,
             list,
@@ -566,7 +743,7 @@ fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize, ro
 }
 
 /// Одна строка: иконка, название, значение справа и индикатор поведения.
-fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool) {
+fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool, lang: Language) {
     if selected {
         // Подсветка и полоса отступают от краёв карточки на CARD_INSET:
         // заливка от самого края ложилась бы на hairline рамки.
@@ -652,19 +829,19 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool) {
             );
         }
     }
-    indicator(view, rect, item, two_line);
+    indicator(view, rect, item, two_line, lang);
 }
 
 /// Правая часть строки: круг тумблера, круглая миниатюра пикера, значение или
 /// шеврон подменю. Всё центрируется по той же оси, что и название.
-fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool) {
+fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool, lang: Language) {
     let right = rect.right() - PAD;
     if item.kind.is_toggle() {
         let dot = center_band(
             Rect::new(right - TOGGLE_D, rect.y, TOGGLE_D, rect.h),
             TOGGLE_D,
         );
-        if item.value == "вкл" {
+        if item.value == strings::chrome(lang).on {
             view.disc(dot, view.ui.accent);
         } else {
             ring(view, dot, mix(view.ui.base, view.ui.border, 0.6));
@@ -676,12 +853,7 @@ fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool) {
         // источник превью. Форма уже та же — круг 28 px с hairline, и шеврон
         // справа остаётся: пункт открывает выбор.
         let thumb = center_band(
-            Rect::new(
-                right - CHEVRON_W - THUMB_D,
-                rect.y,
-                THUMB_D,
-                rect.h,
-            ),
+            Rect::new(right - CHEVRON_W - THUMB_D, rect.y, THUMB_D, rect.h),
             THUMB_D,
         );
         view.disc(thumb, mix(view.ui.accent, view.ui.base, 0.45));
@@ -729,7 +901,13 @@ fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool) {
         } else {
             center_band(value, view.scale.label * 2.0)
         };
-        view.text_clipped(&item.value, view.scale.label, view.ui.muted, band, Align::End);
+        view.text_clipped(
+            &item.value,
+            view.scale.label,
+            view.ui.muted,
+            band,
+            Align::End,
+        );
     }
 }
 
@@ -751,7 +929,7 @@ fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
     // подсказки не влезают, берутся короткие, а не наезжают на счётчик.
     let hints_left = rect.x + PAD;
     let right_edge = rect.right() - PAD - counter_w;
-    let (hints, mut x) = layout_hints(view, hints_left, right_edge - spacing::XL);
+    let (hints, mut x) = layout_hints(view, hints_left, right_edge - spacing::XL, frame.lang);
     for hint in hints {
         let width = view.painter.text_width(hint, view.scale.caption);
         view.text_clipped(
@@ -773,11 +951,14 @@ fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
             } else {
                 view.ui.accent
             };
-            view.disc(center_band(Rect::new(right.x, rect.y, 8.0, rect.h), 8.0), color);
+            view.disc(
+                center_band(Rect::new(right.x, rect.y, 8.0, rect.h), 8.0),
+                color,
+            );
             let label = if status.is_failed() {
-                strings::STATUS_FAILED
+                strings::chrome(frame.lang).failed
             } else {
-                strings::STATUS_APPLIED
+                strings::chrome(frame.lang).applied
             };
             view.text_clipped(
                 label,
@@ -798,7 +979,11 @@ fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
         None => {
             // На пустом списке счётчик был бы «1/0»: читается как ошибка.
             // Там ноль из нуля.
-            let index = if frame.total == 0 { 0 } else { frame.selected + 1 };
+            let index = if frame.total == 0 {
+                0
+            } else {
+                frame.selected + 1
+            };
             let counter = format!("{index}/{}", frame.total);
             view.text_clipped(
                 &counter,
@@ -826,18 +1011,19 @@ fn hints_width(view: &mut MenuView<'_>, hints: &[&str]) -> f32 {
 /// Раскладка подсказок подвала: возвращает набор строк и их левую границу.
 /// Полные подписи не влезают в русском Pixel-шрифте, поэтому для них есть
 /// короткие варианты: «ESC» вместо «ESC ЗАКРЫТЬ».
-fn layout_hints<'a>(view: &mut MenuView<'_>, left: f32, limit: f32) -> (Vec<&'a str>, f32) {
-    let full = [
-        strings::HINT_SELECT,
-        strings::HINT_OPEN,
-        strings::HINT_BACK,
-        strings::HINT_CLOSE,
-    ];
+fn layout_hints<'a>(
+    view: &mut MenuView<'_>,
+    left: f32,
+    limit: f32,
+    lang: Language,
+) -> (Vec<&'a str>, f32) {
+    let chrome = strings::chrome(lang);
+    let full = [chrome.select, chrome.open, chrome.back, chrome.close];
     let short = [
-        strings::HINT_SELECT_SHORT,
-        strings::HINT_OPEN_SHORT,
-        strings::HINT_BACK_SHORT,
-        strings::HINT_CLOSE_SHORT,
+        chrome.select_short,
+        chrome.open_short,
+        chrome.back_short,
+        chrome.close_short,
     ];
     let width = hints_width(view, &full);
     if left + width <= limit {
@@ -864,8 +1050,8 @@ pub fn font_name(pixel: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::state::Status;
+    use super::*;
 
     fn palette_for(pixel: bool) -> UiPalette {
         theme(pixel, palette::Palette::default()).0
@@ -910,6 +1096,42 @@ mod tests {
         assert!(search > plain);
     }
 
+    /// `set_size` никогда не получает ноль: без якорей слой без размера
+    /// считается ошибкой протокола, и композитор убивает клиента.
+    #[test]
+    fn layer_size_is_never_zero() {
+        for count in [0, 1, 3, MIN_ROWS, MAX_ROWS, 99] {
+            for search in [false, true] {
+                let (width, height) = layer_size(count, search);
+                assert!(width > 0, "count={count} search={search}: ширина {width}");
+                assert!(height > 0, "count={count} search={search}: высота {height}");
+                assert_eq!(width, CARD_W as u32);
+                assert_eq!(
+                    height as f32,
+                    card_height_for(count, search),
+                    "высота слоя равна высоте карточки"
+                );
+            }
+        }
+    }
+
+    /// Пустой список и режим поиска — два крайних случая, где размер легко
+    /// посчитать не тем расчётом.
+    #[test]
+    fn layer_size_matches_the_card_in_both_edges() {
+        assert_eq!(
+            layer_size(0, false),
+            (CARD_W as u32, card_height(0) as u32),
+            "пустой список всё равно показывает минимум строк"
+        );
+        assert_eq!(
+            layer_size(0, true),
+            (CARD_W as u32, card_height_for(0, true) as u32),
+            "пустой поиск выше обычного"
+        );
+        assert!(layer_size(3, true).1 > layer_size(3, false).1);
+    }
+
     #[test]
     fn card_rect_is_centered_for_both_modes() {
         for search in [false, true] {
@@ -949,7 +1171,10 @@ mod tests {
         let middle = Rect::new(rect.x, rect.y + HEADER_H + ROW_H * 3.0, rect.w, ROW_H);
         for row in [first, middle] {
             let inner = highlight_rect(row);
-            assert!(inner.x >= rect.x + CARD_INSET, "подсветка залезает на рамку");
+            assert!(
+                inner.x >= rect.x + CARD_INSET,
+                "подсветка залезает на рамку"
+            );
             assert!(
                 inner.right() <= rect.right() - CARD_INSET,
                 "подсветка перекрывает правую рамку"
@@ -1004,7 +1229,15 @@ mod tests {
 
     #[test]
     fn dimensions_stay_on_the_four_pixel_grid() {
-        for value in [CARD_W, ROW_H, ROW_H_SEARCH, HEADER_H, FOOTER_H, SEARCH_H, PAD] {
+        for value in [
+            CARD_W,
+            ROW_H,
+            ROW_H_SEARCH,
+            HEADER_H,
+            FOOTER_H,
+            SEARCH_H,
+            PAD,
+        ] {
             assert_eq!(
                 value % spacing::XS,
                 0.0,
@@ -1027,10 +1260,43 @@ mod tests {
             (strings::HINT_BACK, strings::HINT_BACK_SHORT),
             (strings::HINT_CLOSE, strings::HINT_CLOSE_SHORT),
         ] {
-            assert!(full.len() > short.len(), "короткая подсказка длиннее полной");
+            assert!(
+                full.len() > short.len(),
+                "короткая подсказка длиннее полной"
+            );
             assert!(short.contains(full.split(' ').next().expect("подсказка не пустая")));
         }
         assert_eq!(strings::HINT_CLOSE_SHORT, "ESC");
+    }
+
+    /// Ввод пароля рисуется в той же карточке: точки вместо букв, курсор и
+    /// подсказки в подвале. Пароля на картинке быть не может — в кадре его
+    /// нет, — но сам путь отрисовки обязан работать без паники.
+    #[test]
+    fn secret_input_renders_the_mask_in_the_same_card() {
+        let secret = super::super::secret::SecretFrame {
+            title: "Wi-Fi пароль",
+            subject: "Дом \\ принтер".to_string(),
+            masked: "••••••".to_string(),
+            len: 6,
+        };
+        let frame = Frame {
+            trail: vec!["HUD".to_string(), "Wi-Fi".to_string()],
+            items: Vec::new(),
+            selected: 0,
+            top: 0,
+            query: String::new(),
+            total: 0,
+            status: None,
+            secret: Some(secret),
+            lang: Language::Ru,
+        };
+        assert_eq!(rows_for(&frame), SECRET_ROWS, "высота задаёт сам ввод");
+        assert!(!search_mode(&frame), "запрос в режиме ввода пуст");
+        assert!(!frame.query.contains("•"), "маска не попадает в запрос");
+        // Ширина карточки в режиме ввода та же, а строк ровно две.
+        let card = card_rect(1200.0, 800.0, rows_for(&frame), false);
+        assert_eq!(card.h, card_height_for(SECRET_ROWS, false));
     }
 
     #[test]
@@ -1043,6 +1309,8 @@ mod tests {
             query: String::new(),
             total: 0,
             status: None,
+            secret: None,
+            lang: Language::Ru,
         };
         assert!(!search_mode(&frame));
         frame.query = "dnd".to_string();
@@ -1058,9 +1326,11 @@ mod tests {
             items: (0..6)
                 .map(|index| super::super::item::Item {
                     icon: "",
+                    id: format!("Пункт {index}"),
                     title: format!("Пункт {index}"),
                     value: String::new(),
                     caption: None,
+                    keywords: &[],
                     kind: super::super::item::ItemKind::Leaf,
                     origin: super::super::item::Origin { depth: 0, index },
                 })
@@ -1070,6 +1340,8 @@ mod tests {
             query: String::new(),
             total: 6,
             status: None,
+            secret: None,
+            lang: Language::Ru,
         };
         let card = card_rect(1200.0, 800.0, 4, false);
         let list_y = card.y + HEADER_H;
@@ -1092,9 +1364,11 @@ mod tests {
             items: (0..3)
                 .map(|index| super::super::item::Item {
                     icon: "",
+                    id: format!("Пункт {index}"),
                     title: format!("Пункт {index}"),
                     value: String::new(),
                     caption: None,
+                    keywords: &[],
                     kind: super::super::item::ItemKind::Leaf,
                     origin: super::super::item::Origin { depth: 0, index },
                 })
@@ -1104,19 +1378,21 @@ mod tests {
             query: "x".to_string(),
             total: 3,
             status: None,
+            secret: None,
+            lang: Language::Ru,
         };
         let card = card_rect(1200.0, 800.0, 5, true);
         let list_y = card.y + HEADER_H;
-        assert_eq!(
-            row_at(&frame, card, card.x + 10.0, list_y + 10.0),
-            Some(0)
-        );
+        assert_eq!(row_at(&frame, card, card.x + 10.0, list_y + 10.0), Some(0));
         // На обычной высоте строки эта точка была бы за пределами списка.
         let plain = card_rect(1200.0, 800.0, 5, false);
         let plain_list = plain.y + HEADER_H;
         assert_eq!(
             row_at(
-                &Frame { query: String::new(), ..frame.clone() },
+                &Frame {
+                    query: String::new(),
+                    ..frame.clone()
+                },
                 plain,
                 card.x + 10.0,
                 plain_list + ROW_H_SEARCH + 10.0

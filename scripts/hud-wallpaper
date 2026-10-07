@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Запуск окна выбора обоев HUDbar. Принимает необязательную папку:
+# `hud-wallpaper anime`.
+#
+# Всё остальное делает сам бинарник, включая переключение: повторный вызов
+# находит живой pid-файл, посылает SIGTERM и выходит. Отдельный поиск окна
+# здесь не нужен и невозможен: слой не виден в `niri msg windows`.
+set -euo pipefail
+
+bin="${HUDBAR_BIN_DIR:-$HOME/.local/bin}/hud-wallpaper-rs"
+
+if [[ ! -x "$bin" ]]; then
+    echo "окно обоев не установлено: нет $bin" >&2
+    exit 1
+fi
+
+exec setsid -f "$bin" "$@"

@@ -46,6 +46,10 @@ pub enum Subject {
     Search,
     /// Пустой результат: запрос без совпадений.
     Empty,
+    /// Кадр так, как его рисует живое окно: карточка от нуля, без
+    /// затемнения и с прозрачностью. Нужен, чтобы окно и снимок не
+    /// разошлись.
+    Window,
 }
 
 impl Subject {
@@ -64,6 +68,7 @@ impl Subject {
             Subject::Style => "style",
             Subject::Search => "search",
             Subject::Empty => "empty",
+            Subject::Window => "window",
         }
     }
 
@@ -74,11 +79,15 @@ impl Subject {
             Subject::Style => "подменю «Стиль»",
             Subject::Search => "поиск",
             Subject::Empty => "пусто",
+            Subject::Window => "окно",
         }
     }
 
     /// Разбор ключа.
     pub fn from_key(value: &str) -> Option<Subject> {
+        if value == "window" {
+            return Some(Subject::Window);
+        }
         Subject::ALL
             .into_iter()
             .find(|subject| subject.key() == value)
@@ -108,12 +117,68 @@ pub fn subject_menu(subject: Subject) -> Menu {
                 menu.type_char(ch);
             }
         }
+        // Окно рисует как есть, состояние не меняем: проверяем путь отрисовки.
+        Subject::Window => {
+            menu.move_sel(2);
+        }
     }
     menu.set_page(view::MAX_ROWS);
     menu
 }
 
+/// Кадр окна: карточка от нуля, полупрозрачная, вокруг ничего. Снимается
+/// тем же кодом, что и живое окно, — иначе они разойдутся.
+pub fn render_window_subject(subject: Subject, pixel: bool) -> tiny_skia::Pixmap {
+    let menu = subject_menu(subject);
+    render_menu_card(&menu, pixel)
+}
+
+/// Карточка произвольного меню тем же кодом, что и живое окно.
+pub fn render_menu_card(menu: &Menu, pixel: bool) -> tiny_skia::Pixmap {
+    let frame = menu.frame();
+    let card_w = view::CARD_W;
+    let card_h = view::card_height_for(frame.items.len(), view::search_mode(&frame));
+    let (ui, scale) = view::theme(pixel, palette::Palette::default());
+    let mut pixmap =
+        tiny_skia::Pixmap::new((card_w * SCALE) as u32, (card_h * SCALE) as u32).expect("pixmap");
+    pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
+    let mut painter = TextPainter::new(&view::font_name(pixel));
+    let mut icons = TextPainter::new(settings_icons::FONT);
+    let mut window = MenuView {
+        pixmap: &mut pixmap,
+        painter: &mut painter,
+        icons: &mut icons,
+        ui,
+        scale,
+        pixel,
+    };
+    let card = view::render_window(&mut window, &frame);
+    view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
+    pixmap
+}
+
 /// Кадр состояния: подложка, затемнение и карточка.
+/// Рисует произвольный кадр: снимкам и тестам отрисовки ввода пароля.
+/// Кадр приходит снаружи, поэтому тот же путь годен и для режима секрета.
+pub fn render_frame(frame: &Frame, pixel: bool) -> tiny_skia::Pixmap {
+    let (ui, scale) = view::theme(pixel, palette::Palette::default());
+    let mut pixmap =
+        tiny_skia::Pixmap::new((FRAME_W * SCALE) as u32, (FRAME_H * SCALE) as u32).expect("pixmap");
+    backdrop(&mut pixmap, ui);
+    let mut painter = TextPainter::new(&view::font_name(pixel));
+    let mut icons = TextPainter::new(settings_icons::FONT);
+    let mut menu_view = MenuView {
+        pixmap: &mut pixmap,
+        painter: &mut painter,
+        icons: &mut icons,
+        ui,
+        scale,
+        pixel,
+    };
+    view::render(&mut menu_view, frame);
+    pixmap
+}
+
 pub fn render_subject(subject: Subject, pixel: bool) -> tiny_skia::Pixmap {
     let menu = subject_menu(subject);
     let mut frame = menu.frame();
@@ -229,7 +294,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             value => {
                 if subject.is_none() {
                     subject = Some(Subject::from_key(value).ok_or(format!(
-                        "состояние не понято: {value}. Доступны: {}",
+                        "состояние не понято: {value}. Доступны: {}, window",
                         hint()
                     ))?);
                 } else if out.is_none() {
@@ -243,7 +308,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     let subject = subject.ok_or(format!("нужно состояние: {}", hint()))?;
     let out = out.ok_or("нужен путь к PNG")?;
-    let pixmap = render_subject(subject, pixel);
+    let pixmap = if subject == Subject::Window {
+        render_window_subject(subject, pixel)
+    } else {
+        render_subject(subject, pixel)
+    };
     write_png(&pixmap, std::path::Path::new(out))?;
     println!(
         "{} {} {}x{} → {out}",
@@ -329,7 +398,60 @@ pub fn render_all(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>
         for pixel in [false, true] {
             let theme = if pixel { "pixel" } else { "normal" };
             let path = directory.join(format!("menu-{}-{}.png", subject.key(), theme));
-            let pixmap = render_subject(subject, pixel);
+            let pixmap = if subject == Subject::Window {
+                render_window_subject(subject, pixel)
+            } else {
+                render_subject(subject, pixel)
+            };
+            write_png(&pixmap, &path)?;
+            written.push(path);
+        }
+    }
+    Ok(written)
+}
+
+/// Снимки настоящего дерева для отчёта M4: корень и каждый раздел в обеих
+/// темах. Значения живые (из `settings.json` и системы), поэтому снимки
+/// отражают машину, а не макет.
+pub fn render_real_all(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
+    const SECTIONS: [&str; 10] = [
+        "root",
+        "apps",
+        "panel",
+        "order",
+        "style",
+        "notifications",
+        "capture",
+        "keybinds",
+        "system",
+        "about",
+    ];
+    let mut written = Vec::new();
+    for pixel in [false, true] {
+        let theme = if pixel { "pixel" } else { "normal" };
+        for id in SECTIONS {
+            let mut menu = super::real::menu();
+            match id {
+                "root" => {}
+                "order" => {
+                    let _ = super::open_section(&mut menu, "panel");
+                    if let Some(index) = menu
+                        .frame()
+                        .items
+                        .iter()
+                        .position(|item| item.title.contains("Порядок"))
+                    {
+                        menu.current_mut().list.select(index);
+                        menu.enter();
+                    }
+                }
+                section => {
+                    let _ = super::open_section(&mut menu, section);
+                }
+            }
+            menu.set_page(view::MAX_ROWS);
+            let pixmap = render_menu_card(&menu, pixel);
+            let path = directory.join(format!("menu-real-{id}-{theme}.png"));
             write_png(&pixmap, &path)?;
             written.push(path);
         }
@@ -367,7 +489,44 @@ pub fn counts(frame: &Frame) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::secret::{SecretFrame, SecretInput, SecretTarget};
+    use super::super::settings::Language;
     use super::*;
+
+    /// Снимок режима ввода пароля: та же карточка, маска вместо букв.
+    #[test]
+    fn secret_input_is_renderable_and_carries_no_password() {
+        let mut input = SecretInput::new(
+            SecretTarget::wifi("Дом \\ принтер", "wifi/net/x"),
+            Language::Ru,
+        );
+        for ch in "тихийпароль".chars() {
+            input.push(ch);
+        }
+        let frame = Frame {
+            trail: vec![
+                "HUD".to_string(),
+                "Система".to_string(),
+                "Wi-Fi".to_string(),
+            ],
+            items: Vec::new(),
+            selected: 0,
+            top: 0,
+            query: String::new(),
+            total: 0,
+            status: None,
+            secret: Some(input.frame(Language::Ru)),
+            lang: Language::Ru,
+        };
+        let pixmap = render_frame(&frame, false);
+        assert!(pixmap.width() > 0 && pixmap.height() > 0);
+        let secret: &SecretFrame = frame.secret.as_ref().expect("ввод в кадре");
+        assert_eq!(secret.masked, "•••••••••••");
+        assert!(
+            !format!("{frame:?}").contains("тихийпароль"),
+            "пароль не в кадре"
+        );
+    }
 
     #[test]
     fn every_state_is_reachable_by_key() {
@@ -436,6 +595,23 @@ mod tests {
             let pixmap = render_subject(Subject::Style, pixel);
             assert!(pixmap.width() > 0 && pixmap.height() > 0);
         }
+    }
+
+    #[test]
+    fn real_tree_renders_every_section_in_both_themes() {
+        let dir = std::env::temp_dir().join(format!("hud-menu-real-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог снимков");
+        let written = render_real_all(&dir).expect("снимки настоящего дерева");
+        // Корень, восемь разделов и порядок модулей в двух темах.
+        assert_eq!(written.len(), 20);
+        for path in &written {
+            assert!(
+                std::fs::metadata(path).is_ok_and(|meta| meta.len() > 0),
+                "пустой снимок: {path:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

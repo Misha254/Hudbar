@@ -268,7 +268,6 @@ impl App {
                     "DND" => crate::hud::actions::dnd_toggle(),
                     "Звук" => crate::hud::actions::vol_mute_toggle(&self.shared),
                     "Микрофон" => crate::hud::actions::mic_mute_toggle(&self.shared),
-                    "Настройки HUD" => crate::hud::actions::spawn("hud-settings"),
                     "Обои" => crate::hud::actions::spawn("wall.sh"),
                     "Питание" => crate::hud::actions::spawn("powermenu.sh"),
                     "Блокировка" => crate::hud::actions::spawn("dynalock.sh"),

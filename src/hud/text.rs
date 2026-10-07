@@ -11,6 +11,8 @@
 //! блока совпал с центром полосы. Поэтому подпись не может «уехать» ни от
 //! переключателя, ни от рамки.
 
+use std::collections::HashMap;
+
 use super::palette;
 use super::settings_ui::Rect;
 use cosmic_text::{
@@ -21,6 +23,8 @@ use cosmic_text::{
 /// считается в физических пикселях, а геометрия — в логических, и перевод
 /// делается только здесь.
 pub const SCALE: f32 = 2.0;
+/// Верхняя граница shape-кэша; при переполнении формы сбрасываются целиком.
+pub const SHAPED_CACHE_LIMIT: usize = 512;
 
 /// Горизонтальное выравнивание текста внутри отведённой полосы.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,6 +35,7 @@ pub enum Align {
 }
 
 /// Измеренный блок текста в логических пикселях.
+#[derive(Clone)]
 pub struct TextBox {
     pub width: f32,
     /// Верх залитых пикселей относительно базовой линии (обычно отрицателен).
@@ -39,11 +44,14 @@ pub struct TextBox {
     pub ink_bottom: f32,
 }
 
+type ShapedText = (TextBox, Vec<(CacheKey, i32, i32)>);
+
 /// Владеет шрифтом и кэшем раскладки; сам измеряет и рисует текст.
 pub struct TextPainter {
     font_system: FontSystem,
     swash: SwashCache,
     font: String,
+    shaped: HashMap<(String, u32), ShapedText>,
 }
 
 impl TextPainter {
@@ -52,17 +60,23 @@ impl TextPainter {
             font_system: FontSystem::new(),
             swash: SwashCache::new(),
             font: font.to_string(),
+            shaped: HashMap::new(),
         }
     }
 
     pub fn set_font(&mut self, font: &str) {
         self.font = font.to_string();
+        self.shaped.clear();
     }
 
     /// Раскладывает текст и измеряет реальные границы глифей относительно
     /// базовой линии. Метрики шрифта не участвуют в вычислении центра: берутся
     /// только те пиксели, которые действительно будут нарисованы.
-    fn shape(&mut self, text: &str, size: f32) -> (TextBox, Vec<(CacheKey, i32, i32)>) {
+    fn shape(&mut self, text: &str, size: f32) -> ShapedText {
+        let key = (text.to_string(), size.to_bits());
+        if let Some(cached) = self.shaped.get(&key) {
+            return cached.clone();
+        }
         let metrics = Metrics::new(size * SCALE, size * SCALE);
         let mut buffer = Buffer::new_empty(metrics);
         let attrs = Attrs::new().family(Family::Name(&self.font));
@@ -109,7 +123,12 @@ impl TextPainter {
                 ink_bottom: size * 0.2,
             }
         };
-        (measured, glyphs)
+        let result = (measured, glyphs);
+        if self.shaped.len() >= SHAPED_CACHE_LIMIT {
+            self.shaped.clear();
+        }
+        self.shaped.insert(key, result.clone());
+        result
     }
 
     pub fn text_width(&mut self, text: &str, size: f32) -> f32 {

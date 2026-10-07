@@ -82,6 +82,8 @@ fn main() {
         popup: None,
         grab: None,
         tooltip: None,
+        osd: None,
+        osd_detector: hud::osd::OsdDetector::new(),
         popup_t: 0.0,
         popup_target: 0.0,
         last_tick: std::time::Instant::now(),
@@ -156,10 +158,27 @@ fn main() {
                 app.hover_anim = None;
             }
         }
+        // OSD сверяется каждый тик: окно живёт по своему сроку и не связано с
+        // обновлениями панели, поэтому пока оно живо, ждать приходится недолго.
+        app.sync_osd(&qh);
+        let osd_alive = app.osd_alive();
+        if osd_alive {
+            app.shared.dirty.store(true, Ordering::Relaxed);
+        }
+
         let animating = (app.popup_t - app.popup_target).abs() > 0.001
             || app.hover_anim.is_some_and(|(h, t)| {
                 (t - if app.bar_hover == Some(h) { 1.0 } else { 0.0 }).abs() > 0.001
             });
+        // Окно OSD не анимируется, поэтому ему хватает редкого тика: 50 мс
+        // добавляет задержку скрытия, которой на глаз не видно.
+        let timeout = if animating {
+            16u16
+        } else if osd_alive {
+            50
+        } else {
+            500
+        };
 
         if let Some(guard) = event_queue.prepare_read() {
             let mut fds = vec![nix::poll::PollFd::new(
@@ -170,7 +189,7 @@ fn main() {
                 conn.as_fd(),
                 nix::poll::PollFlags::POLLIN,
             ));
-            let _ = nix::poll::poll(&mut fds, if animating { 16u16 } else { 500u16 });
+            let _ = nix::poll::poll(&mut fds, timeout);
 
             let pipe_ready = fds[0]
                 .revents()

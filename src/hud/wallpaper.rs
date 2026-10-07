@@ -9,6 +9,79 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+// Модель выбора обоев. Файл подключается в несколько бинарников через
+// `#[path]`, а Rust ищет такие подмодули рядом с самим файлом, а не в
+// одноимённой папке — поэтому пути указываем явно.
+#[path = "wallpaper/cache.rs"]
+pub mod cache;
+#[path = "wallpaper/grid.rs"]
+pub mod grid;
+#[path = "wallpaper/imginfo.rs"]
+pub mod imginfo;
+#[path = "wallpaper/input.rs"]
+pub mod input;
+#[path = "wallpaper/layout.rs"]
+pub mod layout;
+#[path = "wallpaper/scan.rs"]
+pub mod scan;
+#[path = "wallpaper/state.rs"]
+pub mod state;
+#[path = "wallpaper/swatches.rs"]
+pub mod swatches;
+#[path = "wallpaper/thumb.rs"]
+pub mod thumb;
+#[path = "wallpaper/view.rs"]
+pub mod view;
+
+// Модули `hud` живут по двум путям: в бинарниках это плоские `mod` у корня,
+// в `hudbar` — вложенные в `hud`. Подмодули модели обращаются к ним через
+// `super::`, поэтому реэкспорт повторяет то, что делает `menu/mod.rs`.
+#[allow(unused_imports)]
+pub(crate) use super::{
+    bind_data, log, palette, settings, settings_icons, settings_ui, settings_view, text, ui_tokens,
+};
+
+/// Подписи окна выбора обоев. Лежат здесь, а не в `menu`: окно обоев
+/// подключает `wallpaper.rs` без `menu`, а словарь должен быть один.
+pub mod strings {
+    /// Крошка-раздел окна обоев.
+    pub const WALLPAPERS: &str = "Обои";
+    pub const WALLPAPERS_EN: &str = "Wallpapers";
+    /// Заголовок полосы схем.
+    pub const SCHEME_MATUGEN: &str = "Схема matugen";
+    pub const SCHEME_MATUGEN_EN: &str = "matugen scheme";
+    /// Подсказки подвала: четыре позиции, применение, зона, выход.
+    pub const HINT_ARROWS: &str = "↑↓←→ ВЫБОР";
+    pub const HINT_ARROWS_EN: &str = "↑↓←→ SELECT";
+    pub const HINT_APPLY: &str = "ENTER ПРИМЕНИТЬ";
+    pub const HINT_APPLY_EN: &str = "ENTER APPLY";
+    pub const HINT_ZONE: &str = "TAB ЗОНА";
+    pub const HINT_ZONE_EN: &str = "TAB ZONE";
+    pub const HINT_CLOSE: &str = "ESC ЗАКРЫТЬ";
+    pub const HINT_CLOSE_EN: &str = "ESC CLOSE";
+    /// Пустой результат.
+    pub const NOTHING_FOUND: &str = "Ничего не найдено";
+    pub const NOTHING_FOUND_EN: &str = "Nothing found";
+    /// Поле поиска.
+    pub const SEARCH_PLACEHOLDER: &str = "Поиск…";
+    pub const SEARCH_PLACEHOLDER_EN: &str = "Search…";
+    /// Корни крошек и разделитель между ними.
+    pub const CRUMB_ROOT: &str = "HUD";
+    pub const CRUMB: &str = "›";
+    /// Бейдж текущих обоев.
+    pub const BADGE_ACTIVE: &str = "ACTIVE";
+
+    /// Подсказки подвала на языке окна.
+    pub fn hints(ru: bool) -> [&'static str; 4] {
+        if ru {
+            [HINT_ARROWS, HINT_APPLY, HINT_ZONE, HINT_CLOSE]
+        } else {
+            [HINT_ARROWS_EN, HINT_APPLY_EN, HINT_ZONE_EN, HINT_CLOSE_EN]
+        }
+    }
+}
 
 /// Форматы, которые окно считает обоями. В `fd` внутри `wall.sh` есть ещё
 /// `gif`, но окно показывает только четыре формата: анимация фоном не
@@ -71,6 +144,44 @@ pub fn list() -> Vec<String> {
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect()
+}
+
+/// Применяет обои через `wall.sh --set` и ждёт результат. Общий путь для
+/// окна настроек и меню: оба вызывают одно и то же, а не держат каждый
+/// свою копию запуска скрипта. `wall.sh` пишет причину в stderr — она и
+/// возвращается, а не код выхода.
+pub fn apply(file: &str, scheme: &str) -> Result<(), String> {
+    let output = Command::new(home().join(".local/bin/wall.sh"))
+        .arg("--set")
+        .arg(file)
+        .arg(scheme)
+        .output()
+        .map_err(|error| format!("wall.sh не запустился: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let reason = String::from_utf8_lossy(&output.stderr);
+    let reason = reason
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("неизвестная ошибка")
+        .to_string();
+    Err(format!(
+        "{reason} (код {})",
+        output.status.code().unwrap_or(-1)
+    ))
+}
+
+/// Применяет обои, не дожидаясь: для меню, которое не может висеть на
+/// пересчёте matugen. Ошибка уходит в журнал, окно уже закрыто.
+pub fn apply_detached(file: &str, scheme: &str) {
+    let (file, scheme) = (file.to_string(), scheme.to_string());
+    std::thread::spawn(move || {
+        if let Err(error) = apply(&file, &scheme) {
+            super::log::warn(format!("обои не применились: {error}"));
+        }
+    });
 }
 
 #[cfg(test)]

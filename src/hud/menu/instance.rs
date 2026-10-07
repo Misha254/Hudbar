@@ -5,9 +5,12 @@
 //! нет. Значит единственный способ узнать, открыто ли меню, — pid-файл.
 //!
 //! Файл может остаться протухшим: процесс убили сигналом, который не ловится,
-//! или машина перезагрузилась. Поэтому проверка двухчастная: сначала сам pid,
-//! потом `/proc/<pid>/exe`. Файл с живым pid означает «закрыть и выйти»,
-//! протухший — «перезаписать и работать».
+//! или машина перезагрузилась. Поэтому проверка трёхчастная: сам pid, затем
+//! `/proc/<pid>/exe` и — главное — совпадение этого `exe` с нашим бинарником.
+//! Одной проверки «процесс жив» мало: pid после перезагрузки или долгого
+//! простоя достаётся уже чужому процессу, и меню убило бы его вместо того,
+//! чтобы просто открыться. Совпадение `exe` означает «закрыть и выйти»,
+//! несовпадение — «занять место и работать».
 
 use std::path::{Path, PathBuf};
 
@@ -16,11 +19,18 @@ pub const PID_FILE: &str = "hudbar-menu.pid";
 
 /// Путь к pid-файлу: `$XDG_RUNTIME_DIR`, иначе `/tmp`.
 pub fn pid_path() -> PathBuf {
+    pid_path_for(PID_FILE)
+}
+
+/// Путь к произвольному pid-файлу. Имя бинарника задаётся вызывающим:
+/// общий `instance.rs` обслуживает и меню, и wallpaper-picker, и у каждого
+/// свой файл, чтобы они не затирали друг друга.
+pub fn pid_path_for(name: &str) -> PathBuf {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    dir.join(PID_FILE)
+    dir.join(name)
 }
 
 /// Что делать при старте, увидев pid-файл.
@@ -34,13 +44,17 @@ pub enum Startup {
     Fresh,
 }
 
-/// Решение по содержимому файла и живости процесса из `/proc`.
-pub fn decide(stored: Option<i32>, proc_root: &Path) -> Startup {
-    match stored {
-        None => Startup::Fresh,
-        Some(pid) if alive(pid, proc_root) => Startup::CloseRunning(pid),
-        Some(_) => Startup::TakeOver,
+/// Решение по содержимому файла и проверке процесса из `/proc`.
+pub fn decide(stored: Option<i32>, proc_root: &Path, our_exe: &Path) -> Startup {
+    let Some(pid) = stored else {
+        return Startup::Fresh;
+    };
+    if pid > 0 && is_same_exe(pid, proc_root, our_exe) {
+        return Startup::CloseRunning(pid);
     }
+    // Файл есть, но это не наше меню: значит pid достался чужому процессу.
+    // Место занимаем, ничего не убивая.
+    Startup::TakeOver
 }
 
 /// Читает pid из файла. Мусор в файле считается отсутствием: запись делает
@@ -50,11 +64,43 @@ pub fn read_pid(path: &Path) -> Option<i32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-/// Жив ли процесс. Проверяется не только цифра в файле, но и то, что
-/// `/proc/<pid>/exe` действительно существует: pid после перезагрузки
-/// принадлежит уже другому процессу.
+/// Жив ли процесс: `/proc/<pid>/exe` существует. Проверка существования, а не
+/// принадлежности: кто именно запущен, решает [`is_same_exe`].
 pub fn alive(pid: i32, proc_root: &Path) -> bool {
     pid > 0 && proc_root.join(pid.to_string()).join("exe").exists()
+}
+
+/// Указывает ли `/proc/<pid>/exe` на тот же файл, что и наш.
+///
+/// Ключевая проверка перед `SIGTERM`: без неё переиспользованный pid приводил
+/// к тому, что меню убивало посторонний процесс и само выходило — снаружи это
+/// выглядело как «`KP_4` не работает».
+pub fn is_same_exe(pid: i32, proc_root: &Path, our_exe: &Path) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    let Ok(target) = std::fs::read_link(proc_root.join(pid.to_string()).join("exe")) else {
+        return false;
+    };
+    same_file(&target, our_exe)
+}
+
+/// Сравнение путей с учётом двух особенностей `/proc`:
+/// * ссылка бывает «путь (deleted)», если бинарник заменили, пока он работал;
+/// * путь может быть относительным — приводим к абсолютному через `canonicalize`.
+fn same_file(target: &Path, our_exe: &Path) -> bool {
+    let target = target.to_string_lossy();
+    let target = target.strip_suffix(" (deleted)").unwrap_or(&target);
+    if Path::new(target) == our_exe {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(target),
+        std::fs::canonicalize(our_exe),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 /// Жив ли процесс в системном `/proc`.
@@ -64,7 +110,14 @@ pub fn alive_here(pid: i32) -> bool {
 
 /// Полный сценарий старта: прочитать файл, проверить процесс, решить.
 pub fn startup(proc_root: &Path) -> Startup {
-    decide(read_pid(&pid_path()), proc_root)
+    startup_for(PID_FILE, proc_root)
+}
+
+/// Сценарий старта для произвольного имени pid-файла: как `startup`, но
+/// ориентируется на переданный вместо `PID_FILE`.
+pub fn startup_for(name: &str, proc_root: &Path) -> Startup {
+    let our_exe = std::env::current_exe().unwrap_or_default();
+    decide(read_pid(&pid_path_for(name)), proc_root, &our_exe)
 }
 
 /// Записывает свой pid. Запись атомарная: временный файл рядом и переименование,
@@ -116,76 +169,142 @@ mod tests {
         }
     }
 
-    /// Поддельный `/proc`: каталог `<pid>/exe` существует только для живых.
+    /// Поддельный `/proc`: у каждого pid настоящая ссылка `exe`, потому что
+    /// проверка принадлежности читает именно её, а не наличие каталога.
     /// Возвращается вместе с хранителем: если отдать только путь, временный
     /// каталог удалится до первой же проверки.
-    fn fake_proc(alive: &[i32]) -> TempDir {
-        let root = TempDir::new("proc");
+    fn fake_proc(root: &TempDir, our_exe: &Path, alive: &[i32], foreign: &[i32]) {
+        std::fs::create_dir_all(&root.0).expect("proc root");
         for pid in alive {
-            std::fs::create_dir_all(root.0.join(pid.to_string()).join("exe")).expect("proc pid");
+            let dir = root.0.join(pid.to_string());
+            std::fs::create_dir_all(&dir).expect("proc pid");
+            std::os::unix::fs::symlink(our_exe, dir.join("exe")).expect("link to our exe");
         }
-        std::fs::write(root.0.join("self"), "x").expect("marker");
-        root
+        for pid in foreign {
+            let dir = root.0.join(pid.to_string());
+            std::fs::create_dir_all(&dir).expect("proc pid");
+            std::os::unix::fs::symlink("/usr/bin/kitty", dir.join("exe")).expect("foreign link");
+        }
+    }
+
+    /// Наш бинарник: настоящий файл, на который будут указывать ссылки.
+    fn our_binary(dir: &TempDir) -> PathBuf {
+        let path = dir.join("hud-menu-rs");
+        std::fs::write(&path, b"binary").expect("binary");
+        std::fs::canonicalize(&path).expect("canonical binary")
     }
 
     #[test]
     fn fresh_start_needs_no_file() {
-        let proc = fake_proc(&[111]);
-        assert_eq!(decide(None, &proc.0), Startup::Fresh);
+        let proc = TempDir::new("proc-fresh");
+        let our = our_binary(&proc);
+        fake_proc(&proc, &our, &[111], &[]);
+        assert_eq!(decide(None, &proc.0, &our), Startup::Fresh);
     }
 
     #[test]
     fn running_menu_means_close_and_exit() {
-        let proc = fake_proc(&[4242]);
-        assert_eq!(decide(Some(4242), &proc.0), Startup::CloseRunning(4242));
+        let proc = TempDir::new("proc-running");
+        let our = our_binary(&proc);
+        fake_proc(&proc, &our, &[4242], &[]);
+        assert_eq!(
+            decide(Some(4242), &proc.0, &our),
+            Startup::CloseRunning(4242)
+        );
     }
 
-    /// Протухший pid: файл лежит, процесса нет. Меню должно занять место, а
-    /// не закрыться и не остаться вакантным.
+    /// Регрессия: pid достался чужому процессу. Меню обязано занять место, а
+    /// не послать `SIGTERM` постороннему и выйти — снаружи это выглядело бы
+    /// как «бинд не работает».
+    #[test]
+    fn recycled_pid_is_taken_over_instead_of_killed() {
+        let proc = TempDir::new("proc-recycled");
+        let our = our_binary(&proc);
+        fake_proc(&proc, &our, &[], &[5150]);
+        assert!(alive(5150, &proc.0), "процесс жив, но это не наше меню");
+        assert_eq!(
+            decide(Some(5150), &proc.0, &our),
+            Startup::TakeOver,
+            "чужой процесс нельзя убивать"
+        );
+        assert!(
+            !is_same_exe(5150, &proc.0, &our),
+            "чужой exe не должен считаться нашим"
+        );
+    }
+
+    /// Протухший pid: файл лежит, процесса нет. Меню занимает место.
     #[test]
     fn stale_pid_is_taken_over() {
-        let proc = fake_proc(&[4242]);
-        assert_eq!(decide(Some(99), &proc.0), Startup::TakeOver);
+        let proc = TempDir::new("proc-stale");
+        let our = our_binary(&proc);
+        fake_proc(&proc, &our, &[4242], &[]);
+        assert_eq!(decide(Some(99), &proc.0, &our), Startup::TakeOver);
         assert_eq!(
-            decide(Some(4242), &proc.0),
+            decide(Some(4242), &proc.0, &our),
             Startup::CloseRunning(4242),
-            "тот же pid, но файл протух — работаем сами"
+            "тот же pid и тот же бинарник — работаем как переключатель"
         );
-        assert_eq!(decide(Some(0), &proc.0), Startup::TakeOver);
+        assert_eq!(decide(Some(0), &proc.0, &our), Startup::TakeOver);
+        assert_eq!(decide(Some(-7), &proc.0, &our), Startup::TakeOver);
     }
 
     #[test]
     fn alive_looks_at_proc_not_at_the_number() {
-        let proc = fake_proc(&[7]);
+        let proc = TempDir::new("proc-alive");
+        let our = our_binary(&proc);
+        fake_proc(&proc, &our, &[7], &[]);
         assert!(alive(7, &proc.0));
         assert!(!alive(8, &proc.0));
         assert!(!alive(0, &proc.0), "нулевой pid не бывает живым");
         assert!(!alive(-1, &proc.0), "отрицательный pid тоже");
     }
 
+    /// Бинарник заменили, пока меню работает: `/proc` показывает путь с
+    /// «(deleted)», и это всё ещё наш процесс.
+    #[test]
+    fn replaced_binary_still_counts_as_ours() {
+        let proc = TempDir::new("proc-deleted");
+        let our = our_binary(&proc);
+        let dir = proc.0.join("77");
+        std::fs::create_dir_all(&dir).expect("proc pid");
+        let deleted = format!("{} (deleted)", our.display());
+        std::os::unix::fs::symlink(&deleted, dir.join("exe")).expect("deleted link");
+        assert!(is_same_exe(77, &proc.0, &our));
+    }
+
     #[test]
     fn startup_decides_from_the_real_file() {
         let dir = TempDir::new("startup");
         let file = dir.join(PID_FILE);
-        let proc = fake_proc(&[31337]);
-        assert_eq!(startup_from(&file, &proc.0), Startup::Fresh);
+        let proc = TempDir::new("proc-startup");
+        let our = our_binary(&proc);
+        fake_proc(&proc, &our, &[31337], &[777]);
+        assert_eq!(startup_from(&file, &proc.0, &our), Startup::Fresh);
 
         store(&file, 31337).expect("store");
         assert_eq!(
-            startup_from(&file, &proc.0),
+            startup_from(&file, &proc.0, &our),
             Startup::CloseRunning(31337)
         );
 
         store(&file, 999).expect("store");
         assert_eq!(
-            startup_from(&file, &proc.0),
+            startup_from(&file, &proc.0, &our),
             Startup::TakeOver,
             "протухший pid не мешает старту: файл перезаписывается"
         );
+
+        store(&file, 777).expect("store");
+        assert_eq!(
+            startup_from(&file, &proc.0, &our),
+            Startup::TakeOver,
+            "переиспользованный pid: занимаем место, чужой процесс цел"
+        );
     }
 
-    fn startup_from(file: &Path, proc: &Path) -> Startup {
-        decide(read_pid(file), proc)
+    fn startup_from(file: &Path, proc: &Path, our: &Path) -> Startup {
+        decide(read_pid(file), proc, our)
     }
 
     #[test]
@@ -235,7 +354,10 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .filter(|name| name.ends_with(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "остался временный файл: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "остался временный файл: {leftovers:?}"
+        );
     }
 
     #[test]

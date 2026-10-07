@@ -31,6 +31,7 @@ use super::text::TextRenderer;
 
 mod bar;
 mod input;
+mod osd;
 mod panels;
 mod surfaces;
 
@@ -65,6 +66,8 @@ pub struct App {
     pub popup: Option<Popup>,
     pub grab: Option<Grab>,
     pub tooltip: Option<Tooltip>,
+    pub osd: Option<Osd>,
+    pub osd_detector: crate::hud::osd::OsdDetector,
     pub popup_t: f32,
     pub popup_target: f32,
     pub last_tick: std::time::Instant,

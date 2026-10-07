@@ -37,33 +37,6 @@ pub(super) fn battery() -> (Option<u8>, bool, bool) {
     (pct, charging, ac)
 }
 
-pub(super) fn power_state() -> Option<(bool, bool)> {
-    let mut found = false;
-    let mut charging = false;
-    let mut ac = false;
-    let Ok(rd) = fs::read_dir("/sys/class/power_supply") else {
-        return None;
-    };
-
-    for e in rd.flatten() {
-        let p = e.path();
-        match read_trim(&p.join("type")).as_str() {
-            "Battery" => {
-                found = true;
-                let status = read_trim(&p.join("status"));
-                charging |= status == "Charging";
-            }
-            "Mains" => {
-                found = true;
-                ac |= read_trim(&p.join("online")) == "1";
-            }
-            _ => {}
-        }
-    }
-
-    found.then_some((charging, ac))
-}
-
 pub(super) fn bat_time_now() -> Option<String> {
     let rd = fs::read_dir("/sys/class/power_supply").ok()?;
     for e in rd.flatten() {

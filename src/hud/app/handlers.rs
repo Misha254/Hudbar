@@ -393,6 +393,20 @@ impl LayerShellHandler for App {
             }
             self.shared.dirty.store(true, Ordering::Relaxed);
         }
+        if let Some(osd) = self.osd.as_mut()
+            && layer.wl_surface() == osd.layer.wl_surface()
+        {
+            osd.configured = true;
+            // Ширина приходит от композитора: поверхность растянута по выводу,
+            // и карточка центрируется от фактической ширины.
+            if configure.new_size.0 != 0 {
+                osd.size.0 = configure.new_size.0;
+            }
+            if configure.new_size.1 != 0 {
+                osd.size.1 = configure.new_size.1;
+            }
+            self.shared.dirty.store(true, Ordering::Relaxed);
+        }
     }
 }
 

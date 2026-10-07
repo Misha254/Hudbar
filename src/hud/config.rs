@@ -7,8 +7,8 @@
 //! несохранённых изменений: значение в модели всегда совпадает с файлом.
 
 use super::settings::{
-    HEIGHT_MAX, HEIGHT_MIN, Language, MODULE_KEYS, Module, NotificationPosition, Settings, Zone,
-    clamp,
+    HEIGHT_MAX, HEIGHT_MIN, Language, MODULE_KEYS, Module, NotificationPosition,
+    OSD_DURATION_DEFAULT_MS, Settings, VPN_CONTROLLER_DEFAULT, VPN_TIMEOUT_DEFAULT_MS, Zone, clamp,
 };
 
 /// Высота панели в пикселях.
@@ -30,6 +30,13 @@ pub struct Config {
     pub position: NotificationPosition,
     /// Показывать ли шестерёнку Control Center на панели.
     pub control_button: bool,
+    /// Своё окно громкости/микрофона вместо уведомления dunst.
+    pub osd: bool,
+    pub osd_duration_ms: u32,
+    /// Адрес и таймаут контроллера VPN живут в самой панели: окно настроек их
+    /// не правит, поэтому модель хранит только значения по умолчанию.
+    pub vpn_controller: String,
+    pub vpn_timeout_ms: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +162,10 @@ impl Config {
             font_size: self.font_size,
             line_height: self.line_height,
             position: self.position,
+            osd: self.osd,
+            osd_duration_ms: self.osd_duration_ms,
+            vpn_controller: super::settings::VPN_CONTROLLER_DEFAULT.to_string(),
+            vpn_timeout_ms: super::settings::VPN_TIMEOUT_DEFAULT_MS,
         }
     }
 }
@@ -177,6 +188,10 @@ impl Default for Config {
             line_height: 15,
             position: NotificationPosition::TopRight,
             control_button: true,
+            osd: true,
+            osd_duration_ms: OSD_DURATION_DEFAULT_MS,
+            vpn_controller: VPN_CONTROLLER_DEFAULT.to_string(),
+            vpn_timeout_ms: VPN_TIMEOUT_DEFAULT_MS,
         }
     }
 }
@@ -193,6 +208,8 @@ impl From<&Settings> for Config {
             font_size: settings.font_size(),
             line_height: settings.line_height(),
             position: settings.position,
+            osd: settings.osd,
+            osd_duration_ms: settings.osd_duration_ms,
             ..Config::default()
         };
         for key in MODULE_KEYS {

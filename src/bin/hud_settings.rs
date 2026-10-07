@@ -1,3 +1,7 @@
+//! LEGACY: retained for compatibility and release builds, but no longer
+//! launched by the current menu or panel. Remove after the Wi-Fi/audio/BT
+//! stage is complete and those routes are confirmed in the new menu.
+
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::process::Command;
@@ -45,6 +49,9 @@ mod config_io;
 #[allow(dead_code)]
 #[path = "../hud/dunst.rs"]
 mod dunst;
+#[path = "../hud/log.rs"]
+#[allow(dead_code)]
+mod log;
 #[path = "../hud/palette.rs"]
 mod palette;
 #[path = "../hud/settings.rs"]
@@ -699,29 +706,7 @@ impl SettingsApp {
         let scheme = settings_ui::SCHEMES[self.wallpaper.scheme].to_string();
         self.status = "Обои применяются…".to_string();
         self.dirty = true;
-        self.start_job("Обои", move || {
-            let output = Command::new(home().join(".local/bin/wall.sh"))
-                .arg("--set")
-                .arg(&file)
-                .arg(&scheme)
-                .output()
-                .map_err(|error| error.to_string())?;
-            if output.status.success() {
-                return Ok(());
-            }
-            // wall.sh пишет причину в stderr — показываем её, а не код.
-            let reason = String::from_utf8_lossy(&output.stderr);
-            let reason = reason
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or("неизвестная ошибка")
-                .to_string();
-            Err(format!(
-                "{reason} (код {})",
-                output.status.code().unwrap_or(-1)
-            ))
-        });
+        self.start_job("Обои", move || wallpaper::apply(&file, &scheme));
     }
 
     /// Страница вверх или вниз: что именно листается, решает активный раздел.

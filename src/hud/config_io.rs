@@ -130,6 +130,10 @@ pub fn merge(config: &Config, base: Option<&Value>) -> Value {
         );
     }
 
+    let osd = section(&mut root, "osd");
+    osd.insert("enabled".into(), Value::Bool(config.osd));
+    osd.insert("duration_ms".into(), Value::from(config.osd_duration_ms));
+
     let notes = section(&mut root, "notifications");
     notes.insert("font_size".into(), Value::from(config.font_size));
     notes.insert("line_height".into(), Value::from(config.line_height));
@@ -164,6 +168,11 @@ pub enum Patch {
         line_height: Option<u32>,
         position: Option<NotificationPosition>,
     },
+    /// `osd.enabled` и `osd.duration_ms` — окно громкости/микрофона.
+    Osd {
+        enabled: Option<bool>,
+        duration_ms: Option<u32>,
+    },
 }
 
 impl Patch {
@@ -184,6 +193,7 @@ impl Patch {
             Patch::Language(language) => format!("язык: {}", language.key()),
             Patch::Theme(theme) => format!("тема: {}", theme.key()),
             Patch::Notifications { .. } => "уведомления".to_string(),
+            Patch::Osd { .. } => "OSD".to_string(),
         }
     }
 
@@ -273,6 +283,28 @@ impl Patch {
                     let value = Value::String(origin.key().to_string());
                     if notes.get("position") != Some(&value) {
                         notes.insert("position".to_string(), value);
+                        changed = true;
+                    }
+                }
+                changed
+            }
+            Patch::Osd {
+                enabled,
+                duration_ms,
+            } => {
+                let mut changed = false;
+                let osd = section(root, "osd");
+                if let Some(on) = enabled {
+                    let value = Value::Bool(*on);
+                    if osd.get("enabled") != Some(&value) {
+                        osd.insert("enabled".to_string(), value);
+                        changed = true;
+                    }
+                }
+                if let Some(duration) = duration_ms {
+                    let value = Value::from(*duration);
+                    if osd.get("duration_ms") != Some(&value) {
+                        osd.insert("duration_ms".to_string(), value);
                         changed = true;
                     }
                 }
@@ -568,6 +600,20 @@ mod tests {
     }
 
     #[test]
+    fn merge_writes_the_osd_section() {
+        let config = Config {
+            osd: false,
+            osd_duration_ms: 2500,
+            ..Default::default()
+        };
+
+        let merged = merge(&config, None);
+
+        assert_eq!(merged["osd"]["enabled"], false);
+        assert_eq!(merged["osd"]["duration_ms"], 2500);
+    }
+
+    #[test]
     fn merge_result_parses_back_into_an_equal_config() {
         let mut config = Config::default();
         config.move_within_zone(Module::Audio, -1);
@@ -583,6 +629,89 @@ mod tests {
         assert_eq!(restored.height, 33);
         assert_eq!(restored.language, Language::En);
         assert_eq!(restored.theme, Some(Theme::Pixel));
+    }
+
+    #[test]
+    fn osd_section_survives_a_save_and_read_round_trip() {
+        let config = Config {
+            osd: false,
+            osd_duration_ms: 900,
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&merge(&config, None)).unwrap();
+
+        let restored = Config::from(&super::super::settings::parse(&text));
+
+        assert!(!restored.osd);
+        assert_eq!(restored.osd_duration_ms, 900);
+    }
+
+    #[test]
+    fn apply_patch_writes_only_the_osd_field_that_changed() {
+        let dir = temp_dir("patch-osd");
+        let path = dir.join("settings.json");
+        seed(
+            &path,
+            r#"{"language":"en","osd":{"enabled":true,"duration_ms":1600,"note":"keep"}}"#,
+        );
+
+        let changed = apply_patch_to(
+            &path,
+            &Patch::Osd {
+                enabled: Some(false),
+                duration_ms: None,
+            },
+        )
+        .unwrap();
+
+        assert!(changed);
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["osd"]["enabled"], false);
+        assert_eq!(root["osd"]["duration_ms"], 1600, "соседнее поле не тронуто");
+        assert_eq!(root["osd"]["note"], "keep", "чужой ключ в секции сохранён");
+        assert_eq!(root["language"], "en");
+    }
+
+    #[test]
+    fn apply_patch_creates_the_osd_section_when_it_is_missing() {
+        let dir = temp_dir("patch-osd-missing");
+        let path = dir.join("settings.json");
+        seed(&path, r#"{"hudbar":{"height":27}}"#);
+
+        let changed = apply_patch_to(
+            &path,
+            &Patch::Osd {
+                enabled: Some(true),
+                duration_ms: Some(1200),
+            },
+        )
+        .unwrap();
+
+        assert!(changed);
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["osd"]["enabled"], true);
+        assert_eq!(root["osd"]["duration_ms"], 1200);
+        assert_eq!(root["hudbar"]["height"], 27);
+    }
+
+    #[test]
+    fn apply_patch_reports_no_change_for_an_identical_osd_value() {
+        let dir = temp_dir("patch-osd-noop");
+        let path = dir.join("settings.json");
+        seed(&path, r#"{"osd":{"enabled":true,"duration_ms":1600}}"#);
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+
+        let changed = apply_patch_to(
+            &path,
+            &Patch::Osd {
+                enabled: Some(true),
+                duration_ms: Some(1600),
+            },
+        )
+        .unwrap();
+
+        assert!(!changed);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
     }
 
     #[test]

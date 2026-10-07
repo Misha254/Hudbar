@@ -348,6 +348,24 @@ pub struct Tooltip {
     pub text: String,
 }
 
+/// Окно громкости/микрофона. Поверхность растянута по ширине вывода, поэтому
+/// карточка внутри неё центрируется уже при отрисовке.
+pub struct Osd {
+    pub layer: smithay_client_toolkit::shell::wlr_layer::LayerSurface,
+    pub configured: bool,
+    pub size: (u32, u32),
+    pub snapshot: crate::hud::osd::OsdSnapshot,
+}
+
+pub const OSD_H: f32 = 76.0;
+pub const OSD_CARD_W: f32 = 300.0;
+pub const OSD_CARD_H: f32 = 64.0;
+pub const OSD_PAD: f32 = 12.0;
+pub const OSD_BAR_H: f32 = 8.0;
+/// Высота строки текста в карточке: нулевая в cosmic-text означает падение,
+/// поэтому она задаётся явно и больше кегля.
+pub const OSD_TEXT_LINE_H: f32 = 18.0;
+
 pub const TOOLTIP_H: f32 = 22.0;
 pub const TOOLTIP_PAD_X: f32 = 8.0;
 

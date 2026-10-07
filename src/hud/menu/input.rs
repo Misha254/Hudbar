@@ -48,6 +48,8 @@ pub enum MenuInput {
     Ignore,
     /// Сдвинуть выбор на столько строк.
     Move(isize),
+    /// `Shift+↑`/`Shift+↓` над действием «порядок модулей».
+    Nudge(isize),
     /// Прокрутить список на страницу.
     Page(isize),
     /// В начало или в конец.
@@ -138,6 +140,12 @@ pub fn translate(event: KeyEvent, query: &str) -> MenuInput {
     if event.logo {
         return MenuInput::Ignore;
     }
+    if event.shift && !event.ctrl && matches!(event.key, Key::Up | Key::Down) {
+        return MenuInput::Nudge(match event.key {
+            Key::Up => -1,
+            _ => 1,
+        });
+    }
     if event.ctrl {
         return match event.key {
             Key::Up | Key::Char('k') | Key::Char('K') | Key::Char('p') | Key::Char('P') => {
@@ -180,6 +188,33 @@ pub fn translate(event: KeyEvent, query: &str) -> MenuInput {
         }
         Key::Char(ch) => MenuInput::Type(ch),
         Key::Other => MenuInput::Ignore,
+    }
+}
+
+/// Переводит клавишу в команду модели для режима ввода секрета.
+///
+/// Отдельная таблица, а не флаг у [`translate`], потому что правила другие
+/// и противоречат обычным: `Esc` отменяет ввод, а не возвращает на уровень
+/// (и тем более не закрывает меню), `Backspace` стирает символ даже при пустом
+/// поле, стрелки и `Ctrl+J/K` не двигают выбранную сеть, а `Ctrl+U` чистит
+/// пароль. `Super` по-прежнему не доходит: это бинды niri.
+pub fn translate_secret(event: KeyEvent) -> MenuInput {
+    if event.logo {
+        return MenuInput::Ignore;
+    }
+    if event.ctrl {
+        return match event.key {
+            Key::Char('u') | Key::Char('U') => MenuInput::ClearQuery,
+            Key::Escape => MenuInput::Close,
+            _ => MenuInput::Ignore,
+        };
+    }
+    match event.key {
+        Key::Char(ch) => MenuInput::Type(ch),
+        Key::Backspace => MenuInput::Erase,
+        Key::Enter | Key::Right => MenuInput::Activate,
+        Key::Escape => MenuInput::Close,
+        _ => MenuInput::Ignore,
     }
 }
 
@@ -250,8 +285,14 @@ mod tests {
 
     #[test]
     fn ctrl_u_clears_the_query() {
-        assert_eq!(translate(ctrl(Key::Char('u')), "dnd"), MenuInput::ClearQuery);
-        assert_eq!(translate(ctrl(Key::Char('U')), "dnd"), MenuInput::ClearQuery);
+        assert_eq!(
+            translate(ctrl(Key::Char('u')), "dnd"),
+            MenuInput::ClearQuery
+        );
+        assert_eq!(
+            translate(ctrl(Key::Char('U')), "dnd"),
+            MenuInput::ClearQuery
+        );
     }
 
     #[test]
@@ -346,8 +387,125 @@ mod tests {
     #[test]
     fn direct_entry_closes_from_its_own_level() {
         assert!(escape_closes_at_root(true, 1), "прямой вход: Esc закрывает");
-        assert!(!escape_closes_at_root(true, 2), "ниже первого уровня — назад");
+        assert!(
+            !escape_closes_at_root(true, 2),
+            "ниже первого уровня — назад"
+        );
         assert!(!escape_closes_at_root(false, 1), "обычный вход: Esc назад");
         assert!(!escape_closes_at_root(false, 0));
+    }
+
+    /// В режиме пароля правила свои: `Esc` отменяет ввод, `Backspace` стирает
+    /// символ даже при пустом поле, `Ctrl+U` чистит буфер.
+    #[test]
+    fn secret_mode_maps_keys_to_the_password_buffer() {
+        assert_eq!(
+            translate_secret(press(Key::Char('щ'))),
+            MenuInput::Type('щ')
+        );
+        assert_eq!(
+            translate_secret(press(Key::Char(' '))),
+            MenuInput::Type(' ')
+        );
+        assert_eq!(
+            translate_secret(press(Key::Char('7'))),
+            MenuInput::Type('7')
+        );
+        assert_eq!(translate_secret(press(Key::Backspace)), MenuInput::Erase);
+        assert_eq!(translate_secret(press(Key::Enter)), MenuInput::Activate);
+        assert_eq!(translate_secret(press(Key::Escape)), MenuInput::Close);
+        assert_eq!(
+            translate_secret(ctrl(Key::Char('u'))),
+            MenuInput::ClearQuery
+        );
+        assert_eq!(
+            translate_secret(ctrl(Key::Char('U'))),
+            MenuInput::ClearQuery
+        );
+    }
+
+    /// Выбор сети и прокрутка во время ввода пароля не двигаются: список не
+    /// должен ездить под руками, пока печатается секрет.
+    #[test]
+    fn secret_mode_ignores_navigation() {
+        for key in [
+            Key::Up,
+            Key::Down,
+            Key::PageUp,
+            Key::PageDown,
+            Key::Home,
+            Key::End,
+        ] {
+            assert_eq!(translate_secret(press(key)), MenuInput::Ignore, "{key:?}");
+        }
+        for key in [
+            Key::Char('j'),
+            Key::Char('k'),
+            Key::Char('n'),
+            Key::Char('p'),
+        ] {
+            assert_eq!(
+                translate_secret(ctrl(key)),
+                MenuInput::Ignore,
+                "Ctrl+{key:?} не двигает выбор"
+            );
+        }
+        assert_eq!(
+            translate_secret(KeyEvent {
+                key: Key::Down,
+                shift: true,
+                ..Default::default()
+            }),
+            MenuInput::Ignore,
+            "Shift+стрелка тоже не трогает порядок модулей"
+        );
+    }
+
+    /// `Super` в режиме пароля по-прежнему не доходит до меню.
+    #[test]
+    fn secret_mode_still_ignores_super() {
+        let event = KeyEvent {
+            key: Key::Char('a'),
+            logo: true,
+            ..KeyEvent::default()
+        };
+        assert_eq!(translate_secret(event), MenuInput::Ignore);
+    }
+
+    #[test]
+    fn shift_arrows_nudge_the_module_order() {
+        assert_eq!(
+            translate(
+                KeyEvent {
+                    key: Key::Up,
+                    shift: true,
+                    ..Default::default()
+                },
+                ""
+            ),
+            MenuInput::Nudge(-1)
+        );
+        assert_eq!(
+            translate(
+                KeyEvent {
+                    key: Key::Down,
+                    shift: true,
+                    ..Default::default()
+                },
+                ""
+            ),
+            MenuInput::Nudge(1)
+        );
+        assert_eq!(
+            translate(
+                KeyEvent {
+                    key: Key::Up,
+                    shift: false,
+                    ..Default::default()
+                },
+                ""
+            ),
+            MenuInput::Move(-1)
+        );
     }
 }

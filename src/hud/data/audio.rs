@@ -18,21 +18,6 @@ fn short_audio_label(desc: &str) -> String {
     }
     s.to_string()
 }
-pub(crate) fn wpctl_volume(node: &str) -> Option<(u8, bool)> {
-    let out = crate::hud::log::output("wpctl", &["get-volume", node])?;
-    parse_wpctl_volume(&String::from_utf8_lossy(&out.stdout))
-}
-
-pub(super) fn parse_wpctl_volume(text: &str) -> Option<(u8, bool)> {
-    let val = text
-        .split_whitespace()
-        .find_map(|part| part.parse::<f32>().ok())?;
-    Some((
-        (val * 100.0).round().clamp(0.0, 100.0) as u8,
-        text.split_whitespace()
-            .any(|part| part.eq_ignore_ascii_case("[MUTED]")),
-    ))
-}
 fn pactl_json_list(kind: &str) -> Option<Vec<serde_json::Value>> {
     crate::hud::log::output("pactl", &["-f", "json", "list", kind])
         .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())

@@ -29,7 +29,6 @@ impl App {
                 level_label(sys.mic, sys.mic_muted),
                 !sys.mic_muted,
             ),
-            ("Настройки HUD".to_string(), "открыть".to_string(), false),
             ("Обои".to_string(), "выбрать".to_string(), false),
             ("Питание".to_string(), "меню".to_string(), false),
             ("Блокировка".to_string(), "запустить".to_string(), false),

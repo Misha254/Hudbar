@@ -6,24 +6,26 @@ use std::time::Duration;
 use nix::fcntl::OFlag;
 
 mod audio;
+mod audio_watch;
 mod network;
+pub mod oneshot;
 mod system;
 mod weather;
 mod workspaces;
 
-pub(crate) use audio::wpctl_volume;
 pub use audio::{audio_set_default, refresh_audio};
 pub(crate) use network::{bt_now, set_bt_list};
 pub use network::{
     bt_power, refresh_bt, refresh_wifi, wifi_connect, wifi_connect_pass, wifi_disconnect,
     wifi_radio,
 };
+pub(crate) use oneshot::{power_state, wpctl_volume};
 pub use weather::refresh_weather;
 
 use network::{wifi, wifi_radio_on};
 use system::{
     bat_time_now, battery, bt_on, cpu_pct, cpu_temp, dnd_paused, mem_pct, mem_used_gib,
-    power_state, recorder_on, webcam_active,
+    recorder_on, webcam_active,
 };
 use weather::weather_loop;
 use workspaces::niri_loop;
@@ -159,6 +161,7 @@ pub fn wake_pipe() -> (OwnedFd, OwnedFd) {
 pub fn spawn(shared: Arc<Shared>) {
     let s = shared.clone();
     std::thread::spawn(move || sys_loop(s));
+    audio_watch::spawn(shared.clone());
     let s = shared.clone();
     std::thread::spawn(move || niri_loop(s));
     let s = shared.clone();
@@ -306,8 +309,8 @@ fn sys_loop(shared: Arc<Shared>) {
 }
 #[cfg(test)]
 mod tests {
-    use super::audio::parse_wpctl_volume;
     use super::network::{parse_bt_devices, parse_wifi_list};
+    use super::oneshot::parse_wpctl_volume;
     use super::weather::parse_weather;
     use super::workspaces::parse_ws;
     use super::{BATTERY_EVENT_DEBOUNCE_TICKS, BtDev, WifiNet, battery_refresh_due};

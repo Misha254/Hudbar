@@ -27,6 +27,9 @@ pub const BATTERY: &str = "\u{f240}";
 pub const SYSTEM: &str = "\u{f4bc}";
 pub const SOUND: &str = "\u{f028}";
 pub const NETWORK: &str = "\u{f1eb}";
+/// Bluetooth: тот же глиф, что в панели у модуля Bluetooth (у панели его
+/// пока нет, поэтому константа живёт здесь, рядом со звуком и сетью).
+pub const BLUETOOTH: &str = "\u{f293}";
 pub const DND: &str = "\u{f133}";
 
 /// Разделы меню: приложения, стиль, захват, бинды, «о программе» и подписи
@@ -61,6 +64,10 @@ pub const DOT: &str = "\u{f192}";
 
 /// Служебные: галочка, стрелки перестановки и настоящий минус U+2212.
 pub const CHECK: &str = "\u{f00c}";
+/// Папка и «всё сразу» для колонки каталогов обоев. Оба глифа проверены
+/// по cmap шрифта: отсутствие дало бы «тофу» вместо значка.
+pub const FOLDER: &str = "\u{f07b}";
+pub const TH_LARGE: &str = "\u{f009}";
 pub const MINUS: &str = "\u{2212}";
 pub const PLUS: &str = "+";
 pub const UP: &str = "\u{f077}";
@@ -68,7 +75,7 @@ pub const DOWN: &str = "\u{f078}";
 
 /// Все иконки галереи: подпись, глиф и смысл. Галерея рисует их в порядке
 /// объявления, а тест сверяет, что список не пустеет и глифы уникальны.
-pub const ALL: [(&str, &str); 20] = [
+pub const ALL: [(&str, &str); 22] = [
     ("Обзор", OVERVIEW),
     ("Панель", PANEL_MONITOR),
     ("Внешний вид", APPEARANCE),
@@ -89,6 +96,8 @@ pub const ALL: [(&str, &str); 20] = [
     ("Минус", MINUS),
     ("Плюс", PLUS),
     ("Вверх", UP),
+    ("Папка", FOLDER),
+    ("Всё", TH_LARGE),
 ];
 
 /// Иконка раздела по индексу `Section` или по подписи. Неизвестное имя
@@ -172,7 +181,7 @@ mod tests {
     /// Список иконок полон и без повторов глифов.
     #[test]
     fn gallery_has_all_icons_without_duplicates() {
-        assert_eq!(ALL.len(), 20);
+        assert_eq!(ALL.len(), 22);
         let mut glyphs: Vec<&str> = ALL.iter().map(|(_, glyph)| *glyph).collect();
         glyphs.sort_unstable();
         let count = glyphs.len();

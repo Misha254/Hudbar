@@ -87,12 +87,18 @@ pub struct Origin {
 pub struct Item {
     /// Глиф Nerd Font. Пустая строка — значка нет.
     pub icon: &'static str,
+    /// Личность строки: id узла, а без id — заголовок. По ней выбор
+    /// переживает пересборку уровня, где заголовок уже мог поменяться.
+    pub id: String,
     /// Название пункта.
     pub title: String,
     /// Значение справа. Пусто, если значения нет.
     pub value: String,
     /// Вторая строка в режиме поиска: путь «Стиль › Тема».
     pub caption: Option<String>,
+    /// Синонимы для поиска: взяты из узла, чтобы «Не беспокоить»
+    /// находилось по «dnd» без «(DND)» в названии.
+    pub keywords: &'static [&'static str],
     /// Поведение строки.
     pub kind: ItemKind,
     /// Место строки в дереве.
@@ -120,6 +126,13 @@ impl Item {
         // есть в любой строке, и русский запрос без маппинга нашёл бы всё.
         let latin_hit = !latin.is_empty() && title_latin.contains(&latin);
         if title.contains(&needle) || latin_hit {
+            return true;
+        }
+        if self
+            .keywords
+            .iter()
+            .any(|word| word.to_lowercase().contains(&needle))
+        {
             return true;
         }
         self.caption.as_ref().is_some_and(|caption| {
@@ -154,6 +167,11 @@ impl ItemList {
     pub fn new(items: Vec<Item>) -> Self {
         let mut list = Self {
             all: items,
+            // Страница по умолчанию обязана быть непустой: при `page = 0`
+            // условие «выбранная строка ниже окна» выполняется всегда, и
+            // `ensure_visible` уводит верх списка на строку вниз. Список
+            // начинался бы со второй строки.
+            page: Self::DEFAULT_PAGE,
             ..Self::default()
         };
         list.refilter();
@@ -247,6 +265,16 @@ impl ItemList {
         self.refilter();
     }
 
+    /// Заменить видимые строки, сохранив выбор и прокрутку. Отличие от
+    /// `set_items` в том, что выбор не сбрасывается: список перерисовывают
+    /// под тем же курсором (отметка «выполняется» на занятой строке).
+    pub fn replace_items(&mut self, items: Vec<Item>) {
+        self.all = items;
+        let selected = self.selected.min(self.all.len().saturating_sub(1));
+        self.selected = selected;
+        self.refilter();
+    }
+
     /// Добавляет символ к запросу и перефильтровывает.
     pub fn type_char(&mut self, ch: char) {
         if !ch.is_control() {
@@ -281,19 +309,16 @@ impl ItemList {
         self.ensure_visible();
     }
 
-    /// Сдвиг выбора на `delta` строк. Край — не перескакивает: сверху первая
-    /// строка, снизу последняя.
+    /// Сдвиг выбора на `delta` строк. Список зациклен: вниз с последней
+    /// строки — на первую, вверх с первой — на последнюю. Удержание стрелки
+    /// листает по кругу, пока клавишу не отпустишь: повторы шлёт композитор,
+    /// а круг замыкается здесь. Большие шаги тоже идут по модулю длины.
     pub fn move_sel(&mut self, delta: isize) {
         if self.items.is_empty() {
             return;
         }
-        let last = self.items.len() - 1;
-        let next = if delta < 0 {
-            self.selected.saturating_sub(delta.unsigned_abs())
-        } else {
-            self.selected.saturating_add(delta as usize).min(last)
-        };
-        self.selected = next;
+        let len = self.items.len() as isize;
+        self.selected = (self.selected as isize + delta).rem_euclid(len) as usize;
         self.ensure_visible();
     }
 
@@ -388,9 +413,11 @@ mod tests {
     fn item(title: &str, depth: usize, index: usize) -> Item {
         Item {
             icon: "",
+            id: title.to_string(),
             title: title.to_string(),
             value: String::new(),
             caption: None,
+            keywords: &[],
             kind: ItemKind::Leaf,
             origin: Origin { depth, index },
         }
@@ -406,6 +433,16 @@ mod tests {
         )
     }
 
+    /// Список, только что собранный, обязан показывать первую строку: иначе
+    /// окно открывалось бы прокрученным на один пункт.
+    #[test]
+    fn fresh_list_starts_at_the_first_row() {
+        let list = list(&["one", "two", "three"]);
+        assert_eq!(list.top(), 0, "список не должен быть прокручен");
+        assert_eq!(list.selected(), 0);
+        assert_eq!(list.page(), ItemList::DEFAULT_PAGE);
+    }
+
     #[test]
     fn empty_list_has_no_selection() {
         let mut list = ItemList::new(Vec::new());
@@ -417,19 +454,24 @@ mod tests {
         assert_eq!(list.top(), 0);
     }
 
+    /// Удержание стрелки листает список по кругу: вниз с последней строки —
+    /// на первую, вверх с первой — на последнюю.
     #[test]
-    fn selection_stops_at_both_edges() {
+    fn selection_wraps_around_both_edges() {
         let mut list = list(&["a", "b", "c"]);
         list.set_page(2);
         list.move_sel(-1);
-        assert_eq!(list.selected(), 0, "сверху первая строка");
+        assert_eq!(list.selected(), 2, "вверх с первой — на последнюю");
+
+        list.move_sel(1);
+        assert_eq!(list.selected(), 0, "вниз с последней — на первую");
 
         list.move_sel(10);
-        assert_eq!(list.selected(), 2, "снизу последняя строка");
+        assert_eq!(list.selected(), 1, "большой шаг тоже по кругу: 10 % 3");
 
         list.select(0);
         list.move_sel(-10);
-        assert_eq!(list.selected(), 0);
+        assert_eq!(list.selected(), 2, "вверх по кругу: -10 % 3");
     }
 
     #[test]

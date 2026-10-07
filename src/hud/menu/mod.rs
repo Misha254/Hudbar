@@ -13,19 +13,45 @@
 #[allow(dead_code)]
 pub mod action;
 #[allow(dead_code)]
+pub mod audio;
+#[allow(dead_code)]
+pub mod bluetooth;
+#[allow(dead_code)]
+pub mod displays;
+#[allow(dead_code)]
+pub mod exec;
+#[allow(dead_code)]
 pub mod input;
 #[allow(dead_code)]
 pub mod instance;
 #[allow(dead_code)]
 pub mod item;
 #[allow(dead_code)]
+pub mod real;
+#[allow(dead_code)]
+pub mod secret;
+#[allow(dead_code)]
 pub mod snapshot;
 #[allow(dead_code)]
 pub mod state;
 #[allow(dead_code)]
+pub mod storage;
+#[allow(dead_code)]
+pub mod system;
+#[allow(dead_code)]
 pub mod tree;
 #[allow(dead_code)]
+pub mod values;
+#[allow(dead_code)]
 pub mod view;
+/// VPN-раздел: режимы поверх селекторов Mihomo (модель без сети).
+#[allow(dead_code)]
+pub mod vpn;
+/// HTTP-клиент к external controller Mihomo.
+#[allow(dead_code)]
+pub mod vpn_api;
+#[allow(dead_code)]
+pub mod wifi;
 
 // Модули hud, нужные подмодулям меню. Реэкспорт, а не `super::super::`: в
 // `main.rs` меню лежит в `hud::menu`, а в `hud-settings-rs` — в корне
@@ -43,10 +69,12 @@ pub(crate) use super::{
 /// Заголовок приложения в крошках: «HUD › Стиль».
 pub const CRUMB_ROOT: &str = "HUD";
 
-/// Подписи и подсказки меню в одном месте. Русские до появления переводов:
-/// когда появится язык из `settings.json`, здесь появятся ключи, а строки
-/// переедут в словарь. Пока строки живут тут, их нельзя разбросать по коду.
+/// Подписи и подсказки меню в одном месте. Русские константы ниже — язык по
+/// умолчанию; переводы отдаёт [`strings::chrome`]: окно берёт язык из
+/// `settings.json` при старте, дерево строится на нём же.
 pub mod strings {
+    use super::super::settings::Language;
+
     /// Поле поиска.
     pub const SEARCH_PLACEHOLDER: &str = "Поиск…";
     /// Пустой результат поиска.
@@ -69,6 +97,81 @@ pub mod strings {
     /// Статус после действия.
     pub const STATUS_APPLIED: &str = "ПРИМЕНЕНО";
     pub const STATUS_FAILED: &str = "ОШИБКА";
+
+    /// Все подписи хрома одним куском: отрисовка берёт их по языку кадра, а
+    /// не по константам выше.
+    pub struct Chrome {
+        pub search: &'static str,
+        pub nothing: &'static str,
+        pub select: &'static str,
+        pub open: &'static str,
+        pub back: &'static str,
+        pub close: &'static str,
+        pub select_short: &'static str,
+        pub open_short: &'static str,
+        pub back_short: &'static str,
+        pub close_short: &'static str,
+        pub applied: &'static str,
+        pub failed: &'static str,
+        /// Подпись включённого тумблера: «вкл» или «on».
+        pub on: &'static str,
+        /// Подпись выключенного тумблера: «выкл» или «off».
+        pub off: &'static str,
+        /// Подпись поля пароля: «Пароль» или «Password».
+        pub password: &'static str,
+        /// Подсказка пустого поля пароля.
+        pub password_placeholder: &'static str,
+        /// Подсказка подтверждения ввода пароля.
+        pub password_connect: &'static str,
+        /// Подсказка отмены ввода пароля.
+        pub password_cancel: &'static str,
+    }
+
+    /// Подписи хрома на языке окна.
+    pub fn chrome(lang: Language) -> Chrome {
+        match lang {
+            Language::Ru => Chrome {
+                search: SEARCH_PLACEHOLDER,
+                nothing: NOTHING_FOUND,
+                select: HINT_SELECT,
+                open: HINT_OPEN,
+                back: HINT_BACK,
+                close: HINT_CLOSE,
+                select_short: HINT_SELECT_SHORT,
+                open_short: HINT_OPEN_SHORT,
+                back_short: HINT_BACK_SHORT,
+                close_short: HINT_CLOSE_SHORT,
+                applied: STATUS_APPLIED,
+                failed: STATUS_FAILED,
+                on: "вкл",
+                off: "выкл",
+                password: "Пароль",
+                password_placeholder: "введите пароль",
+                password_connect: "ENTER ПОДКЛЮЧИТЬСЯ",
+                password_cancel: "ESC ОТМЕНА",
+            },
+            Language::En => Chrome {
+                search: "Search…",
+                nothing: "Nothing found",
+                select: "↑↓ SELECT",
+                open: "ENTER OPEN",
+                back: "← BACK",
+                close: "ESC CLOSE",
+                select_short: "↑↓",
+                open_short: "ENTER",
+                back_short: "←",
+                close_short: "ESC",
+                applied: "APPLIED",
+                failed: "FAILED",
+                on: "on",
+                off: "off",
+                password: "Password",
+                password_placeholder: "enter password",
+                password_connect: "ENTER CONNECT",
+                password_cancel: "ESC CANCEL",
+            },
+        }
+    }
 }
 
 /// Фиктивные значения для снимков и тестов: реальные настройки и панель в
@@ -358,19 +461,15 @@ pub fn section_title(id: &str) -> Option<&'static str> {
 
 /// Открывает раздел сразу при старте. Возвращает `true`, если раздел найден:
 /// неизвестный идентификатор должен открывать корень, а не пустой уровень.
+/// Вход идёт по позиции в `SECTIONS`, а не по заголовку: настоящее дерево
+/// строится на текущем языке, и русская подпись здесь не обязана совпасть.
 pub fn open_section(menu: &mut Menu, id: &str) -> bool {
-    let Some(title) = section_title(id) else {
+    let Some(index) = SECTIONS.iter().position(|(key, _)| *key == id) else {
         return false;
     };
-    let Some(index) = menu
-        .current()
-        .list
-        .items()
-        .iter()
-        .position(|item| item.title == title)
-    else {
+    if index >= menu.current().list.len() {
         return false;
-    };
+    }
     menu.current_mut().list.select(index);
     menu.enter() == state::Outcome::Pushed
 }
@@ -481,6 +580,20 @@ mod tests {
             );
         }
         assert_eq!(strings::CRUMBS_SEPARATOR, " › ");
+    }
+
+    #[test]
+    fn chrome_follows_the_window_language() {
+        let ru = strings::chrome(super::settings::Language::Ru);
+        assert_eq!(ru.search, strings::SEARCH_PLACEHOLDER);
+        assert_eq!(ru.nothing, strings::NOTHING_FOUND);
+        assert_eq!(ru.on, "вкл");
+        assert_eq!(ru.off, "выкл");
+        let en = strings::chrome(super::settings::Language::En);
+        assert_eq!(en.search, "Search…");
+        assert_eq!(en.on, "on");
+        assert_eq!(en.off, "off");
+        assert_ne!(en.select, ru.select);
     }
 
     #[test]

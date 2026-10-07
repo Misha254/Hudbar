@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0] - 2026-10-07
+
+### Added
+- Live HUD menu window (layer-shell overlay) with keyboard navigation, global search and per-section providers.
+- Menu providers: audio devices and volume, Bluetooth, Wi-Fi networks, displays with layouts and presets, storage with safe unmount.
+- Wallpaper picker window: thumbnail grid, folders, ten matugen schemes, mouse and keyboard control.
+- Volume OSD overlay with PipeWire watcher (disabled by default while a compositor freeze is investigated).
+- VPN window (`hud-vpn-rs` on numpad 7): three Mihomo modes over `MODE-RU`/`MODE-REST` selectors plus a filtered server list (Nordics, USA, Japan).
+- Cyclic arrow-key navigation in menus, wallpaper grid, folders and scheme chips.
+- Single-instance toggle for every overlay window via pid-file, with stale and recycled pid protection.
+
+### Fixed
+- VPN mode and server switches re-read the controller state, so partial failures are shown honestly.
+- HTTP client rejects truncated bodies, oversized responses and non-loopback controller addresses; bearer secret never reaches logs or argv.
+
 ## [0.3.0] - 2026-10-03
 
 ### Added
