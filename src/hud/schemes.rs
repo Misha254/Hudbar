@@ -20,56 +20,57 @@ pub const SCHEMES: [&str; 10] = [
     "scheme-smart",
 ];
 
-/// Сколько схем в ряду. Две строки на десять схем — как было в окне обоев.
-pub const COLS: usize = 5;
-/// Рядов по схемам в окне.
-pub const ROWS: usize = 2;
-
-pub const CARD_W: f32 = 560.0;
-pub const CARD_H: f32 = 190.0;
+/// Схемы стоят в один столбец: список из десяти названий читается взглядом
+/// сверху вниз, а плитки в две строки приходилось выбирать по памяти, потому
+/// что подпись перекрывалась заливкой выделения.
+pub const CARD_W: f32 = 400.0;
+/// Высота строки списка.
+pub const ROW_H: f32 = 34.0;
 pub const PAD: f32 = super::ui_tokens::spacing::LG;
 pub const HEADER_H: f32 = 34.0;
-pub const ZONE_INSET: f32 = super::ui_tokens::spacing::MD;
-pub const CHIP_H: f32 = 48.0;
-pub const CHIP_INNER_GAP: f32 = 6.0;
-pub const CHIP_GAP: f32 = super::ui_tokens::spacing::SM;
-pub const SWATCH_D: f32 = 8.0;
-pub const SWATCH_GAP: f32 = 4.0;
+pub const FOOTER_H: f32 = 32.0;
+pub const SWATCH_D: f32 = 10.0;
+pub const SWATCH_GAP: f32 = 5.0;
+/// Отступ от края строки до точек и до подписи.
+pub const ROW_PAD: f32 = 12.0;
 
-/// Плитка схемы по индексу. `None`, если индекс за пределами сетки.
-pub fn chip(zone: Rect, index: usize) -> Option<Rect> {
-    if index >= COLS * ROWS {
-        return None;
-    }
-    let inner_w = zone.w - ZONE_INSET * 2.0;
-    let chip_w = (inner_w - CHIP_GAP * (COLS - 1) as f32) / COLS as f32;
-    let row = index / COLS;
-    let col = index % COLS;
-    let x = zone.x + ZONE_INSET + col as f32 * (chip_w + CHIP_GAP);
-    let y = zone.y + ZONE_INSET + row as f32 * (CHIP_H + CHIP_GAP);
-    Some(Rect::new(x, y, chip_w, CHIP_H))
-}
-
-/// Прямоугольник зоны плиток внутри карточки.
+/// Прямоугольник списка внутри карточки.
 pub fn zone(card: Rect) -> Rect {
     Rect::new(
         card.x + PAD,
         card.y + HEADER_H,
         card.w - PAD * 2.0,
-        (ROWS as f32) * CHIP_H + (ROWS - 1) as f32 * CHIP_GAP + ZONE_INSET * 2.0,
+        SCHEMES.len() as f32 * ROW_H,
     )
 }
 
-/// Половина плитки под точки: верхняя, с отступом от края.
-pub fn chip_dots(chip: Rect) -> Rect {
-    let h = (CHIP_H - CHIP_INNER_GAP) / 2.0;
-    Rect::new(chip.x, chip.y, chip.w, h)
+/// Строка схемы по индексу. `None`, если индекс за пределами списка.
+pub fn row(area: Rect, index: usize) -> Option<Rect> {
+    if index >= SCHEMES.len() {
+        return None;
+    }
+    Some(Rect::new(
+        area.x,
+        area.y + index as f32 * ROW_H,
+        area.w,
+        ROW_H,
+    ))
 }
 
-/// Половина плитки под подпись: нижняя, с тем же зазором.
-pub fn chip_label(chip: Rect) -> Rect {
-    let h = (CHIP_H - CHIP_INNER_GAP) / 2.0;
-    Rect::new(chip.x, chip.y + h + CHIP_INNER_GAP, chip.w, h)
+/// Прямоугольник точек-образцов в строке: слева, по центру.
+pub fn row_dots(row: Rect) -> Rect {
+    Rect::new(
+        row.x + ROW_PAD,
+        row.y + (row.h - SWATCH_D) / 2.0,
+        SWATCH_D * 4.0 + SWATCH_GAP * 3.0,
+        SWATCH_D,
+    )
+}
+
+/// Прямоугольник подписи: между точками и галочкой текущей схемы.
+pub fn row_label(row: Rect) -> Rect {
+    let left = row.x + ROW_PAD * 2.0 + SWATCH_D * 4.0 + SWATCH_GAP * 3.0;
+    Rect::new(left, row.y, row.right() - left - ROW_PAD * 2.0, row.h)
 }
 
 /// Какая схема сейчас стоит, по `~/.config/hudbar/scheme`. Неизвестное имя
@@ -140,59 +141,73 @@ mod tests {
     use super::*;
 
     fn card() -> Rect {
-        Rect::new(0.0, 0.0, CARD_W, CARD_H)
+        Rect::new(0.0, 0.0, CARD_W, card_height())
+    }
+
+    /// Высота карточки считается из содержимого, а не задаётся руками: иначе
+    /// список не поместится или останется пустое поле.
+    fn card_height() -> f32 {
+        HEADER_H + SCHEMES.len() as f32 * ROW_H + FOOTER_H + PAD * 2.0
     }
 
     #[test]
-    fn every_scheme_gets_a_chip() {
-        let zone = zone(card());
-        for index in 0..SCHEMES.len() {
-            assert!(chip(zone, index).is_some(), "нет плитки у {index}");
-        }
-        assert!(chip(zone, SCHEMES.len()).is_none(), "лишняя плитка");
-    }
-
-    #[test]
-    fn chips_stay_inside_the_zone_and_do_not_overlap() {
+    fn every_scheme_gets_a_row() {
         let area = zone(card());
         for index in 0..SCHEMES.len() {
-            // Имя не `chip`: локальная переменная затенила бы функцию `chip`
-            // и на второй итерации вызов перестал бы компилироваться.
-            let tile = chip(area, index).unwrap();
+            assert!(row(area, index).is_some(), "нет строки у {index}");
+        }
+        assert!(row(area, SCHEMES.len()).is_none(), "лишняя строка");
+    }
+
+    #[test]
+    fn rows_are_vertical_and_do_not_overlap() {
+        let area = zone(card());
+        for index in 0..SCHEMES.len() {
+            let current = row(area, index).expect("строка");
             assert!(
-                tile.x >= area.x && tile.right() <= area.right(),
-                "плитка {index} вылезла по горизонтали"
+                current.w - current.h > 100.0,
+                "строка слишком широкая: {current:?}"
             );
-            assert!(
-                tile.y >= area.y && tile.bottom() <= area.bottom(),
-                "плитка {index} вылезла по вертикали"
-            );
+            assert_eq!(current.h, ROW_H, "высота строки");
             if index > 0 {
-                let prev = chip(area, index - 1).unwrap();
-                let disjoint = tile.x >= prev.right() || tile.y >= prev.bottom();
-                assert!(disjoint, "плитки {index} и {} наложились", index - 1);
+                let previous = row(area, index - 1).unwrap();
+                assert!(
+                    current.y >= previous.bottom(),
+                    "строки {index} и {} наложились",
+                    index - 1
+                );
             }
         }
     }
 
     #[test]
-    fn chip_halves_do_not_overlap() {
-        let chip = chip(zone(card()), 0).unwrap();
-        let dots = chip_dots(chip);
-        let label = chip_label(chip);
-        assert!(dots.bottom() <= label.y, "точки налезли на подпись");
-        assert!(label.bottom() <= chip.bottom(), "подпись вылезла из плитки");
+    fn dots_and_label_do_not_overlap() {
+        let tile = row(zone(card()), 0).unwrap();
+        let dots = row_dots(tile);
+        let label = row_label(tile);
+        assert!(dots.right() <= label.x, "точки налезли на подпись");
+        assert!(
+            dots.y >= tile.y && dots.bottom() <= tile.bottom(),
+            "точки вне строки"
+        );
+        assert!(
+            label.y >= tile.y && label.bottom() <= tile.bottom(),
+            "подпись вне строки"
+        );
     }
 
     #[test]
-    fn card_holds_the_whole_zone() {
+    fn card_holds_the_whole_list() {
         let card = card();
         let area = zone(card);
         assert!(
             area.bottom() <= card.bottom(),
-            "зона не поместилась в карточку"
+            "список не поместился в карточку"
         );
         assert!(area.x >= card.x && area.right() <= card.right());
+        // Под заголовком и над подсказками должен остаться воздух.
+        assert!(area.y >= card.y + HEADER_H);
+        assert!(area.bottom() <= card.y + card.h - FOOTER_H);
     }
 
     #[test]

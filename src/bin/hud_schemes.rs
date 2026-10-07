@@ -95,7 +95,7 @@ mod ui_tokens;
 mod wallpaper;
 
 use repeat::Repeat;
-use schemes::{CARD_H, CARD_W, COLS, PAD, SCHEMES};
+use schemes::{CARD_W, FOOTER_H, PAD, SCHEMES};
 use settings_ui::Rect;
 use text::Align;
 use text::{SCALE, TextPainter};
@@ -104,16 +104,18 @@ const NAMESPACE: &str = "hudschemes";
 /// Свой pid-файл: окно схем не должно закрывать окно обоев и наоборот.
 const PID_FILE: &str = "hudbar-schemes.pid";
 const WIDTH: u32 = CARD_W as u32;
-const HEIGHT: u32 = CARD_H as u32;
+/// Высота карточки из содержимого: заголовок + список схем + подсказки.
+fn height() -> u32 {
+    (schemes::HEADER_H + SCHEMES.len() as f32 * schemes::ROW_H + FOOTER_H + PAD * 2.0) as u32
+}
 
-/// Коды XKB — те же значения, что в окне обоев.
+/// Коды XKB — те же значения, что в окне обоев. Список вертикальный, поэтому
+/// влево и вправо не значат ничего и не вынесены.
 mod xkb {
     pub const ESCAPE: u32 = 0xff1b;
     pub const RETURN: u32 = 0xff0d;
     pub const KP_ENTER: u32 = 0xff8d;
-    pub const LEFT: u32 = 0xff51;
     pub const UP: u32 = 0xff52;
-    pub const RIGHT: u32 = 0xff53;
     pub const DOWN: u32 = 0xff54;
     pub const HOME: u32 = 0xff50;
     pub const END: u32 = 0xff57;
@@ -152,24 +154,10 @@ impl Schemes {
         if len == 0 {
             return;
         }
+        // Список зациклен, как и строки меню: вверх с первой — на последнюю.
         self.sel = match keysym {
-            xkb::LEFT => (self.sel + len - 1) % len,
-            xkb::RIGHT => (self.sel + 1) % len,
-            xkb::UP => {
-                if self.sel >= COLS {
-                    self.sel - COLS
-                } else {
-                    let col = self.sel % COLS;
-                    ((len - 1) / COLS * COLS + col).min(len - 1)
-                }
-            }
-            xkb::DOWN => {
-                if self.sel + COLS < len {
-                    self.sel + COLS
-                } else {
-                    (self.sel % COLS).min(len - 1)
-                }
-            }
+            xkb::UP => (self.sel + len - 1) % len,
+            xkb::DOWN => (self.sel + 1) % len,
             xkb::HOME => 0,
             xkb::END => len - 1,
             _ => self.sel,
@@ -189,10 +177,10 @@ impl Schemes {
     fn click(&mut self, card: Rect, x: f32, y: f32) -> Action {
         let area = schemes::zone(card);
         for index in 0..SCHEMES.len() {
-            let Some(tile) = schemes::chip(area, index) else {
+            let Some(line) = schemes::row(area, index) else {
                 return Action::None;
             };
-            if tile.contains(x, y) {
+            if line.contains(x, y) {
                 if self.sel == index {
                     return self.activate();
                 }
@@ -226,7 +214,7 @@ struct SchemesApp {
 
 impl SchemesApp {
     fn card() -> Rect {
-        Rect::new(0.0, 0.0, CARD_W, CARD_H)
+        Rect::new(0.0, 0.0, CARD_W, height() as f32)
     }
 
     fn handle_key(&mut self, event: KeyEvent) -> Action {
@@ -335,30 +323,29 @@ fn paint(
 
     let swatch_map = wallpaper::swatches::load();
     for (index, name) in SCHEMES.iter().enumerate() {
-        let Some(tile) = schemes::chip(area, index) else {
+        let Some(line) = schemes::row(area, index) else {
             return;
         };
         let selected = index == model.sel;
+
+        // Выделение держится на рамке и цвете подписи, а не на заливке:
+        // заливка акцентом перекрывала и точки-образцы, и название схемы —
+        // читать выбранную строку было невозможно.
         let fill = if selected {
-            canvas.ui.accent
+            canvas.ui.panel
         } else {
             canvas.ui.idle_panel
         };
-        canvas.fill(tile, ui_tokens::radii::SM, fill);
-        let border = if selected {
-            canvas.ui.border_focus
-        } else {
-            canvas.ui.border_subtle
-        };
-        canvas.outline(tile, border, if selected { 2.0 } else { 1.0 });
+        canvas.fill(line, ui_tokens::radii::SM, fill);
+        if selected {
+            canvas.outline(line, canvas.ui.accent, 2.0);
+        }
 
-        // Точки: четыре образца схемы, как и были в окне обоев.
+        // Образцы схемы: четыре точки слева, на нейтральном фоне.
         let colors = schemes::swatches_for(name, swatch_map.as_ref());
-        let dots = schemes::chip_dots(tile);
-        let span = colors.len() as f32 * schemes::SWATCH_D
-            + (colors.len().saturating_sub(1)) as f32 * schemes::SWATCH_GAP;
-        let mut x = dots.x + (dots.w - span) / 2.0;
-        let y = dots.y + (dots.h - schemes::SWATCH_D) / 2.0;
+        let dots = schemes::row_dots(line);
+        let mut x = dots.x;
+        let y = dots.y;
         for color in &colors {
             if let Some(rgba) = wallpaper::view::parse_hex(color) {
                 canvas.fill(
@@ -370,35 +357,41 @@ fn paint(
             x += schemes::SWATCH_D + schemes::SWATCH_GAP;
         }
 
+        let label = schemes::row_label(line);
+        let label_color = if selected {
+            canvas.ui.accent
+        } else {
+            canvas.ui.text
+        };
         canvas.label(
             name.trim_start_matches("scheme-"),
             ts.caption,
-            canvas.ui.text,
-            schemes::chip_label(tile),
-            Align::Center,
+            label_color,
+            label,
+            Align::Start,
         );
 
-        // Галочка на текущей схеме: она уже применена, это видно сразу.
+        // Галочка текущей схемы: она уже применена, и это видно сразу.
         if model.current.as_deref() == Some(*name) {
             canvas.label(
                 "✓",
                 ts.caption,
-                canvas.ui.accent,
-                Rect::new(tile.right() - 24.0, tile.y + 2.0, 22.0, 20.0),
+                canvas.ui.muted,
+                Rect::new(line.right() - schemes::ROW_PAD - 20.0, line.y, 20.0, line.h),
                 Align::End,
             );
         }
     }
 
     let hints: [&str; 3] = match lang {
-        Language::Ru => ["←↑→ выбрать", "Enter применить", "Esc закрыть"],
-        Language::En => ["←↑→ select", "Enter apply", "Esc close"],
+        Language::Ru => ["↑↓ выбрать", "Enter применить", "Esc закрыть"],
+        Language::En => ["↑↓ select", "Enter apply", "Esc close"],
     };
     let mut band = Rect::new(
         card.x + PAD,
-        card.y + CARD_H - ui_tokens::spacing::XXL,
+        card.y + card.h - FOOTER_H,
         card.w - PAD * 2.0,
-        ui_tokens::spacing::XXL,
+        FOOTER_H,
     );
     for hint in hints {
         let w = canvas.text.text_width(hint, ts.caption) + ui_tokens::spacing::XL;
@@ -634,7 +627,7 @@ impl LayerShellHandler for SchemesApp {
     ) {
         self.ctx.apply_configure(
             (configure.new_size.0, configure.new_size.1),
-            (WIDTH, HEIGHT),
+            (WIDTH, height()),
         );
     }
 }
@@ -702,8 +695,8 @@ fn run() -> Result<(), String> {
         layer::Shape {
             namespace: Some(NAMESPACE),
             width: WIDTH,
-            height: HEIGHT,
-            max_height: HEIGHT,
+            height: height(),
+            max_height: height(),
             scale: SCALE as u32,
         },
     )?;
