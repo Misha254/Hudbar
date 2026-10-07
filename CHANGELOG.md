@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.6.0] - 2026-10-07
+
+### Added
+- Scheme picker moved out of the wallpaper window into its own layer-shell window (`hud-schemes-rs`), opened automatically right after a wallpaper applies.
+- Wallpaper thumbnail grid is now 4 rows at 86 px, larger than before, since the schemes no longer share the space.
+- Menu, wallpaper, schemes and VPN windows all scroll through a list while a key is held, at a readable speed.
+
+### Fixed
+- Scheme window waits for its initial `configure` before attaching a buffer — the previous check on nonzero dimensions raced with the compositor and could abort the window.
+- Scheme window is a singleton: a second launch closes the first instead of stacking a second window.
+- The scheme window is started through `setsid`, so it survives the wallpaper window closing after the scheme was applied.
+- Empty band removed from the bottom of the scheme card: the height counted two paddings while the hints were anchored to the bottom edge, leaving twice the intended gap.
+- Menu and VPN card narrowed from 520 to 440 px, since short rows such as "Панель" left a large empty area. Footer hints fall back to their short set when they no longer fit.
+
+### Docs
+- `docs/ROADMAP.md`: removed sections that described already-shipped work (Bluetooth actions, displays, lid), and corrected the three finishing items against the code. The mic OSD is done and was listed as missing; opencode notifications do not exist yet; the stdin secret path is written and tested, but `nmcli` does not read a password from stdin, so that one is a decision rather than a task.
+
+## [0.5.0] - 2026-10-07
+
+### Added
+- Coffee mode reads a state file under `/run/user/$UID` instead of scanning the process list.
+
+### Fixed
+- The panel survives an output disappearing: layer-surface `closed` no longer ends the process, and the surface is recreated when the output comes back.
+
+### Performance
+- Release profile uses thin LTO, a single codegen unit and stripping.
+- Palette lookups no longer clone a subtree; glyph checks moved to a const block.
+- Panel rendering and JPEG parsing survive poisoned locks instead of unwrapping.
+
 ## [0.4.2] - 2026-10-07
 
 ### Fixed
