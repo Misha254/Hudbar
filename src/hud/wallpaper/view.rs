@@ -865,16 +865,19 @@ mod tests {
     /// Пункт 5: глифы лупы и крестика есть в шрифте иконок, иначе будет «тофу».
     #[test]
     fn search_and_clear_glyphs_are_declared() {
-        assert!(!settings_icons::SEARCH.is_empty());
-        assert!(!settings_icons::TIMES.is_empty());
+        // `const`-блок: проверка на константах выполняется при сборке, а не
+        // в рантайме теста. Раньше это был runtime-assert на &'static str.
+        const { assert!(!settings_icons::SEARCH.is_empty()) };
+        const { assert!(!settings_icons::TIMES.is_empty()) };
+        // Сравнение строк в const пока нестабильно, остаётся в рантайме.
         assert_ne!(settings_icons::SEARCH, settings_icons::TIMES);
     }
 
     /// Пункт 4: у папки и «all» разные глифы, и оба не пустые.
     #[test]
     fn folder_glyphs_differ_and_are_not_empty() {
-        assert!(!settings_icons::FOLDER.is_empty());
-        assert!(!settings_icons::TH_LARGE.is_empty());
+        const { assert!(!settings_icons::FOLDER.is_empty()) };
+        const { assert!(!settings_icons::TH_LARGE.is_empty()) };
         assert_ne!(settings_icons::FOLDER, settings_icons::TH_LARGE);
     }
 

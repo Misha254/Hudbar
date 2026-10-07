@@ -183,7 +183,7 @@ impl App {
         let k = SCALE;
         let h = self.height as f32 * k;
         let width = self.width as f32 * k;
-        let sys = self.shared.sys.lock().unwrap().clone();
+        let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
 
         let pixel = self.pixel_mode();
         if pixel {

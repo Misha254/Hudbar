@@ -790,20 +790,28 @@ impl Menu {
     /// уровень не имеет детей в статическом дереве: его строки лежат в
     /// слоте провайдера, поэтому спуск через него идёт по `dynamics`.
     fn nodes_at(&self, depth: usize) -> Vec<Node> {
-        self.nodes_at_opt(depth).unwrap_or_default()
+        self.nodes_at_opt(depth)
+            .map(<[Node]>::to_vec)
+            .unwrap_or_default()
     }
 
-    /// Как `nodes_at`, но отличает «узла больше нет» (`None`) от «детей нет».
-    fn nodes_at_opt(&self, depth: usize) -> Option<Vec<Node>> {
-        let mut nodes: Vec<Node> = self.root.clone();
+    /// Как `nodes_at`, но отличает «узла больше нет» (`None`) от «детей нет»
+    /// и отдаёт срез, а не копию.
+    ///
+    /// Спуск идёт по ссылкам: раньше здесь клонировался весь `root` и затем
+    /// копия нужного уровня, то есть на каждый выход в дерево копировалось всё
+    /// поддерево целиком. `Node` в вызывающих не мутируется — собирается
+    /// срез строк, — поэтому копия тут не нужна.
+    fn nodes_at_opt(&self, depth: usize) -> Option<&[Node]> {
+        let mut nodes: &[Node] = &self.root;
         for level in self.levels.get(1..=depth).unwrap_or_default() {
             match &level.key {
                 LevelKey::Node(identity) => {
                     let parent = nodes.iter().find(|node| node.identity() == identity)?;
-                    nodes = parent.children()?.to_vec();
+                    nodes = parent.children()?;
                 }
                 LevelKey::Dynamic(key) => match self.dynamics.get(key).map(ProviderSlot::state) {
-                    Some(SlotState::Ready(snapshot)) => nodes = snapshot.clone(),
+                    Some(SlotState::Ready(snapshot)) => nodes = snapshot.as_slice(),
                     _ => return None,
                 },
             }
@@ -829,13 +837,17 @@ impl Menu {
                     .map(|slot| slot_nodes(key, slot.state(), lang))
                     .unwrap_or_default()
             } else {
-                match self.nodes_at_opt(self.levels[index].depth) {
-                    Some(nodes) => nodes,
-                    None => {
-                        self.levels.truncate(index);
-                        break;
-                    }
-                }
+                // Срез достаётся до mutable-доступа к уровню: держать
+                // заимствование дерева и одновременно пересобирать уровень
+                // нельзя, а копия здесь означала бы клон поддерева уровня.
+                let Some(found) = self
+                    .nodes_at_opt(self.levels[index].depth)
+                    .map(<[Node]>::to_vec)
+                else {
+                    self.levels.truncate(index);
+                    break;
+                };
+                found
             };
             self.levels[index].rebuild(&nodes, lang);
             self.mark_busy_level(index);

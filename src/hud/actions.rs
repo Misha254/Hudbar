@@ -95,7 +95,7 @@ pub fn focus_workspace(reference: &str) {
 
 pub fn vol_set(shared: &Arc<Shared>, pct: u8) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.vol = pct.min(100);
         g.vol_muted = false;
     }
@@ -106,7 +106,7 @@ pub fn vol_set(shared: &Arc<Shared>, pct: u8) {
         let _ = crate::hud::log::status("wpctl", &["set-volume", "@DEFAULT_AUDIO_SINK@", &volume]);
         std::thread::sleep(Duration::from_millis(150));
         if let Some((v, m)) = data::wpctl_volume("@DEFAULT_AUDIO_SINK@") {
-            let mut g = s.sys.lock().unwrap();
+            let mut g = crate::hud::lock::mutex(&s.sys);
             g.vol = v;
             g.vol_muted = m;
         }
@@ -115,9 +115,9 @@ pub fn vol_set(shared: &Arc<Shared>, pct: u8) {
 }
 
 pub fn vol_mute_toggle(shared: &Arc<Shared>) {
-    let muted = !shared.sys.lock().unwrap().vol_muted;
+    let muted = !crate::hud::lock::mutex(&shared.sys).vol_muted;
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.vol_muted = muted;
     }
     shared.mark();
@@ -133,7 +133,7 @@ pub fn vol_mute_toggle(shared: &Arc<Shared>) {
         );
         std::thread::sleep(Duration::from_millis(150));
         if let Some((v, m)) = data::wpctl_volume("@DEFAULT_AUDIO_SINK@") {
-            let mut g = s.sys.lock().unwrap();
+            let mut g = crate::hud::lock::mutex(&s.sys);
             g.vol = v;
             g.vol_muted = m;
         }
@@ -143,7 +143,7 @@ pub fn vol_mute_toggle(shared: &Arc<Shared>) {
 
 pub fn mic_set(shared: &Arc<Shared>, pct: u8) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.mic = pct.min(100);
         g.mic_muted = false;
     }
@@ -155,7 +155,7 @@ pub fn mic_set(shared: &Arc<Shared>, pct: u8) {
             crate::hud::log::status("wpctl", &["set-volume", "@DEFAULT_AUDIO_SOURCE@", &volume]);
         std::thread::sleep(Duration::from_millis(150));
         if let Some((v, m)) = data::wpctl_volume("@DEFAULT_AUDIO_SOURCE@") {
-            let mut g = s.sys.lock().unwrap();
+            let mut g = crate::hud::lock::mutex(&s.sys);
             g.mic = v;
             g.mic_muted = m;
         }
@@ -164,9 +164,9 @@ pub fn mic_set(shared: &Arc<Shared>, pct: u8) {
 }
 
 pub fn mic_mute_toggle(shared: &Arc<Shared>) {
-    let muted = !shared.sys.lock().unwrap().mic_muted;
+    let muted = !crate::hud::lock::mutex(&shared.sys).mic_muted;
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.mic_muted = muted;
     }
     shared.mark();
@@ -182,7 +182,7 @@ pub fn mic_mute_toggle(shared: &Arc<Shared>) {
         );
         std::thread::sleep(Duration::from_millis(150));
         if let Some((v, m)) = data::wpctl_volume("@DEFAULT_AUDIO_SOURCE@") {
-            let mut g = s.sys.lock().unwrap();
+            let mut g = crate::hud::lock::mutex(&s.sys);
             g.mic = v;
             g.mic_muted = m;
         }
