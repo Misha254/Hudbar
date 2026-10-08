@@ -1,9 +1,10 @@
 //! Клиент Bot API Telegram поверх `curl`.
 //!
 //! TLS в std нет, а проект сознательно обходится без лишних крейтов, поэтому
-//! сетевой вызов делает `curl`: поля уходят через `--data-urlencode`, шелла
-//! нет, токен в `argv` не попадает, потому что адрес собирается из двух
-//! аргументов — так же, как делается везде в проекте.
+//! сетевой вызов делает `curl`. Токен в `argv` не попадает никогда: URL с
+//! токеном и поля уходят в конфиг на stdin (`curl --config -`), а в командной
+//! строке только флаги без значений. В `ps` процесс виден, а секретов в нём
+//! нет.
 //!
 //! Два вызова требуют внимания к деталям, на которых ломается молча:
 //!
@@ -13,7 +14,8 @@
 //! - `chat_id` в ответе может быть отрицательным (группы) и длиннее, чем помещается
 //!   в `i32`: тип `i64`, никакого приведения.
 
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
@@ -106,28 +108,41 @@ impl Api {
 
     /// POST с полями формы. Возвращает поле `result` ответа.
     fn call(&self, method: &str, fields: &[(&str, String)]) -> Result<Value, Error> {
-        let url = self.endpoint(method);
-        let mut command = Command::new(&self.program);
-        command
-            // Первый аргумент: без этого curl читает ~/.curlrc, а там
-            // пользователь мог оставить proxy или перехват тела.
-            .arg("--disable")
-            .arg("--silent")
-            .arg("--show-error")
-            .arg("--fail-with-body")
-            .arg("--url")
-            .arg(&url);
-        for (name, value) in fields {
-            command
-                .arg("--data-urlencode")
-                .arg(format!("{name}={value}"));
-        }
-        let output = command
-            .output()
+        let args = self.argv();
+        let mut child = Command::new(&args[0])
+            .args(&args[1..])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|why| format!("{} не запустился: {why}", self.program))?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin
+                .write_all(self.curl_config(method, fields).as_bytes())
+                .map_err(|why| format!("конфиг curl не записан: {why}"))?;
+        }
+        // stdin закрыт, иначе curl ждал бы конца потока вечно.
+        drop(child.stdin.take());
+        let output = child
+            .wait_with_output()
+            .map_err(|why| format!("{} не ответил: {why}", self.program))?;
         let text = String::from_utf8_lossy(&output.stdout);
-        let value: Value = serde_json::from_str(text.trim())
-            .map_err(|why| format!("{method}: ответ не json: {why}"))?;
+        match serde_json::from_str(text.trim()) {
+            Ok(value) => Self::unwrap_result(method, value),
+            Err(_) if output.status.success() => {
+                Err(format!("{method}: ответ не json: {}", first_line(&text)))
+            }
+            Err(_) => {
+                // Транспортная ошибка: stderr чистим от токена, потому что
+                // curl в некоторых ошибках печатает URL, а URL его содержит.
+                let stderr = redact(&String::from_utf8_lossy(&output.stderr), &self.token);
+                Err(format!("{method}: {}", first_line(&stderr)))
+            }
+        }
+    }
+
+    /// Поле `result` ответа или ошибка из него.
+    fn unwrap_result(method: &str, value: Value) -> Result<Value, Error> {
         if value.get("ok").and_then(Value::as_bool) != Some(true) {
             let description = value
                 .get("description")
@@ -136,6 +151,33 @@ impl Api {
             return Err(format!("{method}: {description}"));
         }
         Ok(value.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    /// Аргументы curl без секретов: URL с токеном в argv не попадает, он
+    /// уходит в конфиг на stdin (`--config -`). Чистая функция ради теста:
+    /// проверяется, что токен нигде не встречается.
+    fn argv(&self) -> Vec<String> {
+        vec![
+            self.program.clone(),
+            "--disable".to_string(),
+            "--config".to_string(),
+            "-".to_string(),
+        ]
+    }
+
+    /// Конфиг curl на stdin: URL и поля. Сырые значения в argv не появляются,
+    /// поэтому процесс не виден в `ps` целиком.
+    fn curl_config(&self, method: &str, fields: &[(&str, String)]) -> String {
+        let mut config = String::from("silent\nshow-error\nfail-with-body\n");
+        config.push_str(&format!("url = {}\n", quote(&self.endpoint(method))));
+        for (name, value) in fields {
+            config.push_str(&format!(
+                "data-urlencode = {}={}\n",
+                quote(name),
+                quote(value)
+            ));
+        }
+        config
     }
 
     /// Отправка сообщения. Возвращает `message_id` — он нужен, чтобы потом
@@ -176,14 +218,9 @@ impl Api {
             .ok_or_else(|| "sendMessage без message_id".to_string())
     }
 
-    /// Правка сообщения на месте. Ошибку «message is not modified» считаем
+    /// Правка сообщения с кнопками. Ошибку «message is not modified» считаем
     /// успехом: она означает, что текст не изменился, а это не повод слать
     /// ответ заново.
-    pub fn edit(&self, chat_id: i64, message_id: i64, text: &str) -> Result<(), Error> {
-        self.edit_inner(chat_id, message_id, text, None)
-    }
-
-    /// Правка сообщения с кнопками.
     pub fn edit_with_keyboard(
         &self,
         chat_id: i64,
@@ -191,31 +228,77 @@ impl Api {
         text: &str,
         keyboard: Vec<Vec<Button>>,
     ) -> Result<(), Error> {
-        self.edit_inner(chat_id, message_id, text, Some(keyboard))
-    }
-
-    fn edit_inner(
-        &self,
-        chat_id: i64,
-        message_id: i64,
-        text: &str,
-        keyboard: Option<Vec<Vec<Button>>>,
-    ) -> Result<(), Error> {
-        let mut fields: Vec<(&str, String)> = vec![
+        let fields: Vec<(&str, String)> = vec![
             ("chat_id", chat_id.to_string()),
             ("message_id", message_id.to_string()),
             ("text", text.to_string()),
             ("parse_mode", "HTML".to_string()),
             ("disable_web_page_preview", "true".to_string()),
+            ("reply_markup", keyboard_json(&keyboard)),
         ];
-        if let Some(keyboard) = keyboard {
-            fields.push(("reply_markup", keyboard_json(&keyboard)));
-        }
         match self.call("editMessageText", &fields) {
             Ok(_) => Ok(()),
             Err(why) if why.contains("message is not modified") => Ok(()),
             Err(why) => Err(why),
         }
+    }
+
+    /// Правка клавиатуры без трогания текста: пустой список кнопок снимает
+    /// клавиатуру с сообщения. Так убираются несвежие кнопки, не переписывая
+    /// историю переписки.
+    pub fn edit_reply_markup(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        keyboard: Vec<Vec<Button>>,
+    ) -> Result<(), Error> {
+        let result = self.call(
+            "editMessageReplyMarkup",
+            &[
+                ("chat_id", chat_id.to_string()),
+                ("message_id", message_id.to_string()),
+                ("reply_markup", keyboard_json(&keyboard)),
+            ],
+        )?;
+        let _ = result;
+        Ok(())
+    }
+
+    /// Правка текста со снятием клавиатуры: финальные состояния карточки
+    /// больше не нуждаются в кнопках.
+    pub fn edit_drop_keyboard(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        text: &str,
+    ) -> Result<(), Error> {
+        let fields: Vec<(&str, String)> = vec![
+            ("chat_id", chat_id.to_string()),
+            ("message_id", message_id.to_string()),
+            ("text", text.to_string()),
+            ("parse_mode", "HTML".to_string()),
+            ("disable_web_page_preview", "true".to_string()),
+            ("reply_markup", keyboard_json(&[])),
+        ];
+        match self.call("editMessageText", &fields) {
+            Ok(_) => Ok(()),
+            Err(why) if why.contains("message is not modified") => Ok(()),
+            Err(why) => Err(why),
+        }
+    }
+
+    /// Удаление сообщения. Ошибки (протухший id, чужая история старше 48 ч)
+    /// отдаются наружу, а игнорирует их вызывающий: удаление — всегда
+    /// best-effort, молчание вокруг него дороже.
+    pub fn delete_message(&self, chat_id: i64, message_id: i64) -> Result<(), Error> {
+        self.call(
+            "deleteMessage",
+            &[
+                ("chat_id", chat_id.to_string()),
+                ("message_id", message_id.to_string()),
+            ],
+        )
+        .map(|_| ())
     }
 
     /// Ответ на нажатие кнопки: короткая надпись во всплывающем окне.
@@ -286,6 +369,53 @@ pub fn keyboard_json(rows: &[Vec<Button>]) -> String {
         })
         .collect();
     json!({ "inline_keyboard": rows }).to_string()
+}
+
+/// Одна строка конфига в кавычках. curl понимает внутри кавычек `\\`, `\"`,
+/// `\t`, `\n`, `\r`: всё остальное идёт как есть, включая юникод. Сырой
+/// перевод строки здесь невозможен: конфиг построчный, и он разорвал бы
+/// директиву на две.
+fn quote(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(character),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Токен из текста: URL с токеном никогда не должен попасть в журнал.
+fn redact(text: &str, token: &str) -> String {
+    if token.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(token, "<redacted>")
+    }
+}
+
+/// Первая строка текста: ошибка curl в одну строку, без простыни.
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or("").trim()
+}
+
+/// Секунды из описания флуд-контроля Telegram: «Too Many Requests: retry
+/// after 3». Возвращает `None`, если число не разобралось, — тогда вызывающий
+/// ждёт значение по умолчанию, а не падает.
+pub fn parse_retry_after(description: &str) -> Option<u64> {
+    let (_, tail) = description.split_once("retry after")?;
+    tail.split_whitespace()
+        .next()?
+        .trim_end_matches(|character: char| !character.is_ascii_digit())
+        .parse::<u64>()
+        .ok()
 }
 
 /// Экранирование текста для `parse_mode=HTML`. Без этого один `<` в ответе
@@ -393,6 +523,56 @@ mod tests {
         assert!(!debug.contains("secret"), "токен в Debug: {debug}");
     }
 
+    /// Токен не должен попасть в `argv`: процесс виден в `ps`, и командная
+    /// строка — не место для секретов. URL уходит в конфиг на stdin.
+    #[test]
+    fn argv_has_no_token_and_no_url() {
+        let api = Api::new("123456:AAEtoken-value");
+        let args = api.argv();
+        assert_eq!(args.first().map(String::as_str), Some("curl"));
+        assert!(
+            args.iter().any(|arg| arg == "--config"),
+            "конфиг идёт через stdin: {args:?}"
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--url" || arg == "--data-urlencode"),
+            "значения ушли в конфиг, а не в argv: {args:?}"
+        );
+        for arg in &args {
+            assert!(!arg.contains("AAEtoken-value"), "токен в argv: {arg:?}");
+        }
+    }
+
+    /// Конфиг несёт URL и поля, а спецсимволы в нём экранированы: сырой
+    /// перевод строки разорвал бы конфиг на две директивы.
+    #[test]
+    fn curl_config_quotes_values() {
+        let api = Api::new("123:tok");
+        let config = api.curl_config("sendMessage", &[("text", "a\nb \"c\" \\ d".to_string())]);
+        assert!(config.contains("silent\n"), "флаги на месте");
+        assert!(config.contains("url = \"https://api.telegram.org/bot123:tok/sendMessage\""));
+        assert!(config.contains("data-urlencode = \"text\"=\"a\\nb \\\"c\\\" \\\\ d\""));
+        assert_eq!(
+            config.lines().count(),
+            5,
+            "каждая директива на своей строке"
+        );
+    }
+
+    /// `redact` вычищает токен из текста ошибки, а пустой токен ничего не
+    /// трогает: иначе замена по пустой строке раздвинула бы весь текст.
+    #[test]
+    fn stderr_is_redacted_before_it_reaches_the_log() {
+        let dirty = "curl: (6) Could not resolve host: https://api.telegram.org/bot123:tok/x";
+        assert_eq!(
+            redact(dirty, "123:tok"),
+            "curl: (6) Could not resolve host: https://api.telegram.org/bot<redacted>/x"
+        );
+        assert_eq!(redact("чистый текст", ""), "чистый текст");
+    }
+
     #[test]
     fn html_special_characters_are_escaped() {
         assert_eq!(escape_html("a & b < c > d"), "a &amp; b &lt; c &gt; d");
@@ -407,6 +587,27 @@ mod tests {
         let once = escape_html(raw);
         assert_eq!(once, "x = a &amp; b &lt; c");
         assert!(!once.contains("&amp;amp;"));
+    }
+
+    /// Пустая клавиатура — это тоже клавиатура: `{"inline_keyboard":[]}`
+    /// снимает кнопки, не трогая текст.
+    #[test]
+    fn empty_keyboard_drops_buttons() {
+        assert_eq!(keyboard_json(&[]), r#"{"inline_keyboard":[]}"#);
+    }
+
+    #[test]
+    fn retry_after_parses_seconds() {
+        assert_eq!(
+            parse_retry_after("Too Many Requests: retry after 3"),
+            Some(3)
+        );
+        assert_eq!(
+            parse_retry_after("editMessageText: Too Many Requests: retry after 27"),
+            Some(27)
+        );
+        assert_eq!(parse_retry_after("просто ошибка"), None);
+        assert_eq!(parse_retry_after("retry after"), None);
     }
 
     #[test]
