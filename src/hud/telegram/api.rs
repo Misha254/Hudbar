@@ -171,10 +171,13 @@ impl Api {
         let mut config = String::from("silent\nshow-error\nfail-with-body\n");
         config.push_str(&format!("url = {}\n", quote(&self.endpoint(method))));
         for (name, value) in fields {
+            // Квотируется вся пара `имя=значение` целиком. По отдельности
+            // curl читает только имя и теряет значение: `="v"` он считает
+            // отдельной директивой и молча выкидывает, а Telegram получает
+            // пустой `text` и отвечает «message text is empty».
             config.push_str(&format!(
-                "data-urlencode = {}={}\n",
-                quote(name),
-                quote(value)
+                "data-urlencode = {}\n",
+                quote(&format!("{name}={value}"))
             ));
         }
         config
@@ -553,12 +556,29 @@ mod tests {
         let config = api.curl_config("sendMessage", &[("text", "a\nb \"c\" \\ d".to_string())]);
         assert!(config.contains("silent\n"), "флаги на месте");
         assert!(config.contains("url = \"https://api.telegram.org/bot123:tok/sendMessage\""));
-        assert!(config.contains("data-urlencode = \"text\"=\"a\\nb \\\"c\\\" \\\\ d\""));
+        assert!(config.contains("data-urlencode = \"text=a\\nb \\\"c\\\" \\\\ d\""));
         assert_eq!(
             config.lines().count(),
             5,
             "каждая директива на своей строке"
         );
+        // Ровно одна пара в кавычках на директиву: раздельно заквотированные
+        // имя и значение (`"text"="v"`) curl читает как имя без значения, и
+        // Telegram получает пустой `text`.
+        for line in config
+            .lines()
+            .filter(|line| line.starts_with("data-urlencode"))
+        {
+            let value = line.trim_start_matches("data-urlencode = ");
+            assert!(value.starts_with('"') && value.ends_with('"'), "{line:?}");
+            assert!(
+                !value.contains("\"=\""),
+                "пара name=value в одних кавычках: {line:?}"
+            );
+            let inner = &value[1..value.len() - 1];
+            assert!(inner.contains('='), "внутри есть имя=значение: {line:?}");
+            assert!(!inner.starts_with('='), "имя не пустое: {line:?}");
+        }
     }
 
     /// `redact` вычищает токен из текста ошибки, а пустой токен ничего не
