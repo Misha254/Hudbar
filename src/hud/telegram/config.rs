@@ -64,7 +64,8 @@ fn atomic_write(path: &Path, text: &str) -> Result<(), String> {
 /// Читает JSON-файл: `Ok(None)` — файла нет, `Err` — он есть, но не читается.
 /// Различие важно для миграции: отсутствующий state-файл означает «первый
 /// старт», а битый — «не трогать молча, а сказать».
-fn read_json(path: &Path) -> Result<Option<serde_json::Value>, String> {
+/// Читает JSON-файл: отсутствие — не ошибка, битый файл — ошибка.
+pub fn read_json(path: &Path) -> Result<Option<serde_json::Value>, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text)
             .map(Some)
