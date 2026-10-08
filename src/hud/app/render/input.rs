@@ -269,7 +269,9 @@ impl App {
                     "Звук" => crate::hud::actions::vol_mute_toggle(&self.shared),
                     "Микрофон" => crate::hud::actions::mic_mute_toggle(&self.shared),
                     "Обои" => crate::hud::actions::spawn("wall.sh"),
-                    "Питание" => crate::hud::actions::spawn("powermenu.sh"),
+                    "Питание" => {
+                        crate::hud::actions::spawn_with_args("hud-menu", &["power"])
+                    }
                     "Блокировка" => crate::hud::actions::spawn("dynalock.sh"),
                     _ => {}
                 }

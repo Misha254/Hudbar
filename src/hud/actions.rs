@@ -201,9 +201,16 @@ pub fn dnd_toggle() {
 }
 
 pub fn spawn(command: &str) {
+    spawn_with_args(command, &[]);
+}
+
+/// Запуск с аргументами: нужно там, где скрипт-обёртка принимает раздел
+/// меню, например `hud-menu power`.
+pub fn spawn_with_args(command: &str, args: &[&str]) {
     let command = command.to_string();
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
     std::thread::spawn(move || {
-        let _ = std::process::Command::new(command).spawn();
+        let _ = std::process::Command::new(command).args(&args).spawn();
     });
 }
 

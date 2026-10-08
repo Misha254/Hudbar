@@ -117,8 +117,10 @@ fn has_record() -> bool {
 fn has_power_cycle() -> bool {
     has_script("power-cycle.sh")
 }
-fn has_powermenu() -> bool {
-    has_script("powermenu.sh")
+/// Замок: `dynalock.sh` умеет гасить экран и запускать блокировку. Без него
+/// пункт скрыт, а не показывает ошибку по нажатию.
+fn has_dynalock() -> bool {
+    has_script("dynalock.sh")
 }
 fn has_control() -> bool {
     has_script("control.sh")
@@ -729,14 +731,7 @@ fn system_section(lang: Language) -> Node {
                 Action::Run("power-cycle.sh", &[]),
             )
             .when(has_power_cycle)
-            .search_as(&["power", "питание"]),
-            Node::action(
-                settings_icons::SYSTEM,
-                t("Меню питания", "Power menu"),
-                Action::Spawn("powermenu.sh", &[]),
-            )
-            .when(has_powermenu)
-            .search_as(&["powermenu", "питание"]),
+            .search_as(&["power", "питание", "профиль", "battery"]),
             Node::action(
                 settings_icons::CONTROLS,
                 t("Панель управления", "Control panel"),
@@ -744,6 +739,88 @@ fn system_section(lang: Language) -> Node {
             )
             .when(has_control)
             .search_as(&["control", "управление"]),
+        ],
+    )
+    .search_as(kw)
+}
+
+/// Вопрос подтверждения необратимого действия: отдельный уровень с двумя
+/// строками, а не флаг в строке. Плюсы такого решения: `Esc` уводит назад
+/// сам, «Отмена» — обычное действие [`Action::Back`], а у вопроса вообще нет
+/// команды, поэтому исполнителю она и не достанется. Внутренние строки
+/// скрыты от глобального поиска: в общем списке два «Отмена» — шум.
+fn confirm_node(
+    icon: &'static str,
+    question: &'static str,
+    yes: &'static str,
+    cancel: &'static str,
+    program: &'static str,
+    args: &'static [&'static str],
+) -> Node {
+    Node::submenu(
+        icon,
+        question,
+        vec![
+            Node::action(settings_icons::CHECK, yes, Action::Spawn(program, args))
+                .hidden_from_search(),
+            Node::action(settings_icons::TIMES, cancel, Action::Back).hidden_from_search(),
+        ],
+    )
+}
+
+/// Раздел «Питание»: блокировка, сон и выход — в начале, необратимые команды в
+/// конце и обязательно за вопросом. Порядок в меню един, поэтому «Выключение»
+/// не оказалось второй строкой списка.
+fn power_section(lang: Language) -> Node {
+    let (title, kw) = match lang {
+        Language::Ru => ("Питание", &["power", "питание", "shutdown"]),
+        Language::En => ("Power", &["power", "питание", "shutdown"]),
+    };
+    let t = |ru: &'static str, en: &'static str| match lang {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    Node::submenu(
+        settings_icons::POWER,
+        title,
+        vec![
+            Node::action(
+                settings_icons::LOCK,
+                t("Заблокировать", "Lock screen"),
+                Action::Spawn("dynalock.sh", &[]),
+            )
+            .when(has_dynalock)
+            .search_as(&["lock", "замок", "блокировка", "заблокировать"]),
+            Node::action(
+                settings_icons::SLEEP,
+                t("Спящий режим", "Suspend"),
+                Action::Spawn("systemctl", &["suspend"]),
+            )
+            .search_as(&["suspend", "сон", "спать", "sleep"]),
+            Node::action(
+                settings_icons::LOGOUT,
+                t("Выйти из сессии", "Log out"),
+                Action::Niri(&["msg", "action", "quit", "--skip-confirmation"]),
+            )
+            .search_as(&["logout", "выход", "выйти"]),
+            confirm_node(
+                settings_icons::REBOOT,
+                t("Перезагрузить?", "Reboot?"),
+                t("Да, перезагрузить", "Yes, reboot"),
+                t("Отмена", "Cancel"),
+                "systemctl",
+                &["reboot"],
+            )
+            .search_as(&["reboot", "перезагрузка", "перезагрузить", "restart"]),
+            confirm_node(
+                settings_icons::POWER,
+                t("Выключить?", "Power off?"),
+                t("Да, выключить", "Yes, power off"),
+                t("Отмена", "Cancel"),
+                "systemctl",
+                &["poweroff"],
+            )
+            .search_as(&["poweroff", "shutdown", "выключить", "выключение"]),
         ],
     )
     .search_as(kw)
@@ -787,6 +864,7 @@ pub fn tree_in(lang: Language) -> Vec<Node> {
         capture_section(lang),
         keybinds_section(lang),
         system_section(lang),
+        power_section(lang),
         about_section(lang),
     ]
 }
@@ -997,11 +1075,11 @@ mod tests {
     }
 
     #[test]
-    fn root_has_eight_sections_in_order() {
+    fn root_has_nine_sections_in_order() {
         for lang in [Language::Ru, Language::En] {
             let menu = Menu::new(tree_in(lang));
             assert_eq!(menu.depth(), 0);
-            assert_eq!(menu.frame().items.len(), 8);
+            assert_eq!(menu.frame().items.len(), 9);
         }
         let ru = Menu::new(tree_in(Language::Ru));
         let frame = ru.frame();
@@ -1016,6 +1094,7 @@ mod tests {
                 "Захват",
                 "Бинды",
                 "Система",
+                "Питание",
                 "О программе"
             ]
         );
@@ -1053,6 +1132,101 @@ mod tests {
         let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
         assert_eq!(titles[0], "Applications");
         assert_eq!(titles[2], "Style");
+    }
+
+    /// Раздел «Питание»: обратимые действия в начале, необратимые — в конце
+    /// и обязательно за вопросом. Проверка по порядку, а не по наличию:
+    /// список из трёх строк, где «Выключение» стоит первым, опасен.
+    #[test]
+    fn power_section_puts_destructive_rows_last_and_behind_a_question() {
+        use super::super::tree::NodeKind;
+        let power = tree_in(Language::Ru)
+            .into_iter()
+            .find(|node| node.identity() == "Питание")
+            .expect("раздел «Питание»");
+        let titles: Vec<&str> = power
+            .children()
+            .expect("у раздела есть строки")
+            .iter()
+            .map(|node| node.title.as_str())
+            .collect();
+        assert_eq!(
+            titles.last().copied(),
+            Some("Выключить?"),
+            "выключение обязано быть последним: {titles:?}"
+        );
+        assert!(
+            titles.contains(&"Перезагрузить?"),
+            "перезагрузка за вопросом: {titles:?}"
+        );
+        for question in ["Перезагрузить?", "Выключить?"] {
+            let node = power
+                .children()
+                .unwrap()
+                .iter()
+                .find(|node| node.title == question)
+                .expect("вопрос");
+            let children = node.children().expect("у вопроса есть ответы");
+            assert_eq!(children.len(), 2, "у вопроса ровно два ответа: {question}");
+            assert_eq!(children[1].title, "Отмена");
+            assert!(
+                matches!(&children[1].kind, NodeKind::Action(Action::Back)),
+                "отмена возвращает уровень, а не запускает команду"
+            );
+        }
+    }
+
+    /// Подтверждение: «Да, выключить» действительно выключает, а «Отмена» и
+    /// `Esc` возвращают в «Питание», не выполнив ничего.
+    #[test]
+    fn power_confirm_runs_the_command_or_returns_without_it() {
+        let mut menu = Menu::new(tree_in(Language::Ru));
+        let index = menu
+            .frame()
+            .items
+            .iter()
+            .position(|item| item.title == "Питание")
+            .expect("раздел «Питание»");
+        menu.current_mut().list.select(index);
+        assert_eq!(menu.enter(), Outcome::Pushed);
+
+        let index = menu
+            .frame()
+            .items
+            .iter()
+            .position(|item| item.title == "Выключить?")
+            .expect("строка выключения");
+        menu.current_mut().list.select(index);
+        assert_eq!(menu.enter(), Outcome::Pushed, "открылся вопрос");
+        assert_eq!(menu.opened_submenu(), Some("Выключить?"));
+
+        // Отмена первой строкой снизу: сначала выбираем «Отмена».
+        let cancel = menu
+            .frame()
+            .items
+            .iter()
+            .position(|item| item.title == "Отмена")
+            .expect("строка отмены");
+        menu.current_mut().list.select(cancel);
+        assert_eq!(menu.enter(), Outcome::Popped, "отмена вернула в раздел");
+        assert_eq!(menu.opened_submenu(), Some("Питание"));
+    }
+
+    /// Внутренние строки вопроса не должны попадать в глобальный поиск: там лежат
+    /// два одинаковых «Отмена», а «Да, выключить» по `Enter` из поиска выключила бы
+    /// машину одним нажатием мимо вопроса. Выход только через сам раздел.
+    #[test]
+    fn confirm_answers_stay_out_of_the_global_search() {
+        let mut menu = Menu::new(tree_in(Language::Ru));
+        for ch in "выключ".chars() {
+            menu.type_char(ch);
+        }
+        let frame = menu.frame();
+        let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
+        assert!(
+            titles.is_empty(),
+            "из поиска выключение недостижимо: {titles:?}"
+        );
     }
 
     #[test]
