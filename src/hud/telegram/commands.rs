@@ -17,7 +17,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::opencode::{self, Client, Session};
+use super::opencode::{self, Client, Model, ModelRef, Session};
 
 /// Исполняет команду в клиенте. Мьютексы держатся только вокруг чтения и
 /// записи полей: сетевые вызовы идут без них, иначе команда с ожиданием
@@ -40,7 +40,10 @@ pub fn execute(
             delete_command: None,
         }),
         Command::New => {
-            let session = with_client(client, |client| client.create_session(None))?;
+            let model = read_model(state);
+            let session = with_client(client, |client| {
+                client.create_session_modeled(None, model.as_ref())
+            })?;
             set_session(state, Some(session.id.clone()));
             Ok(Outcome {
                 text: format!("Новая сессия: <code>{session}</code>"),
@@ -203,10 +206,69 @@ pub fn execute(
                 .lock()
                 .map(|state| state.directory.clone())
                 .unwrap_or_default();
+            let model = match &active {
+                Some(id) => with_client(client, |client| client.session_model(id))
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            let model = match model {
+                Some(model) => format!(", модель {}", super::api::escape_html(&model.full_id())),
+                None => String::new(),
+            };
             Ok(Outcome {
                 text: format!(
-                    "Папка <code>{}</code>, {name}",
+                    "Папка <code>{}</code>, {name}{model}",
                     super::api::escape_html(&directory)
+                ),
+                html: true,
+                card: None,
+                ephemeral: false,
+                delete_command: None,
+            })
+        }
+        Command::Models => {
+            let models = with_client(client, |client| client.list_models())?;
+            let current = read_session(state).and_then(|session| {
+                with_client(client, |client| client.session_model(&session)).ok()?
+            });
+            Ok(Outcome {
+                text: models_text(&models, current.as_ref()),
+                html: true,
+                card: None,
+                ephemeral: false,
+                delete_command: None,
+            })
+        }
+        Command::Model(argument) => {
+            let models = with_client(client, |client| client.list_models())?;
+            let Some(model) = find_model(&models, argument) else {
+                return Ok(Outcome {
+                    text: format!(
+                        "Такой модели нет — посмотри /models.\n\n{}",
+                        models_text(&models, None)
+                    ),
+                    html: true,
+                    card: None,
+                    ephemeral: true,
+                    delete_command: None,
+                });
+            };
+            // Модель меняется в активной сессии, а если её нет — просто
+            // запоминается: первая же новая сессия создастся на ней.
+            if let Some(session) = read_session(state)
+                && let Err(why) = with_client(client, |client| {
+                    client.set_session_model(&session, &model.reference)
+                })
+            {
+                return Err(why);
+            }
+            set_model(state, Some(model.reference.clone()));
+            Ok(Outcome {
+                text: format!(
+                    "Модель: <b>{}</b>\n{}",
+                    model.label(),
+                    model.reference.full_id()
                 ),
                 html: true,
                 card: None,
@@ -218,7 +280,10 @@ pub fn execute(
             let session = match read_session(state) {
                 Some(id) => id,
                 None => {
-                    let created = with_client(client, |client| client.create_session(None))?;
+                    let model = read_model(state);
+                    let created = with_client(client, |client| {
+                        client.create_session_modeled(None, model.as_ref())
+                    })?;
                     set_session(state, Some(created.id.clone()));
                     created.id
                 }
@@ -277,6 +342,18 @@ fn read_session(state: &Arc<Mutex<State>>) -> Option<String> {
 fn set_session(state: &Arc<Mutex<State>>, session: Option<String>) {
     if let Ok(mut state) = state.lock() {
         state.session = session;
+    }
+}
+
+/// Выбранная модель из состояния.
+fn read_model(state: &Arc<Mutex<State>>) -> Option<ModelRef> {
+    state.lock().ok()?.model.clone()
+}
+
+/// Выбранную модель в состояние: она переживёт перезапуск моста.
+fn set_model(state: &Arc<Mutex<State>>, model: Option<ModelRef>) {
+    if let Ok(mut state) = state.lock() {
+        state.model = model;
     }
 }
 
@@ -351,6 +428,10 @@ pub enum Command {
     Directory(String),
     /// Что показать в шапке раздела вместо состояния.
     Status,
+    /// Список моделей, доступных для выбора.
+    Models,
+    /// Выбрать модель: номер из `/models` или `провайдер/id`.
+    Model(String),
     /// Промпт: весь остальной текст идёт агенту.
     Prompt(String),
 }
@@ -404,6 +485,8 @@ pub fn parse(text: &str) -> Option<Command> {
         "/sessions" | "sessions" | "сессии" => Some(Command::Sessions),
         "/stop" | "stop" | "стоп" => Some(Command::Stop),
         "/status" | "status" | "статус" => Some(Command::Status),
+        "/models" | "models" | "модели" => Some(Command::Models),
+        "/model" | "model" | "модель" => Some(Command::Model(rest.to_string())),
         "/use" | "use" | "сессия" => Some(Command::Use(rest.to_string())),
         "/always" | "always" | "всегда" => Some(Command::Permission(PermissionReply::Always)),
         "/reject" | "reject" | "no" | "нет" | "отмена" => {
@@ -441,7 +524,8 @@ pub fn help_text() -> String {
         "<b>/sessions</b> — последние сессии, для выбора",
         "<b>/use 2</b> или <b>/use ses_…</b> — перейти в сессию",
         "<b>/stop</b> — прервать работу агента",
-        "<b>/status</b> — какая сессия активна",
+        "<b>/status</b> — какая сессия активна и на какой модели",
+        "<b>/models</b> — список моделей, <b>/model 7</b> — выбрать",
         "<b>/dir /путь</b> — работать в другой папке",
         "",
         "Запросы прав приходят кнопками: Разрешить / Всегда / Отмена.",
@@ -472,6 +556,60 @@ pub fn find_session<'a>(sessions: &'a [Session], argument: &str) -> Option<&'a S
     }
 }
 
+/// Ищет модель по аргументу: номеру из `/models`, полному `провайдер/id`
+/// или одному id. Регистр не важен — набирать длинные id с телефона неудобно.
+pub fn find_model<'a>(models: &'a [Model], argument: &str) -> Option<&'a Model> {
+    let argument = argument.trim();
+    if argument.is_empty() {
+        return None;
+    }
+    if let Some(index) = session_index(argument) {
+        return models.get(index - 1);
+    }
+    let needle = argument.to_lowercase();
+    // Полная пара «провайдер/id» — самое точное попадание: ищем её первой и
+    // берём сразу, даже если id встречается у другого провайдера.
+    let by_pair: Vec<&Model> = models
+        .iter()
+        .filter(|model| model.reference.full_id().to_lowercase() == needle)
+        .collect();
+    if let [only] = by_pair.as_slice() {
+        return Some(only);
+    }
+    // Иначе подходит один id или одно имя, но только если такой ровно один:
+    // два кандидата означают «не знаю, какой», и молча выбирать нельзя.
+    let mut loose = models.iter().filter(|model| {
+        model.reference.id.to_lowercase() == needle || model.label().to_lowercase() == needle
+    });
+    let first = loose.next()?;
+    loose.next().is_none().then_some(first)
+}
+
+/// Список моделей с номерами: текущая помечена, в конце подсказка про
+/// выбор. Имена экранируются — в них бывают `&` и `<`.
+pub fn models_text(models: &[Model], current: Option<&ModelRef>) -> String {
+    if models.is_empty() {
+        return "Подключённых провайдеров нет — проверь ключи в opencode".to_string();
+    }
+    let mut text = String::from("Модели (● — текущая):");
+    for (index, model) in models.iter().enumerate() {
+        let mark = if model.is_current(current) {
+            "● "
+        } else {
+            ""
+        };
+        text.push_str(&format!(
+            "\n{}. {}{} · {}",
+            index + 1,
+            mark,
+            super::api::escape_html(model.label()),
+            super::api::escape_html(&model.reference.provider)
+        ));
+    }
+    text.push_str("\n\n/model 7 — выбрать");
+    text
+}
+
 /// Состояние моста, нужное командам: какая сессия активна и какой запрос прав
 /// ждёт человека.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -482,6 +620,8 @@ pub struct State {
     pub session: Option<String>,
     /// Последний запрос прав, по которому ещё нет ответа.
     pub pending_permission: Option<PendingPermission>,
+    /// Модель, выбранная с телефона: действует в активной сессии и в новых.
+    pub model: Option<ModelRef>,
 }
 
 /// Запрос прав, ждущий человека.
@@ -584,5 +724,144 @@ mod tests {
         assert!(find_session(&sessions, "").is_none());
         assert!(find_session(&sessions, "0").is_none());
         assert!(find_session(&sessions, "нет такой").is_none());
+    }
+
+    /// Три модели для проверки поиска и списка.
+    fn model(provider: &str, id: &str, name: &str) -> Model {
+        Model {
+            reference: ModelRef::new(provider, id),
+            name: name.to_string(),
+        }
+    }
+
+    fn sample_models() -> Vec<Model> {
+        vec![
+            model("vibecode", "slow", "Slow"),
+            model("vibecode", "fast", "Fast"),
+            model("opencode", "free", "Free <Model>"),
+        ]
+    }
+
+    /// Список моделей нумеруется и помечает текущую: телефон не приносит
+    /// курсора, поэтому выбор идёт номером из `/models`. Имя модели
+    /// экранируется — в нём бывают `<` и `&`.
+    #[test]
+    fn model_list_numbers_marks_current_and_escapes() {
+        let models = sample_models();
+        let text = models_text(&models, Some(&ModelRef::new("vibecode", "fast")));
+        assert!(text.starts_with("Модели (● — текущая):"), "шапка: {text}");
+        assert!(text.contains("\n1. Slow · vibecode"), "первая: {text}");
+        assert!(
+            text.contains("\n2. ● Fast · vibecode"),
+            "вторая с меткой: {text}"
+        );
+        assert!(
+            text.contains("Free &lt;Model&gt;"),
+            "имя экранировано: {text}"
+        );
+        assert!(text.contains("/model 7 — выбрать"), "подсказка: {text}");
+        assert_eq!(
+            models_text(&[], None),
+            "Подключённых провайдеров нет — проверь ключи в opencode"
+        );
+    }
+
+    /// Модель ищется номером, полным `провайдер/id`, одним id и именем.
+    /// Короткий id у двух провайдеров не выбирается молча: такое имя
+    /// означало бы двух кандидатов.
+    #[test]
+    fn model_lookup_by_number_full_id_and_bare_id() {
+        let models = sample_models();
+        assert_eq!(
+            find_model(&models, "1").map(|m| m.reference.id.as_str()),
+            Some("slow")
+        );
+        assert_eq!(
+            find_model(&models, "vibecode/fast").map(|m| m.reference.id.as_str()),
+            Some("fast")
+        );
+        assert_eq!(
+            find_model(&models, "FAST").map(|m| m.reference.id.as_str()),
+            Some("fast")
+        );
+        assert_eq!(
+            find_model(&models, "Fast").map(|m| m.reference.id.as_str()),
+            Some("fast"),
+            "по имени тоже"
+        );
+        assert_eq!(
+            find_model(&models, "7"),
+            None,
+            "номера за пределами списка нет"
+        );
+        assert_eq!(find_model(&models, "gpt-4"), None);
+        assert_eq!(find_model(&models, ""), None);
+        let twins = vec![model("a", "same", "Same"), model("b", "same", "Same")];
+        assert_eq!(
+            find_model(&twins, "same"),
+            None,
+            "одинаковый id — неоднозначно"
+        );
+        assert_eq!(
+            find_model(&twins, "a/same").map(|m| m.reference.provider.as_str()),
+            Some("a"),
+            "с провайдером — однозначно"
+        );
+    }
+
+    /// `/models` и `/model N` разбираются как команды, а пустой аргумент —
+    /// тоже команда: покажет список, а не ошибку.
+    #[test]
+    fn model_commands_are_parsed() {
+        assert_eq!(parse("/models"), Some(Command::Models));
+        assert_eq!(parse("модели"), Some(Command::Models));
+        assert_eq!(parse("/model 7"), Some(Command::Model("7".into())));
+        assert_eq!(
+            parse("модель gpt-5.6-luna"),
+            Some(Command::Model("gpt-5.6-luna".into()))
+        );
+        assert_eq!(parse("/model"), Some(Command::Model(String::new())));
+        // Модель в тексте промпта не цепляется: первое слово — команда.
+        assert_eq!(
+            parse("переключи модель на opus"),
+            Some(Command::Prompt("переключи модель на opus".into()))
+        );
+    }
+
+    /// Выбранная модель живёт в состоянии и переживает запись: новая сессия
+    /// создаётся на ней. Пустая модель в state-файл не пишется.
+    #[test]
+    fn chosen_model_is_kept_in_state() {
+        let dir = std::env::temp_dir().join(format!("hud-tg-model-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let path = dir.join("telegram-state.json");
+        let empty =
+            super::super::config::Snapshot::from_config(&super::super::config::Config::defaults());
+        super::super::config::save_state_to(&path, &empty).expect("запись");
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("чтение")).expect("json");
+        assert!(
+            value.get("model").is_none(),
+            "пустую модель не пишем: {value}"
+        );
+
+        let chosen = super::super::config::Snapshot {
+            model: Some(ModelRef::new("vibecode-claude", "claude-sonnet-4-6")),
+            ..empty
+        };
+        super::super::config::save_state_to(&path, &chosen).expect("запись");
+        let runtime = super::super::config::Runtime::from_value(&value_of(&path));
+        assert_eq!(
+            runtime.model,
+            Some(ModelRef::new("vibecode-claude", "claude-sonnet-4-6")),
+            "модель пережила запись и чтение"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// JSON тестового state-файла.
+    fn value_of(path: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).expect("чтение")).expect("json")
     }
 }

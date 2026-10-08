@@ -25,6 +25,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::opencode::ModelRef;
+
 ///
 /// Домашняя папка. Своя копия вместо `config_io::home`: тот модуль тянет за
 /// собой настройки панели, а мосту нужен только путь.
@@ -96,6 +98,33 @@ pub struct Config {
     pub dunst: bool,
     /// Удалять команды пользователя после ответа. Выключено по умолчанию.
     pub delete_commands: bool,
+    /// Модель, выбранная с телефона: её получают и активная сессия, и новые.
+    pub model: Option<ModelRef>,
+}
+
+/// Модель из JSON: пара непустых строк. Пустая или непара — «модель не
+/// выбрана», а не поломка состояния.
+fn model_ref_from(value: Option<&serde_json::Value>) -> Option<ModelRef> {
+    let value = value?;
+    let provider = value
+        .get("provider")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let id = value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if provider.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some(ModelRef::new(provider, id))
+}
+
+/// Модель в JSON для state-файла.
+fn model_to_value(model: &ModelRef) -> serde_json::Value {
+    serde_json::json!({ "provider": model.provider, "id": model.id })
 }
 
 /// Запись о живой карточке: сессия, чат и сообщение, чьи кнопки ещё на
@@ -188,6 +217,8 @@ pub struct Runtime {
     /// Удалять команды пользователя после ответа. Выключено по умолчанию:
     /// история команд — тоже история.
     pub delete_commands: bool,
+    /// Модель, выбранная с телефона: новые сессии создаются на ней.
+    pub model: Option<ModelRef>,
     /// Живые карточки: чьи кнопки ещё на экране.
     pub cards: Vec<CardRef>,
     /// Сообщения с запросами прав: чьи кнопки ещё на экране.
@@ -204,6 +235,7 @@ impl Runtime {
             session: None,
             dunst: true,
             delete_commands: false,
+            model: None,
             cards: Vec::new(),
             permissions: Vec::new(),
         }
@@ -235,6 +267,7 @@ impl Runtime {
         {
             runtime.delete_commands = delete;
         }
+        runtime.model = model_ref_from(value.get("model"));
         if let Some(cards) = value.get("cards").and_then(serde_json::Value::as_array) {
             runtime.cards = cards.iter().filter_map(CardRef::from_value).collect();
         }
@@ -270,6 +303,9 @@ impl Runtime {
             "delete_commands".to_string(),
             serde_json::Value::Bool(self.delete_commands),
         );
+        if let Some(model) = &self.model {
+            object.insert("model".to_string(), model_to_value(model));
+        }
         object.insert(
             "cards".to_string(),
             serde_json::Value::Array(self.cards.iter().map(CardRef::to_value).collect()),
@@ -295,6 +331,7 @@ impl Config {
             session: runtime.session,
             dunst: runtime.dunst,
             delete_commands: runtime.delete_commands,
+            model: None,
         }
     }
 
@@ -374,6 +411,7 @@ pub fn load() -> Config {
     config.session = runtime.session;
     config.dunst = runtime.dunst;
     config.delete_commands = runtime.delete_commands;
+    config.model = runtime.model;
     config
 }
 
@@ -417,6 +455,8 @@ pub struct Snapshot {
     pub dunst: bool,
     /// Удалять команды пользователя после ответа.
     pub delete_commands: bool,
+    /// Модель, выбранная с телефона.
+    pub model: Option<ModelRef>,
     /// Живые карточки: чьи кнопки ещё на экране.
     pub cards: Vec<CardRef>,
     /// Сообщения с запросами прав: чьи кнопки ещё на экране.
@@ -432,6 +472,7 @@ impl Snapshot {
             session: runtime.session.clone(),
             dunst: runtime.dunst,
             delete_commands: runtime.delete_commands,
+            model: runtime.model.clone(),
             cards: runtime.cards.clone(),
             permissions: runtime.permissions.clone(),
         }
@@ -447,6 +488,7 @@ impl Snapshot {
             session: config.session.clone(),
             dunst: config.dunst,
             delete_commands: config.delete_commands,
+            model: config.model.clone(),
             cards: Vec::new(),
             permissions: Vec::new(),
         }
@@ -460,6 +502,7 @@ impl Snapshot {
             session: self.session.clone(),
             dunst: self.dunst,
             delete_commands: self.delete_commands,
+            model: self.model.clone(),
             cards: self.cards.clone(),
             permissions: self.permissions.clone(),
         }
@@ -614,6 +657,7 @@ mod tests {
             session: Some("ses_abc".to_string()),
             dunst: false,
             delete_commands: true,
+            model: Some(ModelRef::new("vibecode-claude", "claude-sonnet-4-6")),
             cards: vec![CardRef {
                 session: "ses_abc".to_string(),
                 chat: 1,
@@ -635,6 +679,7 @@ mod tests {
                 session: snapshot.session.clone(),
                 dunst: snapshot.dunst,
                 delete_commands: snapshot.delete_commands,
+                model: snapshot.model.clone(),
                 cards: snapshot.cards.clone(),
                 permissions: snapshot.permissions.clone(),
             }
