@@ -189,6 +189,15 @@ pub fn execute(
                 delete_command: None,
             })
         }
+        Command::Menu => Ok(Outcome {
+            // Панель рисует мост, а не команда: кнопки собираются из живых
+            // данных, и текста ответа здесь нет вовсе.
+            text: String::new(),
+            html: true,
+            card: None,
+            ephemeral: false,
+            delete_command: None,
+        }),
         Command::Status => {
             let sessions =
                 with_client(client, |client| client.list_sessions(1)).unwrap_or_default();
@@ -428,6 +437,8 @@ pub enum Command {
     Directory(String),
     /// Что показать в шапке раздела вместо состояния.
     Status,
+    /// Открыть панель кнопок в чате.
+    Menu,
     /// Список моделей, доступных для выбора.
     Models,
     /// Выбрать модель: номер из `/models` или `провайдер/id`.
@@ -485,6 +496,7 @@ pub fn parse(text: &str) -> Option<Command> {
         "/sessions" | "sessions" | "сессии" => Some(Command::Sessions),
         "/stop" | "stop" | "стоп" => Some(Command::Stop),
         "/status" | "status" | "статус" => Some(Command::Status),
+        "/menu" | "menu" | "меню" => Some(Command::Menu),
         "/models" | "models" | "модели" => Some(Command::Models),
         "/model" | "model" | "модель" => Some(Command::Model(rest.to_string())),
         "/use" | "use" | "сессия" => Some(Command::Use(rest.to_string())),
@@ -525,6 +537,7 @@ pub fn help_text() -> String {
         "<b>/use 2</b> или <b>/use ses_…</b> — перейти в сессию",
         "<b>/stop</b> — прервать работу агента",
         "<b>/status</b> — какая сессия активна и на какой модели",
+        "<b>/menu</b> — панель кнопок: сессии, модели, стоп",
         "<b>/models</b> — список моделей, <b>/model 7</b> — выбрать",
         "<b>/dir /путь</b> — работать в другой папке",
         "",

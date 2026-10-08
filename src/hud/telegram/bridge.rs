@@ -28,7 +28,8 @@ use super::card::{self, CardStatus, CardView};
 use super::commands::{self, Outcome, PendingPermission};
 use super::config::{self, CardRef, Config, PermRef};
 use super::events;
-use super::opencode::{Client, Event};
+use super::menu;
+use super::opencode::{Client, Event, ModelRef};
 
 /// Пауза между переподключениями подписок: сеть рвётся, мост возвращается.
 const RECONNECT_PAUSE: Duration = Duration::from_secs(5);
@@ -116,6 +117,9 @@ pub(crate) struct Deletion {
 /// Очередь завершённых сообщений сессии: id сообщения и текст, по порядку
 /// первого появления. Отдельный тип ради читаемости вложенных карт.
 pub(crate) type PendingQueue = Vec<(String, String)>;
+
+/// Строки списка моделей и текущая модель: отдаётся экрану меню одним значением.
+type ModelRows = (Vec<(String, String)>, Option<ModelRef>);
 
 /// Мост с конфигом, состоянием и клиентами.
 pub struct Bridge {
@@ -389,6 +393,8 @@ impl BridgeHandle {
             _ => None,
         };
         let is_stop = matches!(command, commands::Command::Stop);
+        // `/menu` рисуется мостом: команда только сигналит, текста у неё нет.
+        let wants_menu = matches!(command, commands::Command::Menu);
         let session_before = self
             .state
             .lock()
@@ -415,6 +421,12 @@ impl BridgeHandle {
                 }
                 if let Some(card) = outcome.card.take() {
                     self.open_card(&card.session_id, &card.session_label);
+                }
+                // Панель приходит новым сообщением с кнопками: нажимая, человек
+                // будет править уже его, поэтому id не нужно хранить.
+                if wants_menu {
+                    self.redraw_menu(chat, None, menu::Screen::Root);
+                    return None;
                 }
                 if is_stop && self.finalize_stop() {
                     return None;
@@ -458,6 +470,15 @@ impl BridgeHandle {
         }
         if let Some(session_id) = card::parse_stop_callback(data) {
             return self.handle_stop_button(callback_id, session_id);
+        }
+        if let Some(action) = menu::parse_action(data) {
+            // Меню правит своё же сообщение: id экрана приходит из апдейта,
+            // а не из состояния — сообщение могло быть переслано.
+            let message = callback
+                .get("message")
+                .and_then(|message| message.get("message_id"))
+                .and_then(Value::as_i64);
+            return self.handle_menu(callback_id, action, message);
         }
         let (permission, reply) = match parse_callback(data) {
             Some(parsed) => parsed,
@@ -546,6 +567,278 @@ impl BridgeHandle {
         let _ = self.api.answer_callback(callback_id, "останавливаю");
         self.finalize_card(session_id, CardStatus::Stopped, None);
         None
+    }
+
+    /// Нажатие в меню: экран перерисовывается в том же сообщении, поэтому
+    /// ответом моста ничего не отправляется — только `answerCallbackQuery`,
+    /// чтобы Telegram убрал часы на кнопке.
+    ///
+    /// Действия с побочным эффектом (`Новая сессия`, `Стоп`, выбор сессии или
+    /// модели) выполняются здесь же, а сообщение меню после них
+    /// перерисовывается на корень: экран «сессии» после перехода уже не про
+    /// то, что человек видел.
+    fn handle_menu(
+        &self,
+        callback_id: &str,
+        action: menu::Action,
+        message: Option<i64>,
+    ) -> Option<Outcome> {
+        let chat = self.config.chat_id?;
+        match action {
+            menu::Action::PickSession(index) => {
+                self.menu_pick_session(callback_id, index);
+            }
+            menu::Action::PickModel(index) => {
+                self.menu_pick_model(callback_id, index);
+            }
+            menu::Action::NewSession => match self.execute(commands::Command::New) {
+                Ok(_) => {
+                    persist_runtime(self);
+                    let _ = self.api.answer_callback(callback_id, "новая сессия");
+                }
+                Err(why) => {
+                    let _ = self.api.answer_callback(callback_id, "не вышло");
+                    super::log::warn(format!("мост: меню, новая сессия: {why}"));
+                    self.redraw_menu(chat, message, menu::Screen::Root);
+                    return None;
+                }
+            },
+            menu::Action::Stop => {
+                let active = self
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.session.clone());
+                let stopped = active.as_deref().is_some_and(|session| {
+                    self.client
+                        .lock()
+                        .ok()
+                        .map(|client| client.abort_session(session).is_ok())
+                        .unwrap_or(false)
+                });
+                let _ = self.api.answer_callback(
+                    callback_id,
+                    if stopped {
+                        "останавливаю"
+                    } else {
+                        "нечего останавливать"
+                    },
+                );
+                if let (true, Some(session)) = (stopped, active) {
+                    self.finalize_card(&session, CardStatus::Stopped, None);
+                }
+            }
+            menu::Action::Open(screen) => {
+                let _ = self.api.answer_callback(callback_id, "");
+                self.redraw_menu(chat, message, screen);
+                return None;
+            }
+        }
+        self.redraw_menu(chat, message, menu::Screen::Root);
+        None
+    }
+
+    /// Выбор сессии из меню: номер — это позиция в том же списке, который
+    /// человек видел, поэтому список пересобирается и берётся та же позиция.
+    /// Число вне диапазона — кнопка испорчена или список успел измениться.
+    fn menu_pick_session(&self, callback_id: &str, index: usize) {
+        let listed = self
+            .client
+            .lock()
+            .ok()
+            .and_then(|client| client.list_sessions(20).ok())
+            .unwrap_or_default();
+        let Some(session) = listed.get(index - 1) else {
+            let _ = self.api.answer_callback(callback_id, "сессии больше нет");
+            return;
+        };
+        let session = session.clone();
+        match self.execute(commands::Command::Use(session.id.clone())) {
+            Ok(_) => {
+                persist_runtime(self);
+                let _ = self.api.answer_callback(callback_id, "перешёл");
+            }
+            Err(why) => {
+                let _ = self.api.answer_callback(callback_id, "не вышло");
+                super::log::warn(format!("мост: меню, выбор сессии: {why}"));
+            }
+        }
+    }
+
+    /// Выбор модели из меню: тот же номер из того же списка.
+    fn menu_pick_model(&self, callback_id: &str, index: usize) {
+        let listed = self
+            .client
+            .lock()
+            .ok()
+            .and_then(|client| client.list_models().ok())
+            .unwrap_or_default();
+        let Some(model) = listed.get(index - 1) else {
+            let _ = self.api.answer_callback(callback_id, "модели больше нет");
+            return;
+        };
+        let model = model.reference.clone();
+        match self.execute(commands::Command::Model(model.full_id())) {
+            Ok(_) => {
+                persist_runtime(self);
+                let _ = self.api.answer_callback(callback_id, "модель выбрана");
+            }
+            Err(why) => {
+                super::log::warn(format!("мост: меню, выбор модели: {why}"));
+                let _ = self.api.answer_callback(callback_id, "не вышло");
+            }
+        }
+    }
+
+    /// Перерисовка сообщения меню. Без id сообщения (пересланное нажатие)
+    /// присылаем новое сообщение с тем же экраном: иначе нажатие было бы
+    /// молчаливым.
+    fn redraw_menu(&self, chat: i64, message: Option<i64>, target: menu::Screen) {
+        let panel = match self.build_menu(target) {
+            Ok(panel) => panel,
+            Err(why) => {
+                super::log::warn(format!("мост: меню не собрано: {why}"));
+                menu::help("Экран недоступен: сервер opencode не отвечает.")
+            }
+        };
+        match message {
+            Some(id) => {
+                if let Err(why) =
+                    self.api
+                        .edit_with_keyboard(chat, id, &panel.text, panel.keyboard.clone())
+                {
+                    super::log::warn(format!("мост: меню не перерисовано: {why}"));
+                    // Сообщение могли удалить руками: тогда лучше новое, чем
+                    // молчание после нажатия.
+                    let _ = self
+                        .api
+                        .send_with_keyboard(chat, &panel.text, panel.keyboard);
+                }
+            }
+            None => {
+                let _ = self
+                    .api
+                    .send_with_keyboard(chat, &panel.text, panel.keyboard);
+            }
+        }
+    }
+
+    /// Собирает экран меню из живых данных: сессия, модель, списки. Сети
+    /// здесь, поэтому функция падает вместе с ней — вызывающий покажет
+    /// справку вместо пустого экрана.
+    fn build_menu(&self, target: menu::Screen) -> Result<menu::Panel, String> {
+        match target {
+            menu::Screen::Help => Ok(menu::help(&commands::help_text())),
+            menu::Screen::Sessions => {
+                let rows = self.session_rows()?;
+                let current = self
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.session.clone());
+                Ok(menu::sessions(&rows, current.as_deref()))
+            }
+            menu::Screen::Models => {
+                let (rows, current) = self.model_rows()?;
+                Ok(menu::models(&rows, current.as_ref()))
+            }
+            menu::Screen::Root => {
+                let (id, title) = self
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.session.clone())
+                    .map(|id| {
+                        let title = self
+                            .client
+                            .lock()
+                            .ok()
+                            .and_then(|client| client.list_sessions(20).ok())
+                            .and_then(|sessions| {
+                                sessions
+                                    .into_iter()
+                                    .find(|session| session.id == id)
+                                    .map(|session| session.title)
+                            })
+                            .unwrap_or_default();
+                        (id, title)
+                    })
+                    .unzip();
+                let busy = id
+                    .as_deref()
+                    .and_then(|id| {
+                        self.client
+                            .lock()
+                            .ok()
+                            .and_then(|client| client.session_status().ok())
+                            .and_then(|statuses| statuses.get(id).cloned())
+                    })
+                    .is_some_and(|kind| kind == "busy" || kind == "retry");
+                let model = id
+                    .as_deref()
+                    .and_then(|id| {
+                        self.client
+                            .lock()
+                            .ok()
+                            .and_then(|client| client.session_model(id).ok())
+                            .flatten()
+                    })
+                    .map(|model| model.full_id());
+                let directory = self
+                    .state
+                    .lock()
+                    .ok()
+                    .map(|state| state.directory.clone())
+                    .unwrap_or_default();
+                Ok(menu::root(&menu::RootView {
+                    session: id.map(|id| (id, title.unwrap_or_default())),
+                    busy,
+                    model,
+                    directory,
+                }))
+            }
+        }
+    }
+
+    /// Сессии для экрана меню: id и заголовок, свежие сверху.
+    fn session_rows(&self) -> Result<Vec<(String, String)>, String> {
+        let sessions = self
+            .client
+            .lock()
+            .map_err(|_| "клиент занят".to_string())?
+            .list_sessions(20)?;
+        Ok(sessions
+            .into_iter()
+            .map(|session| (session.id, session.title))
+            .collect())
+    }
+
+    /// Модели для экрана меню: id и имя, плюс текущая модель сессии.
+    fn model_rows(&self) -> Result<ModelRows, String> {
+        let models = self
+            .client
+            .lock()
+            .map_err(|_| "клиент занят".to_string())?
+            .list_models()?;
+        let current = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.session.clone())
+            .and_then(|id| {
+                self.client
+                    .lock()
+                    .ok()
+                    .and_then(|client| client.session_model(&id).ok())
+                    .flatten()
+            });
+        Ok((
+            models
+                .into_iter()
+                .map(|model| (model.reference.id, model.name))
+                .collect(),
+            current,
+        ))
     }
 
     /// Строка итога по кнопке прав: «✔ Разрешено один раз · команда»,
@@ -2214,6 +2507,62 @@ mod tests {
             card::parse_stop_callback(&stop),
             Some("ses_abcdef1234567890abcdef12")
         );
+    }
+
+    /// Префиксы не пересекаются: кнопка меню не должна разбираться как права
+    /// или как «Стоп», и наоборот. Иначе одно нажатие выполнило бы чужое
+    /// действие — например, ответило бы «Разрешить» на пустом месте.
+    #[test]
+    fn menu_callbacks_do_not_collide_with_rights_or_stop() {
+        for action in [
+            menu::Action::Open(menu::Screen::Root),
+            menu::Action::Open(menu::Screen::Sessions),
+            menu::Action::Open(menu::Screen::Models),
+            menu::Action::Open(menu::Screen::Help),
+            menu::Action::PickSession(1),
+            menu::Action::PickModel(1),
+            menu::Action::NewSession,
+            menu::Action::Stop,
+        ] {
+            let data = action.data();
+            assert_eq!(
+                parse_callback(&data),
+                None,
+                "меню не должно читаться как права: {data}"
+            );
+            assert_eq!(
+                card::parse_stop_callback(&data),
+                None,
+                "меню не должно читаться как стоп: {data}"
+            );
+        }
+        // И наоборот: настоящие кнопки прав и «Стоп» не попадают в меню.
+        assert_eq!(menu::parse_action("perm:p1:once"), None);
+        assert_eq!(menu::parse_action("stop:ses_abc"), None);
+    }
+
+    /// Кнопки меню не длиннее лимита Bot API — как и кнопки прав: проверка на
+    /// экранах с длинными id сессий и названиями моделей.
+    #[test]
+    fn menu_buttons_fit_64_bytes_with_long_data() {
+        let long = "x".repeat(300);
+        let panels = [
+            menu::root(&menu::RootView {
+                session: Some((format!("ses_{long}"), long.clone())),
+                busy: false,
+                model: Some(long.clone()),
+                directory: long.clone(),
+            }),
+            menu::sessions(&[(format!("ses_{long}"), long.clone())], None),
+            menu::models(&[(long.clone(), long.clone())], None),
+            menu::help("команда\n".repeat(500).as_str()),
+        ];
+        for panel in &panels {
+            assert!(menu::within_callback_limit(panel), "кнопка длиннее 64 байт");
+            for button in panel.keyboard.iter().flatten() {
+                assert!(card::callback_len(&button.callback_data) <= 64);
+            }
+        }
     }
 
     /// Строки итога по правам: одна строка, команда экранирована, у «всегда»

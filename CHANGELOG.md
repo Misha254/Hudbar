@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Меню бота по `/menu` (или `/меню`): одно сообщение с кнопками, нажатие перерисовывает его же. Корневая панель показывает активную сессию, папку и модель; оттуда — список сессий, список моделей, новая сессия, стоп и справка. Номера в списках совпадают с номерами в тексте, поэтому выбор не промахивается.
 - Menu section «Питание» (`hud-menu power`): lock, suspend, log out, reboot and power off in the panel's own style instead of the rofi power menu. `super+P` and the panel row both open it.
 - Destructive rows ask first: «Перезагрузить?» and «Выключить?» push a level with «Да, …» and «Отмена»; `Esc` cancels too. The answers stay out of the global search, so nothing can be powered off from search in a single `Enter`.
 - `Action::Back`: a row action that returns to the previous level. It has no command, so the runner never receives it.
