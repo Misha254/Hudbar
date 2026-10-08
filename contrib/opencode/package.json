@@ -1,0 +1,9 @@
+{
+  "name": "hudbar-opencode-notify",
+  "private": true,
+  "type": "module",
+  "description": "Плагин opencode: уведомления в dunst через argv",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
