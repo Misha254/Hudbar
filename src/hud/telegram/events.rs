@@ -6,15 +6,14 @@
 //! поток отдаёт события всех сессий, и это честно — у потока нет задачи знать,
 //! какая сессия сейчас активна.
 //!
-//! Ответ агента приходит одним сообщением и правится на месте: чат не растёт,
-//! как лента лога, а `message_id` первого отправленного куска хранит мост.
-//! Длинный ответ режется на части по [`MESSAGE_LIMIT`], а правка правит только
-//! первый кусок — последующие отправляются новыми сообщениями. Так лента
-//! оказывается короче: одно длинное сообщение правится, а хвост дописывается.
+//! Ответ агента уходит новыми сообщениями, когда сообщение завершается:
+//! телефон даёт push, а лента не растёт, как лог. Живая карточка промпта
+//! (модуль `card`) показывает состояние отдельно и правится на месте.
+//! Длинный ответ режется на части по [`MESSAGE_LIMIT`].
 //!
-//! Решение осознанно простое: переоценить длину заранее нельзя, потому что
-//! текст растёт по ходу генерации. Хвост, который переехал в отдельное
-//! сообщение, не правится — он висит как дополнение к первому куску.
+//! Накопитель текста (`Answer`) нужен, потому что текст приходит кусками
+//! `message.part.updated`, а уходить должен целиком в момент
+//! `message.updated`.
 
 use serde_json::Value;
 
@@ -186,15 +185,6 @@ impl Answer {
         }
     }
 
-    /// Текущий текст ответа без отдачи: нужен правкам на месте. Отдаёт пару
-    /// «id сообщения, текст», чтобы правка точно правила свой текст.
-    pub fn current(&self, message_id: &str) -> Option<(String, String)> {
-        match &self.last {
-            Some((id, text)) if id == message_id => Some((id.clone(), text.clone())),
-            _ => None,
-        }
-    }
-
     /// Сообщение завершено: отдать накопленный текст и забыть. `message_id`
     /// обязан совпасть — иначе это хвост от следующего сообщения, и хранить
     /// его дальше незачем.
@@ -253,8 +243,44 @@ pub fn question_notice(questions: &[Value]) -> Option<Notice> {
     })
 }
 
-/// Режет текст на куски для отправки. Первый кусок правится на месте, остальные
-/// уходят новыми сообщениями — см. модуль выше.
+/// Текущий инструмент из части `tool`: название и цель. Поля части и
+/// состояния сверены с типами SDK (`ToolPart`, `ToolStateRunning`): `tool`,
+/// `state.status`, необязательный `state.title`. Ключи внутри `state.input`
+/// спека не имеет, поэтому их перебор — best-effort: нет ни одного —
+/// вернётся только название, а не выдуманная цель.
+pub fn running_tool(part: &Value) -> Option<(String, String)> {
+    if part.get("type").and_then(Value::as_str) != Some("tool") {
+        return None;
+    }
+    let tool = part
+        .get("tool")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())?;
+    let state = part.get("state")?;
+    if state.get("status").and_then(Value::as_str) != Some("running") {
+        return None;
+    }
+    let title = state
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_string);
+    let target = title.or_else(|| {
+        let input = state.get("input")?;
+        ["command", "filePath", "path", "pattern", "query", "url"]
+            .iter()
+            .filter_map(|key| input.get(key))
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .find(|target| !target.is_empty())
+            .map(str::to_string)
+    });
+    Some((tool.to_string(), target.unwrap_or_default()))
+}
+
+/// Режет текст на куски для отправки новыми сообщениями.
 pub fn chunks(text: &str) -> Vec<String> {
     chunk_text(text, MESSAGE_LIMIT)
 }
@@ -322,6 +348,44 @@ mod tests {
         let mut answer = Answer::default();
         answer.feed("msg_1", "старое");
         assert!(answer.finish("msg_2").is_none());
+    }
+
+    /// Цель инструмента: сначала `title`, потом частые ключи `input`, потом
+    /// ничего — но никогда не чужая часть и не завершённый вызов.
+    #[test]
+    fn running_tool_takes_title_then_input_keys() {
+        let titled = json!({
+            "type": "tool", "tool": "bash",
+            "state": { "status": "running", "title": "cargo test" },
+        });
+        assert_eq!(
+            running_tool(&titled),
+            Some(("bash".to_string(), "cargo test".to_string()))
+        );
+        let from_input = json!({
+            "type": "tool", "tool": "edit",
+            "state": { "status": "running", "input": { "filePath": "src/main.rs" } },
+        });
+        assert_eq!(
+            running_tool(&from_input),
+            Some(("edit".to_string(), "src/main.rs".to_string()))
+        );
+        let bare = json!({
+            "type": "tool", "tool": "read",
+            "state": { "status": "running", "input": {} },
+        });
+        assert_eq!(
+            running_tool(&bare),
+            Some(("read".to_string(), String::new()))
+        );
+        let done = json!({
+            "type": "tool", "tool": "bash",
+            "state": { "status": "completed" },
+        });
+        assert!(running_tool(&done).is_none(), "завершённый не текущий");
+        let text = json!({ "type": "text", "text": "привет" });
+        assert!(running_tool(&text).is_none(), "текст не инструмент");
+        assert!(running_tool(&json!({})).is_none(), "пусто не инструмент");
     }
 
     #[test]
