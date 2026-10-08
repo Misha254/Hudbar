@@ -90,13 +90,44 @@ const el={sub:$('sub'),sessions:$('sessions'),models:$('models'),search:$('model
 prompt:$('prompt'),send:$('send'),stop:$('stop'),hint:$('hint')};
 let state={session:null,model:null,models:[],token:''};
 
-// Токен из фрагмента адреса: сервер его не видел, и в историю он попасть не должен.
+// Токен живёт во фрагменте (#t=…) или в памяти браузера после первого входа.
+// Сервер фрагмент не видит, а кнопка от BotFather приходит вовсе без него —
+// поэтому однажды введённый токен запоминается и кнопка начинает работать.
 function takeToken(){
   const raw=location.hash.replace(/^#/,'');
   const p=new URLSearchParams(raw.startsWith('t=')?raw:'t='+raw.replace(/^t=/,''));
   state.token=p.get('t')||'';
-  if(state.token)history.replaceState(null,'',location.pathname+location.search);
-  if(!state.token)el.hint.textContent='нет токена: открой ссылку с #t=…';
+  if(state.token){
+    try{localStorage.setItem('hud-token',state.token);}catch{}
+    history.replaceState(null,'',location.pathname+location.search);
+  }else{
+    let saved='';
+    try{saved=localStorage.getItem('hud-token')||'';}catch{}
+    if(saved){state.token=saved;}
+    else{askToken();}
+  }
+}
+// Поле для токена: показывается один раз, если в ссылке его не было.
+function askToken(){
+  el.hint.textContent='вставь токен панели — один раз, дальше запомню';
+  const box=document.createElement('input');
+  box.type='password';
+  box.placeholder='токен панели';
+  box.autocomplete='off';
+  box.style.cssText='width:100%;padding:9px 12px;margin-top:6px;border-radius:10px;'+
+    'border:1px solid var(--line);background:var(--panel);color:var(--fg);font:14px inherit';
+  box.onkeydown=async e=>{
+    if(e.key!=='Enter')return;
+    const value=box.value.trim();
+    if(!value)return;
+    state.token=value;
+    try{localStorage.setItem('hud-token',value);}catch{}
+    box.remove();
+    el.hint.textContent='проверяю…';
+    await refresh();
+  };
+  document.querySelector('footer').prepend(box);
+  box.focus();
 }
 async function api(path,body){
   const opts={headers:{'X-Hudbar-Token':state.token}};
@@ -200,6 +231,10 @@ mod tests {
         // Скрипт читает токен из фрагмента и убирает его из адреса.
         assert!(html.contains("location.hash"), "токен берётся из фрагмента");
         assert!(html.contains("replaceState"), "и убирается из адреса");
+        // Кнопка от BotFather приходит без фрагмента: токен вводится один раз
+        // и запоминается, иначе панель по кнопке была бы мёртвой.
+        assert!(html.contains("localStorage"), "токен запоминается");
+        assert!(html.contains("askToken"), "есть поле для ввода токена");
     }
 
     #[test]
