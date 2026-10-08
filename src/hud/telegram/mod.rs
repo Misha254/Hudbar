@@ -28,6 +28,7 @@ pub mod card;
 pub mod commands;
 pub mod config;
 pub mod events;
+pub mod menu;
 pub mod opencode;
 
 /// Журнал моста. Реэкспорт, а не `super::super::`: в `main.rs` модуль лежит в
