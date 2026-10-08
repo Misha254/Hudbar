@@ -459,6 +459,7 @@ impl BridgeHandle {
                     .and_then(|state| state.session.clone());
                 if session_after != session_before {
                     self.wipe_chat();
+                    Self::clear_notifications();
                 }
                 if let Some(card) = outcome.card.take() {
                     self.open_card(&card.session_id, &card.session_label);
@@ -1107,6 +1108,22 @@ impl BridgeHandle {
             }
         }
         persist_runtime(self);
+    }
+
+    /// Убирает уведомления dunst: видимые баннеры и историю. Вход в сессию
+    /// должен очищать всё, чем мост наговорил, а не только ленту в Telegram:
+    /// иначе уведомления прошлой работы висят и перебивают новые.
+    ///
+    /// Отсутствие dunst — не ошибка: мост не обязан от него зависеть, а на
+    /// машине без него обе команды просто не найдутся.
+    pub fn clear_notifications() {
+        for args in [vec!["history-clear"], vec!["close-all"]] {
+            if let Err(why) = std::process::Command::new("dunstctl").args(&args).status()
+                && why.kind() != std::io::ErrorKind::NotFound
+            {
+                super::log::warn(format!("мост: уведомления не убраны: {why}"));
+            }
+        }
     }
 
     /// Финал карточки: done, error или stopped. Идёт мимо троттлинга: после
@@ -2218,12 +2235,19 @@ pub fn mirror(notice: &events::Notice) {
         Priority::High => "normal",
         Priority::Max => "critical",
     };
+    // Таймаут обязателен: без него баннер висит, пока человек его не закроет
+    // руками, а уведомлений накапливается с десяток. Критичные тоже: за
+    // запрос прав человек успевает прочитать и за пять секунд, а висящие
+    // баннеры перекрывают всё остальное.
+    const MIRROR_TIMEOUT_MS: &str = "5000";
     let status = std::process::Command::new("notify-send")
         .args([
             "--urgency",
             urgency,
             "--app-name",
             "opencode",
+            "--expire-time",
+            MIRROR_TIMEOUT_MS,
             "--",
             &notice.subject,
             body,
@@ -2627,6 +2651,15 @@ mod tests {
             .collect();
         assert_eq!(ids, vec![8], "удалённое забыто, живое осталось");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Чистка уведомлений не должна ронять мост: dunst на машине может не
+    /// стоять вовсе, и тогда команда просто не найдётся.
+    #[test]
+    fn notification_cleanup_survives_a_missing_dunst() {
+        // Функция ничего не возвращает и не падает: на машине без dunstctl
+        // это должен быть молчаливый выход, иначе вход в сессию ломался бы.
+        BridgeHandle::clear_notifications();
     }
 
     /// Мост для тестов состояния: живой путь заменён временным каталогом,
