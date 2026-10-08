@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Menu section «Питание» (`hud-menu power`): lock, suspend, log out, reboot and power off in the panel's own style instead of the rofi power menu. `super+P` and the panel row both open it.
+- Destructive rows ask first: «Перезагрузить?» and «Выключить?» push a level with «Да, …» and «Отмена»; `Esc` cancels too. The answers stay out of the global search, so nothing can be powered off from search in a single `Enter`.
+- `Action::Back`: a row action that returns to the previous level. It has no command, so the runner never receives it.
+- `Node::hidden_from_search()`: keeps a row visible in its section while hiding it from global search.
+
+### Changed
+- The panel's «Питание» row opens the menu section instead of `powermenu.sh`, which is no longer referenced from the panel or the menu.
+
 ## [0.6.0] - 2026-10-07
 
 ### Added
