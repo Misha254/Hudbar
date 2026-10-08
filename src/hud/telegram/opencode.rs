@@ -244,7 +244,16 @@ impl Client {
         // Закодированный ответ не поддерживается: локальный сервер отдаёт
         // обычный текст, а не `chunked` и не `gzip`.
         let _ = headers;
-        serde_json::from_str(body).map_err(|why| format!("ответ не json: {why}"))
+        serde_json::from_str(body).map_err(|why| {
+            // HTML вместо JSON — это заглушка приложения: значит путь не
+            // маршрутизирован и сервер отдал 200 в никуда. Без отдельного
+            // текста такой промах выглядит как «сервер сломался».
+            if body.trim_start().starts_with('<') {
+                format!("сервер отдал HTML на {method} {path}: эндпоинт не найден")
+            } else {
+                format!("ответ не json: {why}")
+            }
+        })
     }
 
     /// Ждёт готовности сервера: пробует короткое чтение списка сессий, пока
@@ -407,9 +416,17 @@ impl Client {
     /// подхватывается со следующего запроса агента. Тело — ровно то, что
     /// ждёт схема `ModelRef`: `id` и `providerID`.
     pub fn set_session_model(&self, session_id: &str, model: &ModelRef) -> Result<(), Error> {
+        // Именно `/api/session/{id}/model`. Путь без префикса тоже есть в
+        // спеке, но на живом сервере он не маршрутизирован: отдаётся
+        // HTML-заглушка приложения с кодом 200, то есть «успех», который
+        // ничего не сделал. С префиксом — 204 и модель действительно меняется.
         let body = json!({ "model": model_body(model) });
-        self.request("POST", &format!("/session/{session_id}/model"), Some(&body))
-            .map(|_| ())
+        self.request(
+            "POST",
+            &format!("/api/session/{session_id}/model"),
+            Some(&body),
+        )
+        .map(|_| ())
     }
 
     /// Ответ на запрос прав: `once` — разрешить один раз, `always` —
@@ -926,6 +943,66 @@ mod tests {
             ModelRef::new("  opencode  ", " free ").full_id(),
             "opencode/free",
             "края обрезаны"
+        );
+    }
+
+    /// Заглушка-как-SPA: отвечает HTML на 200, как сервер opencode на пути,
+    /// который не маршрутизирован. Отдаёт запрошенный путь, чтобы тест увидел,
+    /// куда ушёл вызов.
+    fn stub_spa() -> (u16, std::sync::mpsc::Receiver<String>) {
+        use std::sync::mpsc;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("слушатель");
+        let port = listener.local_addr().expect("порт").port();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut head = vec![0u8; 8192];
+                let read = stream.read(&mut head).unwrap_or(0);
+                let head = String::from_utf8_lossy(&head[..read]).to_string();
+                let line = head.lines().next().unwrap_or("").to_string();
+                let _ = sender.send(line);
+                let body = "<!doctype html><html></html>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (port, receiver)
+    }
+
+    /// Путь смены модели — именно с префиксом `/api`. Без него сервер отвечает
+    /// 200 с HTML-заглушкой: вызов «успешен», но модель не меняется, и
+    /// человек видит, что переключение не сработало. Тест ловит именно эту
+    /// ошибку — путь, а не только код ответа.
+    #[test]
+    fn model_switch_uses_the_api_prefixed_path() {
+        let (port, line) = stub_spa();
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        let model = ModelRef::new("vibecode", "gpt-5.6-luna");
+        // Ответ-HTML обязан быть ошибкой с внятным текстом, а не «успехом».
+        let why = client
+            .set_session_model("ses_1", &model)
+            .expect_err("HTML-заглушка — это не успех");
+        assert!(
+            why.contains("эндпоинт не найден"),
+            "текст объясняет, что произошло: {why}"
+        );
+        let request = line
+            .recv_timeout(Duration::from_secs(5))
+            .expect("строка запроса");
+        // В строке запроса после пути идёт query с папкой, поэтому сверяем
+        // начало до параметров, а не всю строку.
+        assert!(
+            request.starts_with("POST /api/session/ses_1/model"),
+            "смена модели идёт через /api: {request}"
+        );
+        assert!(
+            !request.starts_with("POST /session/"),
+            "путь без префикса даёт HTML-заглушку: {request}"
         );
     }
 
