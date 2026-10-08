@@ -29,7 +29,11 @@ pub mod commands;
 pub mod config;
 pub mod events;
 pub mod menu;
+pub mod mini;
+pub mod mini_page;
+pub mod mini_server;
 pub mod opencode;
+pub mod panel;
 
 /// Журнал моста. Реэкспорт, а не `super::super::`: в `main.rs` модуль лежит в
 /// `hud::telegram`, а в `hud-telegram-rs` — в корне крейта, и путь до общих
