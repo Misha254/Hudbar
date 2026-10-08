@@ -26,6 +26,7 @@ hud-telegram-rs — мост Telegram ↔ opencode
   hud-telegram-rs                 запустить мост
   hud-telegram-rs --check         проверить токен, чат и сервер
   hud-telegram-rs --notify TEXT   отправить тестовое сообщение в чат
+  hud-telegram-rs --panel-token   создать секрет панели Mini App и напечатать ссылку
 ";
 
 fn main() -> ExitCode {
@@ -33,6 +34,7 @@ fn main() -> ExitCode {
     match args.next().as_deref() {
         None => run(),
         Some("--check") => check(),
+        Some("--panel-token") => panel_token(),
         Some("--notify") => {
             let text: Vec<String> = args.collect();
             notify(&text.join(" "))
@@ -46,6 +48,67 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Создаёт секрет панели Mini App и печатает ссылку для Telegram.
+///
+/// Токен берётся из `/dev/urandom`, а не из времени или pid: иначе его можно
+/// было бы угадать по времени запуска. Файл создаётся с правами `600` и
+/// перезаписывается только если его уже нет — случайный повторный вызов не
+/// оставил бы человека со ссылкой, которая не работает.
+fn panel_token() -> ExitCode {
+    use std::io::Read;
+    let path = telegram::panel::path();
+    if let Some(parent) = path.parent()
+        && let Err(why) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("hud-telegram: каталог не создан ({why})");
+        return ExitCode::FAILURE;
+    }
+    // Токен берётся из готового секрета, если он уже есть: адрес дописывается
+    // в тот же файл, иначе пришлось бы генерировать новый токен и рвать
+    // ссылку, которая уже работает.
+    let existing = telegram::panel::load_from(&path);
+    let token = match existing.token.clone() {
+        Some(token) => token,
+        None => {
+            let mut bytes = [0u8; 24];
+            let random = std::fs::File::open("/dev/urandom")
+                .and_then(|mut source| source.read_exact(&mut bytes));
+            if let Err(why) = random {
+                eprintln!("hud-telegram: случайность не получена ({why})");
+                return ExitCode::FAILURE;
+            }
+            bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        }
+    };
+    // Адрес панели: из окружения, из аргумента или из уже сохранённого
+    // секрета. Пустой адрес оставляем в файле, чтобы `tailscale serve` можно
+    // было поднять позже и не пересоздавать токен.
+    let base = std::env::args()
+        .skip(1)
+        .find(|argument| argument.starts_with("https://"))
+        .or_else(|| std::env::var("HUDBAR_PANEL_URL").ok())
+        .map(|url| url.trim().to_string());
+    match &base {
+        Some(url) if !url.trim().is_empty() => {
+            let text = format!("{{\n  \"token\": \"{token}\",\n  \"url\": \"{url}\"\n}}\n");
+            let _ = std::fs::write(&path, text);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+            println!("секрет: {}", path.display());
+            println!("ссылка: {}", telegram::panel::link(url, &token));
+        }
+        _ => {
+            println!("секрет: {}", path.display());
+            println!("токен создан, адрес не задан.");
+            println!("Потом: hud-telegram-rs --panel-token https://<узел>.<tailnet>.ts.net");
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 /// Запуск моста: конфиг, готовность сервера, два потока.

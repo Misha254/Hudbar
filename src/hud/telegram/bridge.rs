@@ -29,6 +29,7 @@ use super::commands::{self, Outcome, PendingPermission};
 use super::config::{self, CardRef, Config, PermRef};
 use super::events;
 use super::menu;
+use super::mini;
 use super::opencode::{Client, Event, ModelRef};
 
 /// Пауза между переподключениями подписок: сеть рвётся, мост возвращается.
@@ -231,6 +232,17 @@ impl Bridge {
             .name("telegram-watchdog".to_string())
             .spawn(move || watch.watchdog_loop())
             .expect("поток вотчдога");
+        // Панель Mini App: сервер на localhost, наружу его выставляет
+        // `tailscale serve`. Без токена в файле секретов поток не поднимается
+        // вовсе — выключенная панель не должна даже слушать порт.
+        if let Some(panel) = panel_secret() {
+            let client = Arc::clone(&self.client);
+            let state = Arc::clone(&self.state);
+            thread::Builder::new()
+                .name("mini-app".to_string())
+                .spawn(move || mini::serve(panel.port, panel.token, client, state))
+                .expect("поток панели");
+        }
         let _ = updates.join();
         let _ = events.join();
         let _ = watchdog.join();
@@ -279,6 +291,19 @@ impl Bridge {
             pending: Arc::clone(&self.pending),
         }
     }
+}
+
+/// Секрет панели из файла: `None` — панель выключена. Права файла проверяются
+/// отдельно: широкие права на секрет это предупреждение в журнал, а не отказ
+/// работать.
+pub fn panel_secret() -> Option<super::panel::Panel> {
+    let panel = super::panel::load();
+    panel.token.as_ref()?;
+    let file = super::panel::path();
+    if !super::panel::permissions_are_secret(&file) {
+        super::log::warn("панель: права на miniapp.json шире 600 — токен читают другие");
+    }
+    Some(panel)
 }
 
 /// Рабочая копия моста для потоков: те же указатели, без владения конфигом.

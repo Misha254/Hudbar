@@ -189,6 +189,24 @@ pub fn execute(
                 delete_command: None,
             })
         }
+        Command::Panel => match panel_link() {
+            // Ссылка с токеном уходит в чат и стирается через обычные десять
+            // секунд: человек успевает открыть, а в ленте она не лежит.
+            Some(link) => Ok(Outcome {
+                text: format!("Веб-панель: {link}"),
+                html: true,
+                card: None,
+                ephemeral: true,
+                delete_command: None,
+            }),
+            None => Ok(Outcome {
+                text: "Панель не настроена: нет токена или адреса".to_string(),
+                html: false,
+                card: None,
+                ephemeral: true,
+                delete_command: None,
+            }),
+        },
         Command::Menu => Ok(Outcome {
             // Панель рисует мост, а не команда: кнопки собираются из живых
             // данных, и текста ответа здесь нет вовсе.
@@ -439,6 +457,8 @@ pub enum Command {
     Status,
     /// Открыть панель кнопок в чате.
     Menu,
+    /// Прислать ссылку на веб-панель Mini App.
+    Panel,
     /// Список моделей, доступных для выбора.
     Models,
     /// Выбрать модель: номер из `/models` или `провайдер/id`.
@@ -497,6 +517,7 @@ pub fn parse(text: &str) -> Option<Command> {
         "/stop" | "stop" | "стоп" => Some(Command::Stop),
         "/status" | "status" | "статус" => Some(Command::Status),
         "/menu" | "menu" | "меню" => Some(Command::Menu),
+        "/panel" | "панель" => Some(Command::Panel),
         "/models" | "models" | "модели" => Some(Command::Models),
         "/model" | "model" | "модель" => Some(Command::Model(rest.to_string())),
         "/use" | "use" | "сессия" => Some(Command::Use(rest.to_string())),
@@ -538,6 +559,7 @@ pub fn help_text() -> String {
         "<b>/stop</b> — прервать работу агента",
         "<b>/status</b> — какая сессия активна и на какой модели",
         "<b>/menu</b> — панель кнопок: сессии, модели, стоп",
+        "<b>/panel</b> — ссылка на веб-панель",
         "<b>/models</b> — список моделей, <b>/model 7</b> — выбрать",
         "<b>/dir /путь</b> — работать в другой папке",
         "",
@@ -567,6 +589,15 @@ pub fn find_session<'a>(sessions: &'a [Session], argument: &str) -> Option<&'a S
                 .contains(&argument.to_lowercase())
         })
     }
+}
+
+/// Ссылка на веб-панель из файла секретов: нужны и токен, и адрес, который
+/// выдал `tailscale serve`. Без любого из них панели нет.
+fn panel_link() -> Option<String> {
+    let panel = super::panel::load();
+    let token = panel.token?;
+    let url = panel.url?;
+    Some(super::panel::link(&url, &token))
 }
 
 /// Ищет модель по аргументу: номеру из `/models`, полному `провайдер/id`
