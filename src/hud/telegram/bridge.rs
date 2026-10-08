@@ -26,7 +26,7 @@ use serde_json::Value;
 use super::api::{self, Api, Priority, chunk_text, escape_html};
 use super::card::{self, CardStatus, CardView};
 use super::commands::{self, Outcome, PendingPermission};
-use super::config::{self, CardRef, Config, PermRef};
+use super::config::{self, CardRef, Config, PermRef, SentRef};
 use super::events;
 use super::menu;
 use super::mini;
@@ -142,6 +142,9 @@ pub struct Bridge {
     /// `Done` — только по `session.idle`, иначе промежуточный ответ ушёл бы
     /// раньше времени.
     pending: Arc<Mutex<HashMap<String, PendingQueue>>>,
+    /// Сообщения, отправленные ботом: по ним чистится лента при входе в
+    /// сессию.
+    sent: Arc<Mutex<Vec<SentRef>>>,
 }
 
 impl Bridge {
@@ -167,6 +170,7 @@ impl Bridge {
             deletions: Arc::new(Mutex::new(Vec::new())),
             inflight: Arc::new(Mutex::new(HashMap::new())),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            sent: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -254,7 +258,7 @@ impl Bridge {
     /// просто снимается, записи стираются. Ошибки пишутся в журнал и
     /// игнорируются: мост стартует в любом случае.
     fn startup_cleanup(&self) {
-        let (cards, permissions) = config::load_refs_from(&self.state_path);
+        let (cards, permissions, messages) = config::load_refs_from(&self.state_path);
         for card in &cards {
             let text = format!(
                 "🛠 <b>hudbar</b> · {}\n⚠ Бот перезапущен",
@@ -272,7 +276,15 @@ impl Bridge {
                 super::log::warn(format!("мост: чистка кнопок: {why}"));
             }
         }
-        if !cards.is_empty() || !permissions.is_empty() {
+        let restored = messages.len();
+        if !messages.is_empty()
+            && let Ok(mut sent) = self.sent.lock()
+        {
+            // Записи из прошлой жизни моста: лента должна быть чистой и после
+            // перезапуска, а не только при смене сессии.
+            sent.extend(messages);
+        }
+        if !cards.is_empty() || !permissions.is_empty() || restored > 0 {
             persist_runtime(&self.cloned());
         }
     }
@@ -289,6 +301,7 @@ impl Bridge {
             deletions: Arc::clone(&self.deletions),
             inflight: Arc::clone(&self.inflight),
             pending: Arc::clone(&self.pending),
+            sent: Arc::clone(&self.sent),
         }
     }
 }
@@ -326,6 +339,9 @@ pub struct BridgeHandle {
     pub inflight: Arc<Mutex<HashMap<String, String>>>,
     /// Завершённые сообщения по сессии, ждущие конца хода.
     pub pending: Arc<Mutex<HashMap<String, PendingQueue>>>,
+    /// Все сообщения, отправленные ботом: при входе в сессию лента чистится по
+    /// этому списку, а не по догадкам.
+    pub sent: Arc<Mutex<Vec<SentRef>>>,
 }
 
 impl BridgeHandle {
@@ -948,6 +964,7 @@ impl BridgeHandle {
             .send_with_keyboard(chat, &text, Self::stop_keyboard(session_id))
         {
             Ok(message) => {
+                self.note_sent(message);
                 if let Ok(mut cards) = self.cards.lock() {
                     cards.insert(
                         session_id.to_string(),
@@ -1068,47 +1085,24 @@ impl BridgeHandle {
     /// старше 48 часов Telegram отвергнет, и лимит проверяет отправитель.
     /// Прямо здесь сеть не дёргается — мост не должен вставать из-за Telegram.
     fn wipe_chat(&self) {
-        let cards: Vec<(i64, i64)> = self
-            .cards
-            .lock()
-            .ok()
-            .map(|mut cards| {
-                let live: Vec<(i64, i64)> = cards
-                    .values()
-                    .map(|card| (card.chat, card.message))
-                    .collect();
-                cards.clear();
-                live
-            })
-            .unwrap_or_default();
-        let permissions: Vec<(i64, i64)> = self
-            .perm_msgs
-            .lock()
-            .ok()
-            .map(|mut messages| {
-                let live: Vec<(i64, i64)> = messages
-                    .values()
-                    .map(|perm| (perm.chat, perm.message))
-                    .collect();
-                messages.clear();
-                live
-            })
-            .unwrap_or_default();
         if let Ok(mut state) = self.state.lock() {
             state.pending_permission = None;
         }
-        if cards.is_empty() && permissions.is_empty() {
+        let chat = self.config.chat_id;
+        let doomed = self.collect_wipe();
+        if doomed.is_empty() {
+            persist_runtime(self);
             return;
         }
-        // Удаляем сразу, а не через очередь: ответ о переходе отправляется
-        // после выхода из `handle_update`, и старые карточки не должны
-        // мелькнуть под ним. Ошибки — в журнал: нечего удалять тоже не повод
-        // молчать о зависшей кнопке.
-        for (chat, message) in cards.into_iter().chain(permissions) {
-            if Some(chat) != self.config.chat_id {
-                continue;
-            }
-            if let Err(why) = self.api.delete_message(chat, message) {
+        // Удаляем сразу, а не через очередь: ответ о переходе уходит после
+        // выхода из `handle_update`, и старые сообщения не должны мелькнуть
+        // под ним. Отказ «Not Found» — не ошибка: сообщение могли удалить
+        // руками или отработал отложенный удалитель.
+        for entry in doomed {
+            let Some(chat) = chat else { break };
+            if let Err(why) = self.api.delete_message(chat, entry.id)
+                && !why.contains("Not Found")
+            {
                 super::log::warn(format!("мост: запись прошлой сессии не удалена: {why}"));
             }
         }
@@ -1557,7 +1551,8 @@ impl BridgeHandle {
             return;
         };
         match self.api.send(chat, first) {
-            Ok(_) => {
+            Ok(id) => {
+                self.note_sent(id);
                 if self.config.dunst {
                     mirror(notice);
                 }
@@ -1565,9 +1560,12 @@ impl BridgeHandle {
             Err(why) => super::log::warn(format!("мост: ответ не отправлен: {why}")),
         }
         for tail in &parts[1..] {
-            if let Err(why) = self.api.send(chat, tail) {
-                super::log::warn(format!("мост: хвост не отправлен: {why}"));
-                break;
+            match self.api.send(chat, tail) {
+                Ok(id) => self.note_sent(id),
+                Err(why) => {
+                    super::log::warn(format!("мост: хвост не отправлен: {why}"));
+                    break;
+                }
             }
         }
     }
@@ -1788,6 +1786,7 @@ impl BridgeHandle {
         };
         let id = match result {
             Ok(id) => {
+                self.note_sent(id);
                 if self.config.dunst {
                     mirror(notice);
                 }
@@ -1799,9 +1798,12 @@ impl BridgeHandle {
             }
         };
         for tail in &parts[1..] {
-            if let Err(why) = self.api.send(chat, tail) {
-                super::log::warn(format!("мост: хвост не отправлен: {why}"));
-                break;
+            match self.api.send(chat, tail) {
+                Ok(id) => self.note_sent(id),
+                Err(why) => {
+                    super::log::warn(format!("мост: хвост не отправлен: {why}"));
+                    break;
+                }
             }
         }
         id
@@ -1826,7 +1828,10 @@ impl BridgeHandle {
         let mut ids = Vec::new();
         for part in chunk_text(&body, api::MESSAGE_LIMIT) {
             match self.api.send(chat, &part) {
-                Ok(id) => ids.push(id),
+                Ok(id) => {
+                    self.note_sent(id);
+                    ids.push(id);
+                }
                 Err(why) => {
                     super::log::warn(format!("мост: ответ не отправлен: {why}"));
                     break;
@@ -1834,6 +1839,88 @@ impl BridgeHandle {
             }
         }
         ids
+    }
+
+    /// Запоминает отправленное сообщение, чтобы при входе в сессию лента
+    /// чистилась по факту, а не по догадкам. Список ограничен: старые записи
+    /// всё равно не удалить — Telegram не даёт трогать сообщения старше 48
+    /// часов, — и незачем их тащить.
+    fn note_sent(&self, id: i64) {
+        const KEEP: usize = 400;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_secs() as i64)
+            .unwrap_or_default();
+        if let Ok(mut sent) = self.sent.lock() {
+            sent.push(SentRef { id, at: now });
+            if sent.len() > KEEP {
+                let drop_count = sent.len() - KEEP;
+                sent.drain(..drop_count);
+            }
+        }
+    }
+
+    /// Забывает сообщение, которое бот удалил сам: иначе оно осталось бы в
+    /// списке и при следующей чистке дало бы лишний отказ от Telegram.
+    fn forget_sent(&self, id: i64) {
+        if let Ok(mut sent) = self.sent.lock() {
+            sent.retain(|entry| entry.id != id);
+        }
+    }
+
+    /// Что удалить при входе в сессию: сообщения бота, карточки и запросы
+    /// прав. Возраст проверяется по лимиту Telegram, а повторы и уже
+    /// удалённое отбрасываются: список один и тот же id может прийти и из
+    /// карточек, и из общего списка.
+    fn collect_wipe(&self) -> Vec<SentRef> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_secs() as i64)
+            .unwrap_or_default();
+        let cards: Vec<SentRef> = self
+            .cards
+            .lock()
+            .ok()
+            .map(|mut cards| {
+                let live: Vec<SentRef> = cards
+                    .values()
+                    .map(|card| SentRef {
+                        id: card.message,
+                        at: now,
+                    })
+                    .collect();
+                cards.clear();
+                live
+            })
+            .unwrap_or_default();
+        let permissions: Vec<SentRef> = self
+            .perm_msgs
+            .lock()
+            .ok()
+            .map(|mut messages| {
+                let live: Vec<SentRef> = messages
+                    .values()
+                    .map(|perm| SentRef {
+                        id: perm.message,
+                        at: now,
+                    })
+                    .collect();
+                messages.clear();
+                live
+            })
+            .unwrap_or_default();
+        let mut all = self
+            .sent
+            .lock()
+            .ok()
+            .map(|mut sent| std::mem::take(&mut *sent))
+            .unwrap_or_default();
+        all.extend(cards);
+        all.extend(permissions);
+        all.retain(|entry| within_delete_limit(entry.at));
+        let mut seen = std::collections::HashSet::new();
+        all.retain(|entry| seen.insert(entry.id));
+        all
     }
 
     /// Кладет сообщение в очередь удалятора. Удаляется только то, что мост
@@ -1904,7 +1991,10 @@ impl BridgeHandle {
                 })
                 .unwrap_or_default();
             for deletion in &due {
+                // Успех или отказ — записи в списке отправленных больше нет:
+                // иначе следующая чистка ленты получила бы лишний отказ.
                 let _ = self.api.delete_message(deletion.chat, deletion.message);
+                self.forget_sent(deletion.message);
             }
         }
     }
@@ -2048,6 +2138,14 @@ fn error_details(properties: &Value) -> (Option<String>, Option<String>) {
 /// трогаются — у снимка их нет в полях. Ошибка — предупреждение, а не смерть:
 /// мост продолжит в памяти и попробует снова при следующей команде.
 pub fn persist_runtime(handle: &BridgeHandle) {
+    // Список сообщений снимается до блокировки состояния: он свой, и держать
+    // два мьютекса в одной функции незачем.
+    let messages = handle
+        .sent
+        .lock()
+        .ok()
+        .map(|sent| sent.clone())
+        .unwrap_or_default();
     let snapshot = handle.state.lock().ok().map(|state| {
         let cards = handle
             .cards
@@ -2088,6 +2186,7 @@ pub fn persist_runtime(handle: &BridgeHandle) {
             model: state.model.clone(),
             cards,
             permissions,
+            messages,
         }
     });
     if let Some(snapshot) = snapshot
@@ -2347,6 +2446,186 @@ mod tests {
             empty("cards") && empty("permissions"),
             "state-файл чист: {value}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Чистка при входе в сессию: уходят ответы бота, карточки и запросы
+    /// прав, список отправленных пустеет, `pending_permission` снят.
+    #[test]
+    fn entering_a_session_wipes_every_bot_message() {
+        let dir = std::env::temp_dir().join(format!("hud-tg-wipe-all-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, path) = bridge_with_temp_state(&dir);
+        let handle = bridge.cloned();
+        // Три сообщения бота: два ответа и одно служебное.
+        for id in [101, 102, 103] {
+            handle.note_sent(id);
+        }
+        if let Ok(mut cards) = handle.cards.lock() {
+            cards.insert(
+                "ses_old".to_string(),
+                LiveCard {
+                    chat: 1,
+                    message: 201,
+                    label: "старая".to_string(),
+                    started: Instant::now(),
+                    last_edit: Instant::now(),
+                    last_render: String::new(),
+                    tool: None,
+                    status: CardStatus::Done,
+                    has_keyboard: false,
+                    last_event: Instant::now(),
+                    expires: None,
+                },
+            );
+        }
+        if let Ok(mut messages) = handle.perm_msgs.lock() {
+            messages.insert(
+                "perm_1".to_string(),
+                PermMsg {
+                    chat: 1,
+                    message: 301,
+                    title: "bash".to_string(),
+                },
+            );
+        }
+        if let Ok(mut state) = handle.state.lock() {
+            state.pending_permission = Some(commands::PendingPermission {
+                id: "perm_1".to_string(),
+                session: "ses_old".to_string(),
+                title: "bash".to_string(),
+            });
+        }
+        handle.wipe_chat();
+        assert!(
+            handle.sent.lock().expect("список").is_empty(),
+            "ответы бота забыты"
+        );
+        assert!(
+            handle.cards.lock().expect("карточки").is_empty(),
+            "карточки стёрты"
+        );
+        assert!(
+            handle.perm_msgs.lock().expect("права").is_empty(),
+            "права стёрты"
+        );
+        assert!(
+            handle
+                .state
+                .lock()
+                .expect("состояние")
+                .pending_permission
+                .is_none(),
+            "запрос прав больше не ждёт ответа"
+        );
+        let value = read_temp_state(&path);
+        assert!(
+            value
+                .get("messages")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|messages| messages.is_empty()),
+            "state-файл чист: {value}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Сообщения, которые Telegram всё равно не даст удалить, в уборку не
+    /// попадают: иначе каждый вход в сессию получал бы отказ на каждый старый
+    /// ответ и сыпал бы журнал.
+    #[test]
+    fn wipe_skips_messages_older_than_the_telegram_limit() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("время")
+            .as_secs() as i64;
+        let dir = std::env::temp_dir().join(format!("hud-tg-wipe-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, _) = bridge_with_temp_state(&dir);
+        let handle = bridge.cloned();
+        handle
+            .sent
+            .lock()
+            .expect("список")
+            .push(SentRef { id: 1, at: now });
+        handle.sent.lock().expect("список").push(SentRef {
+            id: 2,
+            at: now - 49 * 3600,
+        });
+        let doomed = handle.collect_wipe();
+        assert_eq!(
+            doomed.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![1],
+            "двухдневное сообщение Telegram не удалит"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Одно сообщение не должно удаляться дважды: id может прийти и из списка
+    /// отправленных, и из карточек, а повтор дал бы лишний отказ.
+    #[test]
+    fn wipe_deletes_each_message_once() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("время")
+            .as_secs() as i64;
+        let dir = std::env::temp_dir().join(format!("hud-tg-wipe-dup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, _) = bridge_with_temp_state(&dir);
+        let handle = bridge.cloned();
+        handle
+            .sent
+            .lock()
+            .expect("список")
+            .push(SentRef { id: 55, at: now });
+        if let Ok(mut cards) = handle.cards.lock() {
+            cards.insert(
+                "ses_old".to_string(),
+                LiveCard {
+                    chat: 1,
+                    message: 55,
+                    label: "карточка".to_string(),
+                    started: Instant::now(),
+                    last_edit: Instant::now(),
+                    last_render: String::new(),
+                    tool: None,
+                    status: CardStatus::Done,
+                    has_keyboard: false,
+                    last_event: Instant::now(),
+                    expires: None,
+                },
+            );
+        }
+        assert_eq!(
+            handle.collect_wipe().len(),
+            1,
+            "один и тот же id — одна запись"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Удалённое отложенным удалителем сообщение забывается: иначе следующая
+    /// чистка ленты получила бы отказ на сообщение, которого уже нет.
+    #[test]
+    fn deleted_message_is_forgotten() {
+        let dir = std::env::temp_dir().join(format!("hud-tg-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, _) = bridge_with_temp_state(&dir);
+        let handle = bridge.cloned();
+        handle.note_sent(7);
+        handle.note_sent(8);
+        handle.forget_sent(7);
+        let ids: Vec<i64> = handle
+            .sent
+            .lock()
+            .expect("список")
+            .iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(ids, vec![8], "удалённое забыто, живое осталось");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

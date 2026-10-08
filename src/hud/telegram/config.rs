@@ -128,6 +128,36 @@ fn model_to_value(model: &ModelRef) -> serde_json::Value {
     serde_json::json!({ "provider": model.provider, "id": model.id })
 }
 
+/// Запись об отправленном сообщении: id и когда отправлено. Время нужно для
+/// лимита Telegram в 48 часов: удалить более старое нельзя, и без даты мост
+/// получал бы отказ на каждом таком сообщении.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SentRef {
+    /// `message_id` в Telegram.
+    pub id: i64,
+    /// Когда отправлено, секунды Unix.
+    pub at: i64,
+}
+
+impl SentRef {
+    /// Разбор записи: без id это не запись, без даты — запись неизвестного
+    /// возраста, и её удаление будет отброшено по лимиту.
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            id: value.get("id")?.as_i64()?,
+            at: value
+                .get("at")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0),
+        })
+    }
+
+    /// JSON для записи.
+    pub fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({ "id": self.id, "at": self.at })
+    }
+}
+
 /// Запись о живой карточке: сессия, чат и сообщение, чьи кнопки ещё на
 /// экране. Хранится в state-файле, чтобы переживать перезапуск: при старте
 /// мост правит карточку в «перезапущен» и снимает кнопки, а не оставляет их
@@ -224,6 +254,9 @@ pub struct Runtime {
     pub cards: Vec<CardRef>,
     /// Сообщения с запросами прав: чьи кнопки ещё на экране.
     pub permissions: Vec<PermRef>,
+    /// Все сообщения, которые бот отправил: по ним чистится лента при входе в
+    /// сессию.
+    pub messages: Vec<SentRef>,
 }
 
 impl Runtime {
@@ -239,6 +272,7 @@ impl Runtime {
             model: None,
             cards: Vec::new(),
             permissions: Vec::new(),
+            messages: Vec::new(),
         }
     }
 
@@ -269,6 +303,9 @@ impl Runtime {
             runtime.delete_commands = delete;
         }
         runtime.model = model_ref_from(value.get("model"));
+        if let Some(messages) = value.get("messages").and_then(serde_json::Value::as_array) {
+            runtime.messages = messages.iter().filter_map(SentRef::from_value).collect();
+        }
         if let Some(cards) = value.get("cards").and_then(serde_json::Value::as_array) {
             runtime.cards = cards.iter().filter_map(CardRef::from_value).collect();
         }
@@ -307,6 +344,10 @@ impl Runtime {
         if let Some(model) = &self.model {
             object.insert("model".to_string(), model_to_value(model));
         }
+        object.insert(
+            "messages".to_string(),
+            serde_json::Value::Array(self.messages.iter().map(SentRef::to_value).collect()),
+        );
         object.insert(
             "cards".to_string(),
             serde_json::Value::Array(self.cards.iter().map(CardRef::to_value).collect()),
@@ -462,6 +503,8 @@ pub struct Snapshot {
     pub cards: Vec<CardRef>,
     /// Сообщения с запросами прав: чьи кнопки ещё на экране.
     pub permissions: Vec<PermRef>,
+    /// Все сообщения, которые бот отправил.
+    pub messages: Vec<SentRef>,
 }
 
 impl Snapshot {
@@ -476,6 +519,7 @@ impl Snapshot {
             model: runtime.model.clone(),
             cards: runtime.cards.clone(),
             permissions: runtime.permissions.clone(),
+            messages: runtime.messages.clone(),
         }
     }
 
@@ -492,6 +536,7 @@ impl Snapshot {
             model: config.model.clone(),
             cards: Vec::new(),
             permissions: Vec::new(),
+            messages: Vec::new(),
         }
     }
 
@@ -506,6 +551,7 @@ impl Snapshot {
             model: self.model.clone(),
             cards: self.cards.clone(),
             permissions: self.permissions.clone(),
+            messages: self.messages.clone(),
         }
         .to_value()
     }
@@ -528,18 +574,18 @@ pub fn save_state_to(path: &Path, snapshot: &Snapshot) -> Result<(), String> {
 /// Живые записи из state-файла: карточки и сообщения с правами. Нужно
 /// стартовой чистке: она правит пережившие перезапуск сообщения до запуска
 /// потоков. Путь параметром, чтобы тесты читали временный файл, а не живой.
-pub fn load_refs_from(path: &Path) -> (Vec<CardRef>, Vec<PermRef>) {
+pub fn load_refs_from(path: &Path) -> (Vec<CardRef>, Vec<PermRef>, Vec<SentRef>) {
     match read_json(path) {
         Ok(Some(value)) => {
             let runtime = Runtime::from_value(&value);
-            (runtime.cards, runtime.permissions)
+            (runtime.cards, runtime.permissions, runtime.messages)
         }
-        _ => (Vec::new(), Vec::new()),
+        _ => (Vec::new(), Vec::new(), Vec::new()),
     }
 }
 
 /// Живые записи из state-файла по умолчанию.
-pub fn load_refs() -> (Vec<CardRef>, Vec<PermRef>) {
+pub fn load_refs() -> (Vec<CardRef>, Vec<PermRef>, Vec<SentRef>) {
     load_refs_from(&Config::state_path())
 }
 
@@ -659,6 +705,10 @@ mod tests {
             dunst: false,
             delete_commands: true,
             model: Some(ModelRef::new("vibecode-claude", "claude-sonnet-4-6")),
+            messages: vec![SentRef {
+                id: 5,
+                at: 1_700_000_000,
+            }],
             cards: vec![CardRef {
                 session: "ses_abc".to_string(),
                 chat: 1,
@@ -681,6 +731,7 @@ mod tests {
                 dunst: snapshot.dunst,
                 delete_commands: snapshot.delete_commands,
                 model: snapshot.model.clone(),
+                messages: snapshot.messages.clone(),
                 cards: snapshot.cards.clone(),
                 permissions: snapshot.permissions.clone(),
             }
