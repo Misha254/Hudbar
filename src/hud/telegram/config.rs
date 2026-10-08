@@ -260,12 +260,17 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Значения по умолчанию: локальный сервер, папка `~/code/hudbar`,
-    /// зеркало включено, сессии нет, удаления команд нет, записей нет.
+    /// Значения по умолчанию: локальный сервер, домашняя папка, зеркало
+    /// включено, сессии нет, удаления команд нет, записей нет.
+    ///
+    /// Папка по умолчанию — домашняя, а не путь к этому репозиторию: мост
+    /// ставят и те, у кого чекаут лежит в другом месте, и зашитый путь
+    /// уводил бы сессию в несуществующий каталог. Свою папку человек пишет
+    /// один раз в `telegram-state.json`, и дальше она оттуда и читается.
     pub fn defaults() -> Self {
         Self {
             opencode: DEFAULT_OPENCODE.to_string(),
-            directory: home().join("code/hudbar").display().to_string(),
+            directory: home().display().to_string(),
             session: None,
             dunst: true,
             delete_commands: false,
@@ -624,7 +629,7 @@ mod tests {
         assert!(config.bot_token.is_empty());
         assert!(config.chat_id.is_none());
         assert_eq!(config.opencode, "http://127.0.0.1:4096");
-        assert!(config.directory.ends_with("code/hudbar"));
+        assert_eq!(config.directory, home().display().to_string());
         assert!(config.dunst);
     }
 
