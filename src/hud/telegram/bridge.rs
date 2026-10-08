@@ -41,6 +41,10 @@ const EDIT_THROTTLE: Duration = Duration::from_secs(3);
 /// Через столько удаляются короткие служебные подтверждения: их прочитали —
 /// и хватит.
 const DELETE_DELAY: Duration = Duration::from_secs(10);
+/// Сколько живёт «готово»: ответ агента уже пришёл отдельным сообщением, и
+/// карточка в ленте только мешает. Новая работа в этой же сессии снимает
+/// срок, и карточка остаётся.
+const DONE_TTL: Duration = Duration::from_secs(5);
 /// Проверка удалятора: чаще не нужно, реже — заметна задержка.
 const DELETE_TICK: Duration = Duration::from_secs(5);
 /// Старше этого удалять сообщения пользователей нельзя: ограничение Telegram.
@@ -81,6 +85,10 @@ pub(crate) struct LiveCard {
     /// Когда пришло последнее событие сессии: по нему вотчдог отличает
     /// зависшую карточку от живой.
     last_event: Instant,
+    /// Когда карточку пора удалить: проставится на финале «готово», чтобы
+    /// «готово» само исчезло из ленты. Новое событие сессии снимает срок —
+    /// карточка снова живая.
+    expires: Option<Instant>,
 }
 
 /// Сообщение с запросом прав: кнопки ещё на экране.
@@ -141,6 +149,7 @@ impl Bridge {
             directory: config.directory.clone(),
             session: config.session.clone(),
             pending_permission: None,
+            model: config.model.clone(),
         };
         Ok(Self {
             api: Api::new(&config.bot_token),
@@ -618,6 +627,7 @@ impl BridgeHandle {
                             status: CardStatus::Running,
                             has_keyboard: true,
                             last_event: now,
+                            expires: None,
                         },
                     );
                 }
@@ -970,6 +980,9 @@ impl BridgeHandle {
             && let Some(card) = cards.get_mut(id)
         {
             card.last_event = Instant::now();
+            // Новое событие оживило карточку: срок удаления снимается, иначе
+            // «готово» из прошлого хода снесло бы её посреди новой работы.
+            card.expires = None;
         }
         match event.event_type.as_str() {
             "message.part.updated" => self.on_part(&event.properties),
@@ -1124,12 +1137,16 @@ impl BridgeHandle {
     }
 
     /// Конец хода: накопленные ответы уходят, карточка — в `Done` без
-    /// клавиатуры, запись гасится сразу. Дубля «готово» нет: это и есть конец.
+    /// клавиатуры и через `DONE_TTL` исчезает сама. Дубля «готово» нет: это и
+    /// есть конец. Запись пока остаётся — по ней удалитель узнает, что
+    /// именно чистить.
     fn finish_turn(&self, session: &str) {
         self.flush_pending(session);
         self.finalize_card(session, CardStatus::Done, None);
-        if let Ok(mut cards) = self.cards.lock() {
-            cards.remove(session);
+        if let Ok(mut cards) = self.cards.lock()
+            && let Some(card) = cards.get_mut(session)
+        {
+            card.expires = Some(Instant::now() + DONE_TTL);
         }
         persist_runtime(self);
         if self.config.dunst {
@@ -1441,12 +1458,47 @@ impl BridgeHandle {
         }
     }
 
-    /// Цикл удалятора: раз в несколько секунд сносит созревшие сообщения.
-    /// Ошибки игнорируются: сообщение могли удалить руками, и это не повод
-    /// шуметь в журнал каждым тиком.
+    /// Забирает карточки, у которых истёк срок: возвращает их к удалению и
+    /// стирает записи. Чистая функция ради тестов — время и коллекция на
+    /// входе, список дел на выходе.
+    pub fn take_expired(cards: &mut HashMap<String, LiveCard>, now: Instant) -> Vec<Deletion> {
+        let expired: Vec<String> = cards
+            .iter()
+            .filter(|(_, card)| card.expires.is_some_and(|due| due <= now))
+            .map(|(session, _)| session.clone())
+            .collect();
+        expired
+            .into_iter()
+            .filter_map(|session| {
+                cards.remove(&session).map(|card| Deletion {
+                    due: now,
+                    chat: card.chat,
+                    message: card.message,
+                })
+            })
+            .collect()
+    }
+
+    /// Цикл удалятора: раз в несколько секунд сносит созревшие сообщения и
+    /// карточки, которым истёк срок. Ошибки игнорируются: сообщение могли
+    /// удалить руками, и это не повод шуметь в журнал каждым тиком.
     fn deletion_loop(&self) {
         loop {
             thread::sleep(DELETE_TICK);
+            // Просроченные карточки становятся обычными удалениями: запись
+            // стирается сразу, само сообщение уходит с текущим тиком.
+            let stale_cards = self
+                .cards
+                .lock()
+                .ok()
+                .map(|mut cards| Self::take_expired(&mut cards, Instant::now()))
+                .unwrap_or_default();
+            if !stale_cards.is_empty()
+                && let Ok(mut deletions) = self.deletions.lock()
+            {
+                deletions.extend(stale_cards);
+                persist_runtime(self);
+            }
             let due: Vec<Deletion> = self
                 .deletions
                 .lock()
@@ -1642,6 +1694,7 @@ pub fn persist_runtime(handle: &BridgeHandle) {
             session: state.session.clone(),
             dunst: handle.config.dunst,
             delete_commands: handle.config.delete_commands,
+            model: state.model.clone(),
             cards,
             permissions,
         }
@@ -2104,6 +2157,53 @@ mod tests {
         let (refs, _) = (config::load_refs_from(&broken), ());
         assert!(refs.0.is_empty() && refs.1.is_empty(), "битый файл — пусто");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// «Готово» исчезает само: просроченная карточка уходит к удалению и
+    /// стирается из записей, а живая и без срока — остаётся на месте.
+    #[test]
+    fn done_card_expires_and_leaves_for_deletion() {
+        fn card(expires: Option<Instant>) -> LiveCard {
+            LiveCard {
+                chat: 7,
+                message: 42,
+                label: "мост".to_string(),
+                started: Instant::now(),
+                last_edit: Instant::now(),
+                last_render: String::new(),
+                tool: None,
+                status: CardStatus::Done,
+                has_keyboard: false,
+                last_event: Instant::now(),
+                expires,
+            }
+        }
+        let now = Instant::now();
+        let mut cards = HashMap::from([
+            (
+                "ses_done".to_string(),
+                card(Some(now - Duration::from_secs(1))),
+            ),
+            (
+                "ses_live".to_string(),
+                card(Some(now + Duration::from_secs(30))),
+            ),
+            ("ses_forever".to_string(), card(None)),
+        ]);
+        let mut expired = BridgeHandle::take_expired(&mut cards, now);
+        expired.sort_by_key(|deletion| deletion.message);
+        assert_eq!(
+            expired
+                .iter()
+                .map(|deletion| (deletion.chat, deletion.message))
+                .collect::<Vec<_>>(),
+            vec![(7, 42)],
+            "ушла только просроченная"
+        );
+        assert!(expired[0].due <= now, "удаление созрело сразу");
+        assert_eq!(cards.len(), 2, "запись просроченной стёрта");
+        assert!(!cards.contains_key("ses_done"));
+        assert!(BridgeHandle::take_expired(&mut cards, now).is_empty());
     }
 
     /// Очередь завершённых: повтор по тому же id заменяет, порядок — по
