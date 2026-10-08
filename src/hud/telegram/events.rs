@@ -6,14 +6,14 @@
 //! поток отдаёт события всех сессий, и это честно — у потока нет задачи знать,
 //! какая сессия сейчас активна.
 //!
-//! Ответ агента уходит новыми сообщениями, когда сообщение завершается:
+//! Ответ агента уходит новыми сообщениями в конце хода (`session.idle`):
 //! телефон даёт push, а лента не растёт, как лог. Живая карточка промпта
 //! (модуль `card`) показывает состояние отдельно и правится на месте.
 //! Длинный ответ режется на части по [`MESSAGE_LIMIT`].
 //!
-//! Накопитель текста (`Answer`) нужен, потому что текст приходит кусками
-//! `message.part.updated`, а уходить должен целиком в момент
-//! `message.updated`.
+//! Промежуточные завершённые сообщения копятся в очереди сессии: ход может
+//! состоять из нескольких ответов, а конец хода — только `idle`. Значения
+//! `finish` спека не описывает, поэтому на них не смотрим вообще.
 
 use serde_json::Value;
 
@@ -164,38 +164,6 @@ pub fn idle_notice() -> Notice {
     }
 }
 
-/// Накопитель текста ответа: агентский текст приходит кусками (`time.end` у
-/// части ещё нет), а уходить должен целиком. Хранит последний текст
-/// сообщения и отдаёт его, когда сообщение завершается.
-#[derive(Clone, Debug, Default)]
-pub struct Answer {
-    /// `messageID` последнего куска и его текст.
-    last: Option<(String, String)>,
-}
-
-impl Answer {
-    /// Новая порция текста от агента: запоминает, не отправляет.
-    pub fn feed(&mut self, message_id: &str, text: &str) {
-        if text.trim().is_empty() {
-            return;
-        }
-        match &mut self.last {
-            Some((id, saved)) if id == message_id => *saved = text.to_string(),
-            _ => self.last = Some((message_id.to_string(), text.to_string())),
-        }
-    }
-
-    /// Сообщение завершено: отдать накопленный текст и забыть. `message_id`
-    /// обязан совпасть — иначе это хвост от следующего сообщения, и хранить
-    /// его дальше незачем.
-    pub fn finish(&mut self, message_id: &str) -> Option<String> {
-        match self.last.take() {
-            Some((id, text)) if id == message_id => Some(text),
-            _ => None,
-        }
-    }
-}
-
 /// Вопрос агента из `ask`: заголовок, текст и варианты — текстом, без кнопок:
 /// вопрос требует ответа словом, а не нажатия. Кнопок нет осознанно:
 /// варианты — подсказка, а ответ человек печатает сам.
@@ -329,25 +297,6 @@ mod tests {
             !notice.text.contains("вторая строка"),
             "только первая строка"
         );
-    }
-
-    #[test]
-    fn answer_accumulates_text_and_gives_it_once() {
-        let mut answer = Answer::default();
-        answer.feed("msg_1", "первая");
-        answer.feed("msg_1", "первая вторая");
-        assert_eq!(answer.finish("msg_1").as_deref(), Some("первая вторая"));
-        assert!(
-            answer.finish("msg_1").is_none(),
-            "второй раз отдавать нечего"
-        );
-    }
-
-    #[test]
-    fn finish_of_another_message_drops_the_stale_text() {
-        let mut answer = Answer::default();
-        answer.feed("msg_1", "старое");
-        assert!(answer.finish("msg_2").is_none());
     }
 
     /// Цель инструмента: сначала `title`, потом частые ключи `input`, потом
