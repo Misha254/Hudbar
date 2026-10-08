@@ -1,0 +1,19 @@
+[Unit]
+Description=Headless opencode server for the hud-telegram bridge
+Documentation=https://github.com/Misha254/Hudbar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ПАРОЛЬ НЕ ЗАДАН НАМЕРЕННО: сервер слушает только 127.0.0.1, наружу его не
+# видно, а мост стучится с этой же машины. Если порт когда-нибудь откроется
+# наружу, сюда нужен Environment=OPENCODE_SERVER_PASSWORD=...
+ExecStart=%h/.opencode/bin/opencode serve --port 4096 --hostname 127.0.0.1
+WorkingDirectory=%h/code/hudbar
+Restart=on-failure
+RestartSec=5
+# Лимиты не трогаем: сервер ест столько, сколько съедает модель.
+
+[Install]
+WantedBy=default.target
