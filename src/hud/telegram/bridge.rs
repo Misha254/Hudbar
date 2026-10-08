@@ -16,15 +16,17 @@
 //! стоит на входе обработки, поэтому при открытом рабочем терминале в той же
 //! папке бот молчит.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 use super::api::{self, Api, Priority, chunk_text, escape_html};
+use super::card::{self, CardStatus, CardView};
 use super::commands::{self, Outcome, PendingPermission};
-use super::config::Config;
+use super::config::{self, CardRef, Config, PermRef};
 use super::events;
 use super::opencode::{Client, Event};
 
@@ -32,34 +34,84 @@ use super::opencode::{Client, Event};
 const RECONNECT_PAUSE: Duration = Duration::from_secs(5);
 /// Long polling Telegram: сервер держит ответ до этого времени.
 const POLL_TIMEOUT: u32 = 30;
-/// Правки ответа агента не чаще, чем раз в столько: иначе чат мигает каждой
-/// строкой генерации.
+/// Правки карточки не чаще, чем раз в столько: иначе чат мигает каждой
+/// строкой генерации. Финалы (готово, ошибка, остановка, ожидание) идут мимо
+/// троттлинга: после них событий может не быть вообще.
 const EDIT_THROTTLE: Duration = Duration::from_secs(3);
+/// Через столько удаляются короткие служебные подтверждения: их прочитали —
+/// и хватит.
+const DELETE_DELAY: Duration = Duration::from_secs(10);
+/// Проверка удалятора: чаще не нужно, реже — заметна задержка.
+const DELETE_TICK: Duration = Duration::from_secs(5);
+/// Старше этого удалять сообщения пользователей нельзя: ограничение Telegram.
+const DELETE_LIMIT: Duration = Duration::from_secs(48 * 3600);
+/// Пауза после флуд-контроля Telegram, если число секунд не разобралось.
+const RETRY_FALLBACK: Duration = Duration::from_secs(5);
+/// Потолок ожидания флуд-контроля: дольше минуты не ждём, ошибка уходит в
+/// журнал как обычно.
+const RETRY_CAP: Duration = Duration::from_secs(60);
+
+/// Живая карточка: одно сообщение на весь промпт.
+#[derive(Clone, Debug)]
+pub(crate) struct LiveCard {
+    /// Чат карточки.
+    chat: i64,
+    /// `message_id` карточки в Telegram.
+    message: i64,
+    /// Подпись сессии для шапки.
+    label: String,
+    /// Когда приняли промпт: отсюда прошедшее время.
+    started: Instant,
+    /// Когда правили в последний раз.
+    last_edit: Instant,
+    /// Что отправили в последний раз (текст + признак клавиатуры): повтор
+    /// не отправляется.
+    last_render: String,
+    /// Текущий инструмент и его цель.
+    tool: Option<(String, String)>,
+    /// Состояние.
+    status: CardStatus,
+    /// Есть ли под карточкой клавиатура (кнопка «Стоп»).
+    has_keyboard: bool,
+}
+
+/// Сообщение с запросом прав: кнопки ещё на экране.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PermMsg {
+    /// Чат сообщения.
+    chat: i64,
+    /// `message_id` в Telegram.
+    message: i64,
+    /// Что спрашивал агент: для строки итога, когда `pending` уже снят.
+    title: String,
+}
+
+/// Отложенное удаление: время, чат и сообщение.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Deletion {
+    /// Когда удалять.
+    due: Instant,
+    /// Чат сообщения.
+    chat: i64,
+    /// `message_id` в Telegram.
+    message: i64,
+}
 
 /// Мост с конфигом, состоянием и клиентами.
 pub struct Bridge {
     config: Config,
     state: Arc<Mutex<commands::State>>,
+    state_path: std::path::PathBuf,
     api: Api,
     client: Arc<Mutex<Client>>,
-    /// Последний отправленный ответ: message_id первого куска, чтобы править
-    /// его на месте.
-    reply_message: Arc<Mutex<Option<ReplyMessage>>>,
+    /// Живые карточки по id сессии: одна карточка на промпт.
+    cards: Arc<Mutex<HashMap<String, LiveCard>>>,
+    /// Сообщения с запросами прав по id запроса.
+    perm_msgs: Arc<Mutex<HashMap<String, PermMsg>>>,
+    /// Очередь отложенных удалений.
+    deletions: Arc<Mutex<Vec<Deletion>>>,
     /// Накопитель текста ответа агента.
     answer: Arc<Mutex<events::Answer>>,
-}
-
-/// Отправленный ответ: что править, когда агент договорит.
-#[derive(Clone, Debug)]
-pub struct ReplyMessage {
-    /// `message_id` первого куска в Telegram.
-    pub message_id: i64,
-    /// Чат, в котором он лежит.
-    pub chat_id: i64,
-    /// `messageID` ответа агента: правится только свой текст.
-    pub agent_message: String,
-    /// Когда правили в последний раз: чаще [`EDIT_THROTTLE`] нельзя.
-    pub last_edit: Instant,
 }
 
 impl Bridge {
@@ -76,16 +128,58 @@ impl Bridge {
         Ok(Self {
             api: Api::new(&config.bot_token),
             client: Arc::new(Mutex::new(client)),
+            state_path: Config::state_path(),
             config,
             state: Arc::new(Mutex::new(state)),
-            reply_message: Arc::new(Mutex::new(None)),
+            cards: Arc::new(Mutex::new(HashMap::new())),
+            perm_msgs: Arc::new(Mutex::new(HashMap::new())),
+            deletions: Arc::new(Mutex::new(Vec::new())),
             answer: Arc::new(Mutex::new(events::Answer::default())),
         })
     }
 
-    /// Запускает оба потока и ждёт их конца. Возврата нет: кончается только
-    /// сигналом, и systemd его обеспечивает.
+    /// Проверяет сохранённую сессию на сервере: если её больше нет, состояние
+    /// сбрасывается без падения. Недоступный сервер — не доказательство:
+    /// тогда сессия остаётся, и мост разберётся живьём.
+    fn restore_session(&self) {
+        let session = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.session.clone());
+        let Some(id) = session else {
+            return;
+        };
+        let check = self
+            .client
+            .lock()
+            .ok()
+            .map(|client| client.get_session(&id));
+        let Some(check) = check else {
+            return;
+        };
+        self.apply_session_check(&check);
+    }
+
+    /// Решение по проверке сессии. Отдельно от запроса, чтобы правило
+    /// проверялось тестом без сервера.
+    fn apply_session_check(&self, check: &Result<Option<super::opencode::Session>, String>) {
+        if !missing_session(check) {
+            return;
+        }
+        if let Ok(mut state) = self.state.lock() {
+            state.session = None;
+        }
+        persist_runtime(&self.cloned());
+        super::log::warn("мост: сохранённой сессии больше нет, состояние сброшено");
+    }
+
+    /// Запускает три потока и ждёт их конца. Перед потоками чистит
+    /// пережившие перезапуск кнопки и проверяет сохранённую сессию.
+    /// Возврата нет: кончается только сигналом, и systemd его обеспечивает.
     pub fn run(&self) {
+        self.startup_cleanup();
+        self.restore_session();
         let commands = self.cloned();
         let updates = thread::Builder::new()
             .name("telegram-updates".to_string())
@@ -96,17 +190,54 @@ impl Bridge {
             .name("opencode-events".to_string())
             .spawn(move || events.events_loop())
             .expect("поток событий");
+        let deletions = self.cloned();
+        let deletions = thread::Builder::new()
+            .name("telegram-deletions".to_string())
+            .spawn(move || deletions.deletion_loop())
+            .expect("поток удалений");
         let _ = updates.join();
         let _ = events.join();
+        let _ = deletions.join();
+    }
+
+    /// Чистка после перезапуска: пережившие его карточки правятся в
+    /// «перезапущен» со снятием клавиатуры, у сообщений с правами клавиатура
+    /// просто снимается, записи стираются. Ошибки пишутся в журнал и
+    /// игнорируются: мост стартует в любом случае.
+    fn startup_cleanup(&self) {
+        let (cards, permissions) = config::load_refs_from(&self.state_path);
+        for card in &cards {
+            let text = format!(
+                "🛠 <b>hudbar</b> · {}\n⚠ Бот перезапущен",
+                api::escape_html(&card.session)
+            );
+            if let Err(why) = self.api.edit_drop_keyboard(card.chat, card.message, &text) {
+                super::log::warn(format!("мост: чистка карточки: {why}"));
+            }
+        }
+        for perm in &permissions {
+            if let Err(why) = self
+                .api
+                .edit_reply_markup(perm.chat, perm.message, Vec::new())
+            {
+                super::log::warn(format!("мост: чистка кнопок: {why}"));
+            }
+        }
+        if !cards.is_empty() || !permissions.is_empty() {
+            persist_runtime(&self.cloned());
+        }
     }
 
     fn cloned(&self) -> BridgeHandle {
         BridgeHandle {
             config: self.config.clone(),
             state: Arc::clone(&self.state),
+            state_path: self.state_path.clone(),
             api: self.api.clone(),
             client: Arc::clone(&self.client),
-            reply_message: Arc::clone(&self.reply_message),
+            cards: Arc::clone(&self.cards),
+            perm_msgs: Arc::clone(&self.perm_msgs),
+            deletions: Arc::clone(&self.deletions),
             answer: Arc::clone(&self.answer),
         }
     }
@@ -117,9 +248,17 @@ impl Bridge {
 pub struct BridgeHandle {
     pub config: Config,
     pub state: Arc<Mutex<commands::State>>,
+    /// Куда пишется состояние. Отдельно от конфига, чтобы тесты писали во
+    /// временный каталог, а не в живой state-файл.
+    pub state_path: std::path::PathBuf,
     pub api: Api,
     pub client: Arc<Mutex<Client>>,
-    pub reply_message: Arc<Mutex<Option<ReplyMessage>>>,
+    /// Живые карточки по id сессии.
+    pub cards: Arc<Mutex<HashMap<String, LiveCard>>>,
+    /// Сообщения с запросами прав по id запроса.
+    pub perm_msgs: Arc<Mutex<HashMap<String, PermMsg>>>,
+    /// Очередь отложенных удалений.
+    pub deletions: Arc<Mutex<Vec<Deletion>>>,
     pub answer: Arc<Mutex<events::Answer>>,
 }
 
@@ -140,7 +279,8 @@ impl BridgeHandle {
                             );
                         }
                         if let Some(reply) = self.handle_update(update) {
-                            self.send_text(&reply.text, reply.html);
+                            let ids = self.send_text_ids(&reply.text, reply.html);
+                            self.after_send(&reply, &ids);
                         }
                     }
                 }
@@ -149,6 +289,26 @@ impl BridgeHandle {
                     thread::sleep(RECONNECT_PAUSE);
                 }
             }
+        }
+    }
+
+    /// После отправки: стирает короткие служебные подтверждения и, если
+    /// включено, команду пользователя. Удаляется только то, что мост только
+    /// что отправил или только что прочитал, — ничего чужого.
+    fn after_send(&self, reply: &Outcome, ids: &[i64]) {
+        let chat = match self.config.chat_id {
+            Some(chat) => chat,
+            None => return,
+        };
+        if reply.ephemeral
+            && let Some(id) = ids.first()
+        {
+            self.schedule_delete(chat, *id, DELETE_DELAY);
+        }
+        if let Some((message_id, date)) = reply.delete_command
+            && within_delete_limit(date)
+        {
+            self.schedule_delete(chat, message_id, DELETE_DELAY);
         }
     }
 
@@ -165,11 +325,60 @@ impl BridgeHandle {
         }
         let text = message.get("text")?.as_str()?;
         let command = commands::parse(text)?;
+        // Слэш-команда, а не промпт: при включённой настройке удалится после
+        // ответа. Id и дата берутся из апдейта, лимит проверяется при отправке.
+        let delete_command = if self.config.delete_commands
+            && text.trim_start().starts_with('/')
+            && !matches!(command, commands::Command::Prompt(_))
+        {
+            message
+                .get("message_id")
+                .and_then(Value::as_i64)
+                .zip(message.get("date").and_then(Value::as_i64))
+        } else {
+            None
+        };
+        // Ответ прав текстом: запоминаем вариант, id и название до
+        // исполнения, потому что исполнение снимает `pending`.
+        let permission_before: Option<(commands::PermissionReply, String, String)> = match &command
+        {
+            commands::Command::Permission(reply) => self
+                .state
+                .lock()
+                .ok()?
+                .pending_permission
+                .clone()
+                .map(|pending| (*reply, pending.id, pending.title)),
+            _ => None,
+        };
+        let is_stop = matches!(command, commands::Command::Stop);
         match self.execute(command) {
-            Ok(outcome) => Some(outcome),
+            Ok(mut outcome) => {
+                // Сессия и папка могли смениться (/new, /use, /dir, первый
+                // промпт): состояние пишется при каждой команде, а не только
+                // при смене, — так дешевле, чем отслеживать, что именно
+                // поменялось.
+                persist_runtime(self);
+                if let Some(card) = outcome.card.take() {
+                    self.open_card(&card.session_id, &card.session_label);
+                }
+                if is_stop && self.finalize_stop() {
+                    return None;
+                }
+                if let Some((reply, id, title)) = permission_before
+                    && self.finish_permission_text(&id, reply, &title)
+                {
+                    return None;
+                }
+                outcome.delete_command = delete_command;
+                Some(outcome)
+            }
             Err(why) => Some(Outcome {
                 text: format!("Не вышло: {}", escape_html(&short_error(&why))),
                 html: true,
+                card: None,
+                ephemeral: false,
+                delete_command: None,
             }),
         }
     }
@@ -180,9 +389,9 @@ impl BridgeHandle {
         commands::execute(&self.client, &self.state, &command)
     }
 
-    /// Нажатие кнопки: только `perm:<id>:<решение>`. Кнопка называется
-    /// конкретный запрос: сверяем с тем, что ждёт, и несоответствие считаем
-    /// устаревшей кнопкой, а не ошибкой.
+    /// Нажатие кнопки: `stop:<сессия>` останавливает работу, `perm:<id>:…`
+    /// отвечает на запрос прав. Чужие кнопки отбрасываются: мост такие не
+    /// ставит, а значит, и выполнять их не должен.
     pub fn handle_callback(&self, callback: &Value) -> Option<Outcome> {
         let callback_id = callback.get("id")?.as_str()?;
         let data = callback.get("data")?.as_str()?;
@@ -192,6 +401,9 @@ impl BridgeHandle {
             .and_then(Value::as_i64);
         if from != self.config.chat_id {
             return None;
+        }
+        if let Some(session_id) = card::parse_stop_callback(data) {
+            return self.handle_stop_button(callback_id, session_id);
         }
         let (permission, reply) = match parse_callback(data) {
             Some(parsed) => parsed,
@@ -211,12 +423,15 @@ impl BridgeHandle {
             return Some(Outcome {
                 text: "Кнопка устарела: запрос уже разобран".to_string(),
                 html: false,
+                card: None,
+                ephemeral: true,
+                delete_command: None,
             });
         }
         let pending = pending.expect("проверено выше");
         let result = self.client.lock().ok().and_then(|client| {
             client
-                .reply_permission(&pending.session, &permission, reply.response())
+                .reply_permission(&permission, reply.response())
                 .ok()
                 .map(|()| pending.clone())
         });
@@ -224,16 +439,346 @@ impl BridgeHandle {
             Some(pending) => {
                 clear_pending(&self.state, &pending.id);
                 let _ = self.api.answer_callback(callback_id, reply.label());
-                Some(Outcome {
-                    text: format!("{}: {}", reply.label(), pending.title),
-                    html: false,
-                })
+                if self.finish_permission_button(&permission, reply, &pending.title) {
+                    None
+                } else {
+                    // Сообщение запроса потерялось (не отправилось или стёрто
+                    // вместе с записью): подтверждение уходит текстом, чтобы
+                    // человек вообще узнал итог.
+                    Some(Outcome {
+                        text: format!("{}: {}", reply.label(), pending.title),
+                        html: false,
+                        card: None,
+                        ephemeral: false,
+                        delete_command: None,
+                    })
+                }
             }
             None => Some(Outcome {
                 text: "Не вышло: сервер не принял ответ".to_string(),
                 html: false,
+                card: None,
+                ephemeral: false,
+                delete_command: None,
             }),
         }
+    }
+
+    /// Кнопка «Стоп»: тост, прерывание, карточка в «остановлено» без
+    /// клавиатуры. Нового сообщения нет: карточка и так перед глазами.
+    fn handle_stop_button(&self, callback_id: &str, session_id: &str) -> Option<Outcome> {
+        let active = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.session.clone());
+        if active.as_deref() != Some(session_id) {
+            let _ = self
+                .api
+                .answer_callback(callback_id, "сессия уже не активна");
+            self.drop_card_keyboard(session_id);
+            return None;
+        }
+        let stopped = self
+            .client
+            .lock()
+            .ok()
+            .map(|client| client.abort_session(session_id).is_ok())
+            .unwrap_or(false);
+        if !stopped {
+            let _ = self.api.answer_callback(callback_id, "не вышло остановить");
+            return None;
+        }
+        let _ = self.api.answer_callback(callback_id, "останавливаю");
+        self.finalize_card(session_id, CardStatus::Stopped, None);
+        None
+    }
+
+    /// Строка итога по кнопке прав: «✔ Разрешено один раз · команда»,
+    /// «✔ Разрешено всегда», «✖ Отклонено». Одна строка, экранирована.
+    fn permission_result_line(reply: commands::PermissionReply, title: &str) -> String {
+        match reply {
+            commands::PermissionReply::Once => format!(
+                "✔ Разрешено один раз · {}",
+                escape_html(&card::one_line(title, 120))
+            ),
+            commands::PermissionReply::Always => "✔ Разрешено всегда".to_string(),
+            commands::PermissionReply::Reject => "✖ Отклонено".to_string(),
+        }
+    }
+
+    /// Итог по кнопке: правит сообщение запроса в строку итога и снимает
+    /// клавиатуру. Возвращает `true`, если править было что: иначе вызывающий
+    /// отправляет текст как обычно.
+    fn finish_permission_button(
+        &self,
+        id: &str,
+        reply: commands::PermissionReply,
+        title: &str,
+    ) -> bool {
+        let record = self
+            .perm_msgs
+            .lock()
+            .ok()
+            .and_then(|mut messages| messages.remove(id));
+        let Some(record) = record else {
+            return false;
+        };
+        let line = Self::permission_result_line(reply, title);
+        let ok = self
+            .api
+            .edit_drop_keyboard(record.chat, record.message, &line)
+            .is_ok();
+        persist_runtime(self);
+        ok
+    }
+
+    /// Итог по текстовой команде: то же, что по кнопке. Возвращает `true`,
+    /// если сообщение нашлось и правка ушла: тогда отдельное подтверждение
+    /// не нужно.
+    fn finish_permission_text(
+        &self,
+        id: &str,
+        reply: commands::PermissionReply,
+        title: &str,
+    ) -> bool {
+        self.finish_permission_button(id, reply, title)
+    }
+
+    /// Клавиатура живой карточки: одна кнопка «Стоп».
+    fn stop_keyboard(session_id: &str) -> Vec<Vec<super::api::Button>> {
+        vec![vec![super::api::Button::new(
+            "⏹ Стоп",
+            &card::stop_callback(session_id),
+        )]]
+    }
+
+    /// Открывает карточку промпта: снимает клавиатуру с предыдущей карточки
+    /// той же сессии, отправляет новую с кнопкой «Стоп» и запоминает её.
+    /// Ошибка отправки пишется в журнал: промпт уже ушёл, карточка — лишь
+    /// виджет поверх него.
+    fn open_card(&self, session_id: &str, label: &str) {
+        let chat = match self.config.chat_id {
+            Some(chat) => chat,
+            None => return,
+        };
+        self.drop_card_keyboard(session_id);
+        let now = Instant::now();
+        let text = card::render(&CardView {
+            session_label: label,
+            status: CardStatus::Running,
+            elapsed_secs: 0,
+            tool: None,
+            error: None,
+        });
+        match self
+            .api
+            .send_with_keyboard(chat, &text, Self::stop_keyboard(session_id))
+        {
+            Ok(message) => {
+                if let Ok(mut cards) = self.cards.lock() {
+                    cards.insert(
+                        session_id.to_string(),
+                        LiveCard {
+                            chat,
+                            message,
+                            label: label.to_string(),
+                            started: now,
+                            last_edit: now,
+                            last_render: render_key(&text, true),
+                            tool: None,
+                            status: CardStatus::Running,
+                            has_keyboard: true,
+                        },
+                    );
+                }
+                persist_runtime(self);
+            }
+            Err(why) => super::log::warn(format!("мост: карточка не отправлена: {why}")),
+        }
+    }
+
+    /// Снимает клавиатуру с карточки сессии, если она ещё на экране. Текст не
+    /// трогает: карточка остаётся историей, просто без кнопок.
+    fn drop_card_keyboard(&self, session_id: &str) {
+        let record = self.cards.lock().ok().and_then(|mut cards| {
+            cards.get_mut(session_id).and_then(|card| {
+                if !card.has_keyboard {
+                    return None;
+                }
+                card.has_keyboard = false;
+                Some((card.chat, card.message))
+            })
+        });
+        if let Some((chat, message)) = record {
+            let _ = self.api.edit_reply_markup(chat, message, Vec::new());
+        }
+        persist_runtime(self);
+    }
+
+    /// Обновляет карточку: перерисовывает с новым временем и инструментом.
+    /// Пропускает правку, если картинка не изменилась или троттлинг ещё не
+    /// вышел, — чат не должен мигать каждой строкой генерации.
+    fn refresh_card(&self, session_id: &str) {
+        let (chat, message, text) = match self.cards.lock().ok().and_then(|mut cards| {
+            cards.get_mut(session_id).map(|card| {
+                let text = card::render(&CardView {
+                    session_label: &card.label,
+                    status: card.status,
+                    elapsed_secs: card.started.elapsed().as_secs(),
+                    tool: card
+                        .tool
+                        .as_ref()
+                        .map(|(tool, target)| (tool.as_str(), target.as_str())),
+                    error: None,
+                });
+                (card.chat, card.message, text)
+            })
+        }) {
+            Some(rendered) => rendered,
+            None => return,
+        };
+        let skip = self.cards.lock().ok().is_some_and(|cards| {
+            cards.get(session_id).is_some_and(|card| {
+                !should_render(&card.last_render, &render_key(&text, true), card.last_edit)
+            })
+        });
+        if skip {
+            return;
+        }
+        if self.edit_card_send(chat, message, &text, true, session_id) {
+            self.note_card_render(session_id, &text, true);
+        }
+    }
+
+    /// Обновление мимо троттлинга: смена фазы (ожидание, возврат в работу).
+    /// Дубли всё равно пропускаются: та же картинка второй раз не уходит.
+    fn refresh_card_bypass(&self, session_id: &str) {
+        let (chat, message, text) = match self.cards.lock().ok().and_then(|cards| {
+            cards.get(session_id).map(|card| {
+                let text = card::render(&CardView {
+                    session_label: &card.label,
+                    status: card.status,
+                    elapsed_secs: card.started.elapsed().as_secs(),
+                    tool: card
+                        .tool
+                        .as_ref()
+                        .map(|(tool, target)| (tool.as_str(), target.as_str())),
+                    error: None,
+                });
+                (card.chat, card.message, text)
+            })
+        }) {
+            Some(rendered) => rendered,
+            None => return,
+        };
+        let duplicate = self.cards.lock().ok().is_some_and(|cards| {
+            cards
+                .get(session_id)
+                .is_some_and(|card| card.last_render == render_key(&text, true))
+        });
+        if duplicate {
+            return;
+        }
+        if self.edit_card_send(chat, message, &text, true, session_id) {
+            self.note_card_render(session_id, &text, true);
+        }
+    }
+
+    /// Финал карточки: done, error или stopped. Идёт мимо троттлинга: после
+    /// финала событий может не быть вообще. Клавиатура снимается, запись
+    /// остаётся до `idle` — он гасит её молча, без дубля «готово».
+    fn finalize_card(&self, session_id: &str, status: CardStatus, error: Option<&str>) {
+        let (chat, message, label, started) = match self.cards.lock().ok().and_then(|mut cards| {
+            cards.get_mut(session_id).map(|card| {
+                // Состояние — сразу в запись: иначе опоздавшее событие
+                // перерисует финал обратно в «В работе».
+                card.status = status;
+                (card.chat, card.message, card.label.clone(), card.started)
+            })
+        }) {
+            Some(found) => found,
+            None => return,
+        };
+        let text = card::render(&CardView {
+            session_label: &label,
+            status,
+            elapsed_secs: started.elapsed().as_secs(),
+            tool: None,
+            error,
+        });
+        if self.edit_card_send(chat, message, &text, false, session_id) {
+            self.note_card_render(session_id, &text, false);
+        }
+        persist_runtime(self);
+    }
+
+    /// Запоминает отправленную картинку: следующий рендер сравнится с ней.
+    fn note_card_render(&self, session_id: &str, text: &str, keyboard: bool) {
+        if let Ok(mut cards) = self.cards.lock()
+            && let Some(card) = cards.get_mut(session_id)
+        {
+            card.last_render = render_key(text, keyboard);
+            card.last_edit = Instant::now();
+        }
+    }
+
+    /// Отправка правки с учётом флуд-контроля: 429 ждёт `retry_after` (не
+    /// дольше минуты) и пробует ещё раз, остальное сразу в журнал.
+    fn edit_card_send(
+        &self,
+        chat: i64,
+        message: i64,
+        text: &str,
+        keyboard: bool,
+        session_id: &str,
+    ) -> bool {
+        let attempt = || {
+            if keyboard {
+                self.api
+                    .edit_with_keyboard(chat, message, text, Self::stop_keyboard(session_id))
+            } else {
+                self.api.edit_drop_keyboard(chat, message, text)
+            }
+        };
+        match attempt() {
+            Ok(()) => true,
+            Err(why) if is_flood(&why) => {
+                let wait = super::api::parse_retry_after(&why)
+                    .map(Duration::from_secs)
+                    .unwrap_or(RETRY_FALLBACK)
+                    .min(RETRY_CAP);
+                thread::sleep(wait);
+                attempt().is_ok()
+            }
+            Err(why) => {
+                super::log::warn(format!("мост: правка карточки: {why}"));
+                false
+            }
+        }
+    }
+
+    /// Завершает карточку остановкой, если она есть. Возвращает `true`, когда
+    /// карточка нашлась: тогда отдельное «Остановлено» сообщением не нужно.
+    fn finalize_stop(&self) -> bool {
+        let session = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.session.clone());
+        let Some(session) = session else {
+            return false;
+        };
+        let exists = self
+            .cards
+            .lock()
+            .ok()
+            .is_some_and(|cards| cards.contains_key(&session));
+        if !exists {
+            return false;
+        }
+        self.finalize_card(&session, CardStatus::Stopped, None);
+        true
     }
 
     /// Цикл событий: поток сервера, обработка, переподключение при обрыве.
@@ -279,7 +824,8 @@ impl BridgeHandle {
             "message.updated" => self.on_message(&event.properties),
             "permission.asked" => self.on_permission(&event.properties),
             "permission.replied" => self.on_permission_reply(&event.properties),
-            "session.idle" => self.on_idle(),
+            "session.status" => self.on_session_status(&event.properties),
+            "session.idle" => self.on_idle(&event.properties),
             "session.error" => self.on_error(&event.properties),
             other if is_question_asked(other) => self.on_question(&event.properties),
             _ => {}
@@ -287,34 +833,46 @@ impl BridgeHandle {
         false
     }
 
-    /// Кусок текста ответа: копим и правим сообщение на месте, если оно уже
-    /// отправлено и прошло достаточно времени с прошлой правки.
+    /// Кусок события: текст копим для финального ответа, инструмент —
+    /// для третьей строки карточки. Стриминга в чат больше нет: карточка
+    /// показывает состояние, а не текст.
     fn on_part(&self, properties: &Value) {
         let part = match properties.get("part") {
             Some(part) => part,
             None => return,
         };
-        if part.get("type").and_then(Value::as_str) != Some("text") {
+        if part.get("type").and_then(Value::as_str) == Some("text") {
+            if part.get("synthetic").and_then(Value::as_bool) == Some(true) {
+                return;
+            }
+            if let (Some(id), Some(text)) = (
+                part.get("messageID").and_then(Value::as_str),
+                part.get("text").and_then(Value::as_str),
+            ) && let Ok(mut answer) = self.answer.lock()
+            {
+                answer.feed(id, text);
+            }
             return;
         }
-        if part.get("synthetic").and_then(Value::as_bool) == Some(true) {
-            return;
-        }
-        let (message_id, text) = match (
-            part.get("messageID").and_then(Value::as_str),
-            part.get("text").and_then(Value::as_str),
-        ) {
-            (Some(id), Some(text)) => (id, text),
-            _ => return,
+        let session = match properties.get("sessionID").and_then(Value::as_str) {
+            Some(session) => session.to_string(),
+            None => return,
         };
-        if let Ok(mut answer) = self.answer.lock() {
-            answer.feed(message_id, text);
+        let tool = match events::running_tool(part) {
+            Some(tool) => tool,
+            None => return,
+        };
+        if let Ok(mut cards) = self.cards.lock()
+            && let Some(card) = cards.get_mut(&session)
+        {
+            card.tool = Some(tool);
         }
-        self.edit_reply(message_id);
+        self.refresh_card(&session);
     }
 
-    /// Сообщение завершено: накопленный текст уходит в чат — правкой, если
-    /// это продолжение того же ответа, иначе новым сообщением.
+    /// Сообщение завершено: накопленный текст уходит новыми сообщениями
+    /// (телефон даёт push), а карточка — в финальный вид без клавиатуры.
+    /// Запись остаётся до `idle`: он гасит её молча, без дубля «готово».
     fn on_message(&self, properties: &Value) {
         let info = match properties.get("info") {
             Some(info) => info,
@@ -354,53 +912,18 @@ impl BridgeHandle {
         let Some(notice) = events::answer_notice(&text) else {
             return;
         };
-        self.finish_answer(&message_id, notice);
+        let session = properties
+            .get("sessionID")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        self.send_answer(&notice);
+        self.finalize_card(&session, CardStatus::Done, None);
     }
 
-    /// Правка ответа на месте: только свой текст, только в пределах лимита,
-    /// не чаще троттлинга. Длинный текст ждёт финала — он уйдёт кусками.
-    fn edit_reply(&self, agent_message: &str) {
-        let snapshot = self
-            .answer
-            .lock()
-            .ok()
-            .and_then(|answer| answer.current(agent_message));
-        let Some((_, text)) = snapshot else {
-            return;
-        };
-        let Some(reply) = self
-            .reply_message
-            .lock()
-            .ok()
-            .and_then(|reply| reply.clone())
-        else {
-            return;
-        };
-        if reply.agent_message != agent_message {
-            return;
-        }
-        if reply.last_edit.elapsed() < EDIT_THROTTLE {
-            return;
-        }
-        let text = escape_html(&text);
-        if text.chars().count() > api::MESSAGE_LIMIT {
-            return;
-        }
-        if self
-            .api
-            .edit(reply.chat_id, reply.message_id, &text)
-            .is_ok()
-            && let Ok(mut current) = self.reply_message.lock()
-            && let Some(reply) = current.as_mut()
-            && reply.agent_message == agent_message
-        {
-            reply.last_edit = Instant::now();
-        }
-    }
-
-    /// Финал ответа: правит сообщение, если оно отправлено, иначе — новое
-    /// сообщение. Хвост делится на куски и уходит следом.
-    fn finish_answer(&self, agent_message: &str, notice: events::Notice) {
+    /// Ответ агента новыми сообщениями: первое и хвост. Зеркало в dunst —
+    /// как раньше.
+    fn send_answer(&self, notice: &events::Notice) {
         let chat = match self.config.chat_id {
             Some(chat) => chat,
             None => return,
@@ -409,31 +932,13 @@ impl BridgeHandle {
         let Some(first) = parts.first() else {
             return;
         };
-        let reply = self
-            .reply_message
-            .lock()
-            .ok()
-            .and_then(|reply| reply.clone());
-        let edited = reply
-            .filter(|reply| reply.agent_message == agent_message)
-            .is_some_and(|reply| self.api.edit(chat, reply.message_id, first).is_ok());
-        if !edited {
-            match self.api.send(chat, first) {
-                Ok(message_id) => {
-                    if let Ok(mut slot) = self.reply_message.lock() {
-                        *slot = Some(ReplyMessage {
-                            message_id,
-                            chat_id: chat,
-                            agent_message: agent_message.to_string(),
-                            last_edit: Instant::now(),
-                        });
-                    }
+        match self.api.send(chat, first) {
+            Ok(_) => {
+                if self.config.dunst {
+                    mirror(notice);
                 }
-                Err(why) => super::log::warn(format!("мост: ответ не отправлен: {why}")),
             }
-        }
-        if self.config.dunst {
-            mirror(&notice);
+            Err(why) => super::log::warn(format!("мост: ответ не отправлен: {why}")),
         }
         for tail in &parts[1..] {
             if let Err(why) = self.api.send(chat, tail) {
@@ -460,7 +965,8 @@ impl BridgeHandle {
         self.send_notice(&notice);
     }
 
-    /// Запрос прав: кнопки под сообщением и `pending` для команд текстом.
+    /// Запрос прав: кнопки под сообщением, `pending` для команд текстом,
+    /// карточка в ожидание. Сообщение запоминается: итог правит его на месте.
     fn on_permission(&self, properties: &Value) {
         let (id, session, permission) = match (
             properties.get("id").and_then(Value::as_str),
@@ -484,81 +990,267 @@ impl BridgeHandle {
         let metadata = properties.get("metadata").cloned().unwrap_or(Value::Null);
         let (notice, pending) =
             events::permission_notice(session, id, permission, &patterns, &metadata);
+        let title = pending.title.clone();
         if let Ok(mut state) = self.state.lock() {
             state.pending_permission = Some(pending);
         }
-        self.send_notice(&notice);
+        if let Some(message) = self.send_notice(&notice) {
+            let chat = self.config.chat_id.unwrap_or(0);
+            if let Ok(mut messages) = self.perm_msgs.lock() {
+                messages.insert(
+                    id.to_string(),
+                    PermMsg {
+                        chat,
+                        message,
+                        title,
+                    },
+                );
+            }
+            persist_runtime(self);
+        }
+        self.set_card_status(session, CardStatus::Waiting, true);
     }
 
-    /// Ответ на запрос: `pending` снимается, кнопки остаются под сообщением —
-    /// история действий видна по ленте.
+    /// Ответ на запрос из любого источника: `pending` снимается, сообщение
+    /// правится в строку итога, клавиатура снимается, карточка — обратно в
+    /// работу. Кнопка, нажатая человеком, уже сделала то же самое: повторная
+    /// правка совпадёт побайтово и пройдёт как «not modified».
     fn on_permission_reply(&self, properties: &Value) {
         let request = properties.get("requestID").and_then(Value::as_str);
+        let reply = match properties.get("reply").and_then(Value::as_str) {
+            Some("always") => commands::PermissionReply::Always,
+            Some("reject") => commands::PermissionReply::Reject,
+            _ => commands::PermissionReply::Once,
+        };
         clear_pending_if(&self.state, request);
+        let record = request.and_then(|id| {
+            self.perm_msgs
+                .lock()
+                .ok()
+                .and_then(|mut messages| messages.remove(id))
+        });
+        let Some(record) = record else {
+            return;
+        };
+        let session = properties
+            .get("sessionID")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let line = Self::permission_result_line(reply, &record.title);
+        let _ = self
+            .api
+            .edit_drop_keyboard(record.chat, record.message, &line);
+        persist_runtime(self);
+        self.set_card_status(&session, CardStatus::Running, true);
     }
 
-    /// Сессия в idle: короткая отметка в ленту.
-    fn on_idle(&self) {
-        self.send_notice(&events::idle_notice());
+    /// Статус сессии: `busy` и `retry` — работа продолжается, `idle` — конец.
+    /// Неизвестное игнорируется: спека на новые значения нет, а падать из-за
+    /// них нельзя.
+    fn on_session_status(&self, properties: &Value) {
+        let session = match properties.get("sessionID").and_then(Value::as_str) {
+            Some(session) => session,
+            None => return,
+        };
+        match properties
+            .get("status")
+            .and_then(|status| status.get("type"))
+            .and_then(Value::as_str)
+        {
+            Some("busy") | Some("retry") => {
+                self.set_card_status(session, CardStatus::Running, false);
+                self.refresh_card(session);
+            }
+            Some("idle") => self.on_idle(properties),
+            _ => {}
+        }
     }
 
-    /// Ошибка сессии: название и первая строка.
+    /// Переводит карточку в состояние без перерисовки времени: ожидание после
+    /// вопроса прав, работа после ответа. Мимо троттлинга: это смена фазы,
+    /// а не тиканье.
+    fn set_card_status(&self, session_id: &str, status: CardStatus, render: bool) {
+        if let Ok(mut cards) = self.cards.lock()
+            && let Some(card) = cards.get_mut(session_id)
+        {
+            card.status = status;
+        }
+        if render {
+            self.refresh_card_bypass(session_id);
+        }
+    }
+
+    /// Сессия в idle: живая запись гасится молча. Терминальная (готово,
+    /// ошибка, остановка) уже показана — дубль не нужен. Активная финалится
+    /// в «готово»: работа могла состоять из одних инструментов без текста.
+    /// Без записи — старый fallback отдельным сообщением: лучше лишний
+    /// «готово», чем тишина после работы.
+    fn on_idle(&self, properties: &Value) {
+        let session = properties
+            .get("sessionID")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let status = self
+            .cards
+            .lock()
+            .ok()
+            .and_then(|cards| cards.get(&session).map(|card| card.status));
+        match status {
+            None => {
+                self.send_notice(&events::idle_notice());
+            }
+            Some(status) if is_terminal(status) => {
+                // Уже показана (готово, ошибка, остановка) — гасим молча.
+                if let Ok(mut cards) = self.cards.lock() {
+                    cards.remove(&session);
+                }
+                persist_runtime(self);
+            }
+            Some(_) => {
+                self.finalize_card(&session, CardStatus::Done, None);
+                if let Ok(mut cards) = self.cards.lock() {
+                    cards.remove(&session);
+                }
+                persist_runtime(self);
+                if self.config.dunst {
+                    mirror(&events::idle_notice());
+                }
+            }
+        }
+    }
+
+    /// Ошибка сессии: карточка в ❌ с короткой причиной, больше ничего.
+    /// Без карточки — старый fallback отдельным сообщением.
     fn on_error(&self, properties: &Value) {
+        let session = properties
+            .get("sessionID")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let (name, text) = error_details(properties);
-        self.send_notice(&events::error_notice(name.as_deref(), text.as_deref()));
+        let reason = match (name, text) {
+            (Some(name), Some(text)) => {
+                let first = text.lines().next().unwrap_or("").trim();
+                if first.is_empty() {
+                    name
+                } else {
+                    format!("{name}: {first}")
+                }
+            }
+            (Some(name), None) => name,
+            (None, Some(text)) => text.lines().next().unwrap_or("").trim().to_string(),
+            (None, None) => "неизвестная ошибка".to_string(),
+        };
+        let has_card = self
+            .cards
+            .lock()
+            .ok()
+            .is_some_and(|cards| cards.contains_key(session));
+        if has_card {
+            self.finalize_card(session, CardStatus::Error, Some(&reason));
+        } else {
+            self.send_notice(&events::error_notice(Some(&reason), None));
+        }
     }
 
     /// Уведомление одним сообщением, без правок: ошибки, вопросы прав,
-    /// «готово», вопросы агента.
-    fn send_notice(&self, notice: &events::Notice) {
-        let chat = match self.config.chat_id {
-            Some(chat) => chat,
-            None => return,
-        };
+    /// «готово», вопросы агента. Возвращает id первого куска: он нужен
+    /// записям о живых кнопках.
+    fn send_notice(&self, notice: &events::Notice) -> Option<i64> {
+        let chat = self.config.chat_id?;
         let parts = events::chunks(&notice.text);
-        let Some(first) = parts.first() else {
-            return;
-        };
+        let first = parts.first()?;
         let result = if notice.buttons.is_empty() {
             self.api.send(chat, first)
         } else {
             self.api
                 .send_with_keyboard(chat, first, notice.buttons.clone())
         };
-        match result {
-            Ok(_) => {
+        let id = match result {
+            Ok(id) => {
                 if self.config.dunst {
                     mirror(notice);
                 }
+                Some(id)
             }
-            Err(why) => super::log::warn(format!("мост: уведомление не отправлено: {why}")),
-        }
+            Err(why) => {
+                super::log::warn(format!("мост: уведомление не отправлено: {why}"));
+                None
+            }
+        };
         for tail in &parts[1..] {
             if let Err(why) = self.api.send(chat, tail) {
                 super::log::warn(format!("мост: хвост не отправлен: {why}"));
                 break;
             }
         }
+        id
     }
 
     /// Текст команде в ответ: короткое сообщение без кнопок и зеркала.
-    fn send_text(&self, text: &str, html: bool) {
+    /// Возвращает id отправленных кусков: первый нужен удалятору для
+    /// коротких служебных подтверждений.
+    fn send_text_ids(&self, text: &str, html: bool) -> Vec<i64> {
         let chat = match self.config.chat_id {
             Some(chat) => chat,
-            None => return,
+            None => return Vec::new(),
         };
         if text.trim().is_empty() {
-            return;
+            return Vec::new();
         }
         let body = if html {
             text.to_string()
         } else {
             escape_html(text)
         };
+        let mut ids = Vec::new();
         for part in chunk_text(&body, api::MESSAGE_LIMIT) {
-            if let Err(why) = self.api.send(chat, &part) {
-                super::log::warn(format!("мост: ответ не отправлен: {why}"));
-                break;
+            match self.api.send(chat, &part) {
+                Ok(id) => ids.push(id),
+                Err(why) => {
+                    super::log::warn(format!("мост: ответ не отправлен: {why}"));
+                    break;
+                }
+            }
+        }
+        ids
+    }
+
+    /// Кладет сообщение в очередь удалятора. Удаляется только то, что мост
+    /// только что отправил или только что прочитал: промпты, ответы и
+    /// запросы прав сюда не попадают никогда.
+    fn schedule_delete(&self, chat: i64, message: i64, after: Duration) {
+        if let Ok(mut deletions) = self.deletions.lock() {
+            deletions.push(Deletion {
+                due: Instant::now() + after,
+                chat,
+                message,
+            });
+        }
+    }
+
+    /// Цикл удалятора: раз в несколько секунд сносит созревшие сообщения.
+    /// Ошибки игнорируются: сообщение могли удалить руками, и это не повод
+    /// шуметь в журнал каждым тиком.
+    fn deletion_loop(&self) {
+        loop {
+            thread::sleep(DELETE_TICK);
+            let due: Vec<Deletion> = self
+                .deletions
+                .lock()
+                .ok()
+                .map(|mut deletions| {
+                    let now = Instant::now();
+                    let (ready, later): (Vec<Deletion>, Vec<Deletion>) = deletions
+                        .drain(..)
+                        .partition(|deletion| deletion.due <= now);
+                    *deletions = later;
+                    ready
+                })
+                .unwrap_or_default();
+            for deletion in &due {
+                let _ = self.api.delete_message(deletion.chat, deletion.message);
             }
         }
     }
@@ -584,6 +1276,48 @@ fn clear_pending_if(state: &Arc<Mutex<commands::State>>, id: Option<&str>) {
         return;
     };
     clear_pending(state, id);
+}
+
+/// Финальное ли состояние: после него карточка только ждёт `idle`, чтобы
+/// тихо исчезнуть из записей.
+pub fn is_terminal(status: CardStatus) -> bool {
+    matches!(
+        status,
+        CardStatus::Done | CardStatus::Error | CardStatus::Stopped
+    )
+}
+
+/// Ключ отправленной картинки: текст плюс признак клавиатуры. Сравнение по
+/// ключу пропускает повторную правку: «message is not modified» тогда вообще
+/// не возникает.
+pub fn render_key(text: &str, keyboard: bool) -> String {
+    if keyboard {
+        format!("{text}\n[kb]")
+    } else {
+        format!("{text}\n[]")
+    }
+}
+
+/// Пора ли править: картинка изменилась и троттлинг вышел. Финалы решают
+/// сами и сюда не ходят.
+pub fn should_render(last_render: &str, new_render: &str, last_edit: Instant) -> bool {
+    last_render != new_render && last_edit.elapsed() >= EDIT_THROTTLE
+}
+
+/// Ошибка флуд-контроля: в тексте есть код 429.
+pub fn is_flood(why: &str) -> bool {
+    why.contains("429")
+}
+
+/// Сообщение пользователя ещё можно удалить: моложе 48 часов. Дата из апдейта
+/// в секундах; часы телефона и ноутбука могут расходиться, поэтому запас —
+/// только в одну сторону.
+pub fn within_delete_limit(date_secs: i64) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|age| age.as_secs() as i64)
+        .unwrap_or(0);
+    now.saturating_sub(date_secs) < DELETE_LIMIT.as_secs() as i64
 }
 
 /// Разбор `callback_data` кнопки: `perm:<id>:<решение>`. Всё остальное — не
@@ -622,6 +1356,65 @@ fn error_details(properties: &Value) -> (Option<String>, Option<String>) {
         .and_then(Value::as_str)
         .map(str::to_string);
     (name, text)
+}
+
+/// Пишет состояние (сессия, папка, живые записи) в state-файл. Секреты не
+/// трогаются — у снимка их нет в полях. Ошибка — предупреждение, а не смерть:
+/// мост продолжит в памяти и попробует снова при следующей команде.
+pub fn persist_runtime(handle: &BridgeHandle) {
+    let snapshot = handle.state.lock().ok().map(|state| {
+        let cards = handle
+            .cards
+            .lock()
+            .ok()
+            .map(|cards| {
+                cards
+                    .iter()
+                    .map(|(session, card)| CardRef {
+                        session: session.clone(),
+                        chat: card.chat,
+                        message: card.message,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let permissions = handle
+            .perm_msgs
+            .lock()
+            .ok()
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|(request, record)| PermRef {
+                        request: request.clone(),
+                        chat: record.chat,
+                        message: record.message,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        super::config::Snapshot {
+            opencode: handle.config.opencode.clone(),
+            directory: state.directory.clone(),
+            session: state.session.clone(),
+            dunst: handle.config.dunst,
+            delete_commands: handle.config.delete_commands,
+            cards,
+            permissions,
+        }
+    });
+    if let Some(snapshot) = snapshot
+        && let Err(why) = super::config::save_state_to(&handle.state_path, &snapshot)
+    {
+        super::log::warn(format!("мост: состояние не записано: {why}"));
+    }
+}
+
+/// Сессии больше нет на сервере — только тогда состояние сбрасывается.
+/// Ошибка проверки и живая сессия означают «оставить как есть»: недоступный
+/// сервер — не доказательство отсутствия.
+pub fn missing_session(check: &Result<Option<super::opencode::Session>, String>) -> bool {
+    matches!(check, Ok(None))
 }
 
 /// Зеркало в dunst: та же новость локально, заголовок — тема сообщения.
@@ -788,5 +1581,285 @@ mod tests {
                 .pending_permission
                 .is_none()
         );
+    }
+
+    /// Мост для тестов состояния: живой путь заменён временным каталогом,
+    /// чтобы тесты не трогали настоящий state-файл.
+    fn bridge_with_temp_state(dir: &std::path::Path) -> (Bridge, std::path::PathBuf) {
+        let config = Config {
+            chat_id: Some(1),
+            bot_token: "t".to_string(),
+            ..Config::defaults()
+        };
+        let mut bridge = Bridge::new(config).expect("мост");
+        let path = dir.join("telegram-state.json");
+        bridge.state_path = path.clone();
+        (bridge, path)
+    }
+
+    /// Читает JSON из временного state-файла.
+    fn read_temp_state(path: &std::path::Path) -> serde_json::Value {
+        let text = std::fs::read_to_string(path).expect("state-файл записан");
+        serde_json::from_str(&text).expect("json")
+    }
+
+    /// Решение по проверке: сессии нет — сброс, остальное — оставить.
+    #[test]
+    fn missing_session_only_when_the_server_says_so() {
+        assert!(missing_session(&Ok(None)), "404 — сессии нет");
+        assert!(
+            !missing_session(&Ok(Some(super::super::opencode::Session {
+                id: "ses_1".to_string(),
+                title: String::new(),
+                directory: String::new(),
+            }))),
+            "живая сессия остаётся"
+        );
+        assert!(
+            !missing_session(&Err("сервер недоступен".to_string())),
+            "ошибка проверки — не доказательство"
+        );
+    }
+
+    /// Откат: сохранённой сессии нет на сервере — состояние сбрасывается и
+    /// пишется, мост не падает.
+    #[test]
+    fn fallback_clears_a_gone_session_and_persists_it() {
+        let dir = std::env::temp_dir().join(format!("hud-tg-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, path) = bridge_with_temp_state(&dir);
+        {
+            let mut state = bridge.state.lock().expect("состояние");
+            state.session = Some("ses_gone".to_string());
+            state.directory = "/tmp/мост".to_string();
+        }
+        bridge.apply_session_check(&Ok(None));
+        assert!(
+            bridge.state.lock().expect("состояние").session.is_none(),
+            "сессия сброшена"
+        );
+        let value = read_temp_state(&path);
+        assert_eq!(
+            value.get("directory").and_then(serde_json::Value::as_str),
+            Some("/tmp/мост"),
+            "папка сохранена вместе со сбросом"
+        );
+        assert!(
+            value.get("session").is_none(),
+            "сброшенная сессия не пишется обратно"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Ошибка проверки не трогает ни состояние, ни файл: сервер мог просто
+    /// моргнуть.
+    #[test]
+    fn check_error_keeps_everything_untouched() {
+        let dir = std::env::temp_dir().join(format!("hud-tg-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, path) = bridge_with_temp_state(&dir);
+        {
+            let mut state = bridge.state.lock().expect("состояние");
+            state.session = Some("ses_mine".to_string());
+        }
+        bridge.apply_session_check(&Err("сервер недоступен".to_string()));
+        assert_eq!(
+            bridge.state.lock().expect("состояние").session.as_deref(),
+            Some("ses_mine"),
+            "сессия осталась"
+        );
+        assert!(!path.exists(), "файл не создан зря");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Сохранение после команды пишет сессию и папку во временный state-файл.
+    #[test]
+    fn persist_writes_session_and_directory_atomically() {
+        let dir = std::env::temp_dir().join(format!("hud-tg-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, path) = bridge_with_temp_state(&dir);
+        {
+            let mut state = bridge.state.lock().expect("состояние");
+            state.session = Some("ses_new".to_string());
+            state.directory = "/tmp/новая".to_string();
+        }
+        persist_runtime(&bridge.cloned());
+        let value = read_temp_state(&path);
+        assert_eq!(
+            value.get("session").and_then(serde_json::Value::as_str),
+            Some("ses_new")
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("каталог")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "остатки записи: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Правка уходит, только если картинка новая и троттлинг вышел. Финалы
+    /// сюда не ходят: они решают сами.
+    #[test]
+    fn render_skips_duplicates_and_throttled_edits() {
+        let fresh = render_key("новый текст", true);
+        let old = Instant::now() - EDIT_THROTTLE - Duration::from_secs(1);
+        assert!(
+            should_render(&render_key("старый текст", true), &fresh, old),
+            "свежая картинка уходит, когда троттлинг вышел"
+        );
+        assert!(
+            !should_render(&fresh, &fresh, Instant::now()),
+            "дубль не уходит"
+        );
+        assert!(
+            !should_render(&render_key("старый текст", true), &fresh, Instant::now()),
+            "троттлинг держит частые правки"
+        );
+        assert!(
+            should_render(
+                &render_key("старый текст", true),
+                &fresh,
+                Instant::now() - EDIT_THROTTLE
+            ),
+            "после паузы уходит"
+        );
+        assert!(
+            !should_render(
+                &render_key("текст", true),
+                &render_key("текст", false),
+                Instant::now()
+            ),
+            "смена клавиатуры — тоже новая картинка, но троттлинг всё равно держит"
+        );
+    }
+
+    /// Все `callback_data` влезают в лимит Bot API 64 байта: и кнопки прав,
+    /// и «Стоп». Длинный id запроса не должен ронять отправку клавиатуры.
+    #[test]
+    fn every_callback_data_fits_64_bytes() {
+        let long_id = "per_".to_string() + &"x".repeat(40);
+        for reply in [
+            commands::PermissionReply::Once,
+            commands::PermissionReply::Always,
+            commands::PermissionReply::Reject,
+        ] {
+            let data = format!("perm:{long_id}:{}", reply.key());
+            assert!(
+                card::callback_len(&data) <= 64,
+                "кнопка прав влезает: {data}"
+            );
+            assert_eq!(
+                parse_callback(&data),
+                Some((long_id.clone(), reply)),
+                "длинный id разбирается обратно"
+            );
+        }
+        let stop = card::stop_callback("ses_abcdef1234567890abcdef12");
+        assert!(card::callback_len(&stop) <= 64, "стоп влезает: {stop}");
+        assert_eq!(
+            card::parse_stop_callback(&stop),
+            Some("ses_abcdef1234567890abcdef12")
+        );
+    }
+
+    /// Строки итога по правам: одна строка, команда экранирована, у «всегда»
+    /// и «отклонено» команды нет.
+    #[test]
+    fn permission_result_lines_are_one_escaped_line() {
+        let line = BridgeHandle::permission_result_line(
+            commands::PermissionReply::Once,
+            "Выполнить: rm -rf /tmp/x <test>",
+        );
+        assert!(
+            line.starts_with("✔ Разрешено один раз · "),
+            "префикс: {line}"
+        );
+        assert!(line.contains("&lt;test&gt;"), "экранировано: {line}");
+        assert!(!line.contains('\n'), "одна строка");
+        assert_eq!(
+            BridgeHandle::permission_result_line(commands::PermissionReply::Always, "ls"),
+            "✔ Разрешено всегда"
+        );
+        assert_eq!(
+            BridgeHandle::permission_result_line(commands::PermissionReply::Reject, "ls"),
+            "✖ Отклонено"
+        );
+    }
+
+    /// Удалять можно только свежее: лимит Telegram — 48 часов.
+    #[test]
+    fn delete_limit_is_48_hours() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("время")
+            .as_secs() as i64;
+        assert!(within_delete_limit(now - 60), "минуту назад можно");
+        assert!(within_delete_limit(now + 60), "часы вперёд не страшны");
+        assert!(
+            !within_delete_limit(now - 49 * 3600),
+            "двухдневное трогать нельзя"
+        );
+    }
+
+    /// Чистка при старте: карточки правятся в «перезапущен» со снятием
+    /// клавиатуры, у прав клавиатура просто снимается, записи стираются.
+    /// Сеть недоступна — правки падают в журнал, а записи всё равно чистятся:
+    /// стартовать мост должен в любом случае.
+    #[test]
+    fn startup_cleanup_edits_and_clears_records() {
+        let dir =
+            std::env::temp_dir().join(format!("hud-tg-cleanup-records-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let path = dir.join("telegram-state.json");
+        let stale = serde_json::json!({
+            "session": "ses_old",
+            "cards": [{ "session": "ses_old", "chat": 1, "message": 11 }],
+            "permissions": [{ "request": "perm_old", "chat": 1, "message": 12 }],
+        });
+        std::fs::write(&path, serde_json::to_string(&stale).expect("json")).expect("запись");
+        let (bridge, _) = bridge_with_temp_state(&dir);
+        // Путь уже подменён: чистка читает тот же временный файл.
+        bridge.startup_cleanup();
+        let value = read_temp_state(&path);
+        assert!(
+            value
+                .get("cards")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|cards| cards.is_empty()),
+            "карточки стёрты: {value}"
+        );
+        assert!(
+            value
+                .get("permissions")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|permissions| permissions.is_empty()),
+            "права стёрты: {value}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Чистка с отсутствующим и битым файлом: молча нечего чистить, мост не
+    /// падает, файл не создаётся зря… точнее, создаётся пустым снимком через
+    /// persist — главное, что без паники и без чужих записей.
+    #[test]
+    fn startup_cleanup_survives_missing_and_broken_files() {
+        let dir =
+            std::env::temp_dir().join(format!("hud-tg-cleanup-broken-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, _) = bridge_with_temp_state(&dir);
+        // Файла нет: чистить нечего, паники нет.
+        bridge.startup_cleanup();
+        let broken = dir.join("broken.json");
+        std::fs::write(&broken, "{ не json").expect("запись");
+        let (refs, _) = (config::load_refs_from(&broken), ());
+        assert!(refs.0.is_empty() && refs.1.is_empty(), "битый файл — пусто");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
