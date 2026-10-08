@@ -108,6 +108,11 @@ pub enum Action {
     Spawn(&'static str, &'static [&'static str]),
     /// Действие niri: только аргументы, имя команды добавит исполнитель.
     Niri(&'static [&'static str]),
+    /// Вернуться на уровень выше: строка «Отмена» в вопросе подтверждения.
+    /// Команды нет и исполнителю она не достаётся: `Menu::enter` обрабатывает
+    /// её сам, до разбора `ItemKind::Action`, поэтому прямой `perform` —
+    /// no-op, как у ввода пароля.
+    Back,
     /// Перезапуск панели.
     RestartHudbar,
     /// Сдвиг модуля в порядке панели: применяется через `ModuleOrder`.
@@ -160,6 +165,7 @@ impl Action {
             Action::Live(live) => live.label().to_string(),
             Action::Run(program, _) | Action::Spawn(program, _) => (*program).to_string(),
             Action::Niri(args) => format!("niri {}", args.join(" ")),
+            Action::Back => "Отмена".to_string(),
             Action::RestartHudbar => "Перезапуск панели".to_string(),
             Action::MoveModule { .. } => "порядок модулей".to_string(),
             Action::RefreshAndRun { command, .. } => command.program().to_string(),
@@ -203,6 +209,8 @@ impl Action {
             Action::Patch(_) | Action::Live(_) | Action::RestartHudbar => None,
             Action::Run(program, _) | Action::Spawn(program, _) => Some(program),
             Action::Niri(args) => args.first().copied(),
+            // Возврат уровня решает меню, а не исполнитель: программы нет.
+            Action::Back => None,
             Action::MoveModule { .. } => None,
             // Команда динамическая (owned-строки, не `&'static str`), а
             // обновление — через меню: статическое имя здесь нечего отдать.
@@ -223,6 +231,8 @@ impl Action {
             Action::Patch(_) | Action::Live(_) => false,
             Action::Run(_, _) => false,
             Action::Spawn(_, _) | Action::Niri(_) | Action::RestartHudbar => true,
+            // Возврат уровня меню не закрывает: это «Отмена», а не выход.
+            Action::Back => false,
             Action::MoveModule { .. } => false,
             // Динамические операции меню не закрывают: человек остаётся в
             // разделе и видит обновлённый список.
@@ -255,6 +265,9 @@ impl Action {
             Action::Run(program, args) => runner.status(program, args),
             Action::Spawn(program, args) => runner.spawn(program, args),
             Action::Niri(args) => runner.status("niri", args),
+            // Уровень убирает меню: у исполнителя нет стека уровней, и
+            // запускать здесь нечего.
+            Action::Back => Ok(()),
             Action::RestartHudbar => runner.restart_hudbar(),
             Action::MoveModule { module, delta } => {
                 let order = super::values::moved_order(*module, *delta);

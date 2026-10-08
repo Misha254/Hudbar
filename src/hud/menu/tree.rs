@@ -78,6 +78,11 @@ pub struct Node {
     /// «Выбрать обои…» это текущий файл обоев). `None` — значение вычисляет
     /// [`node_value`] из `kind`.
     pub value: Option<fn() -> String>,
+    /// Попадает ли узел в глобальный поиск. `false` у внутренних строк
+    /// подтверждения: «Да, выключить» и «Отмена» — продолжение строки
+    /// «Выключение», а не самостоятельные пункты, и в общем списке они были бы
+    /// шумом из двух одинаковых «Отмена».
+    pub search: bool,
 }
 
 impl Node {
@@ -91,6 +96,7 @@ impl Node {
             visible: None,
             keywords: &[],
             value: None,
+            search: true,
         }
     }
 
@@ -104,6 +110,7 @@ impl Node {
             visible: None,
             keywords: &[],
             value: None,
+            search: true,
         }
     }
 
@@ -117,6 +124,7 @@ impl Node {
             visible: None,
             keywords: &[],
             value: None,
+            search: true,
         }
     }
 
@@ -136,6 +144,7 @@ impl Node {
             visible: None,
             keywords: &[],
             value: None,
+            search: true,
         }
     }
 
@@ -168,6 +177,7 @@ impl Node {
             visible: None,
             keywords: &[],
             value: None,
+            search: true,
         }
     }
 
@@ -181,6 +191,7 @@ impl Node {
             visible: None,
             keywords: &[],
             value: None,
+            search: true,
         }
     }
 
@@ -194,6 +205,7 @@ impl Node {
             visible: None,
             keywords: &[],
             value: None,
+            search: true,
         }
     }
 
@@ -207,6 +219,7 @@ impl Node {
             visible: None,
             keywords: &[],
             value: None,
+            search: true,
         }
     }
 
@@ -229,6 +242,13 @@ impl Node {
     /// Добавляет условие показа.
     pub fn when(mut self, visible: fn() -> bool) -> Self {
         self.visible = Some(visible);
+        self
+    }
+
+    /// Убирает узел из глобального поиска: строка остаётся видимой в своём
+    /// разделе, но в общий список не попадает.
+    pub fn hidden_from_search(mut self) -> Self {
+        self.search = false;
         self
     }
 
@@ -396,7 +416,7 @@ pub fn level_rows(nodes: &[Node], depth: usize, lang: Language) -> Vec<Item> {
 
 /// Путь к узлу в дереве: заголовки от корня до родителя.
 pub fn path_to(nodes: &[Node], target: &Node) -> Option<Vec<String>> {
-    for node in nodes.iter().filter(|node| node.is_visible()) {
+    for node in nodes.iter().filter(|node| node.is_visible() && node.search) {
         if node.title == target.title {
             return Some(Vec::new());
         }
@@ -417,7 +437,7 @@ pub fn leaves_with_path(
     path: &mut Vec<String>,
     out: &mut Vec<(Node, Vec<String>)>,
 ) {
-    for node in nodes.iter().filter(|node| node.is_visible()) {
+    for node in nodes.iter().filter(|node| node.is_visible() && node.search) {
         match node.children() {
             Some(children) => {
                 path.push(node.title.clone());

@@ -47,6 +47,17 @@ pub const SCHEME: &str = "\u{f043}";
 pub const FONT_ICON: &str = "\u{f031}";
 pub const TERMINAL: &str = "\u{f120}";
 
+/// Раздел «Питание» и его строки. Глифы из Font Awesome: питание `f011`,
+/// перезагрузка `f079`, замок `f023`, кровать `f236` (сон), выход `f2f5`.
+/// `f011` выбран вместо `f055`: в JetBrainsMono Nerd Font Propo `f055`
+/// рисуется кружком с точкой, а `f011` — читаемым знаком питания. Все пять
+/// проверены по cmap шрифта.
+pub const POWER: &str = "\u{f011}";
+pub const REBOOT: &str = "\u{f079}";
+pub const LOCK: &str = "\u{f023}";
+pub const SLEEP: &str = "\u{f236}";
+pub const LOGOUT: &str = "\u{f2f5}";
+
 /// Служебные глифы меню: лупа, крестик, шеврон, стрелки для подсказок.
 pub const SEARCH: &str = "\u{f002}";
 pub const TIMES: &str = "\u{f00d}";
@@ -114,10 +125,11 @@ pub fn section(name: &str) -> Option<&'static str> {
     })
 }
 
-/// Иконки меню в порядке дерева: восемь разделов корня, потом содержимое
-/// «Стиля» и «Панели». Галерея меню рисует их именно в таком порядке, а тест
-/// сверяет, что список не пустеет и что глифов хватает на все пункты.
-pub const MENU: [(&str, &str); 20] = [
+/// Иконки меню в порядке дерева: девять разделов корня, потом содержимое
+/// «Стиля», «Панели» и «Питания». Галерея меню рисует их именно в таком
+/// порядке, а тест сверяет, что список не пустеет и что глифов хватает на все
+/// пункты.
+pub const MENU: [(&str, &str); 25] = [
     ("Приложения", APPS),
     ("Панель", PANEL_MONITOR),
     ("Стиль", STYLE),
@@ -125,6 +137,7 @@ pub const MENU: [(&str, &str); 20] = [
     ("Захват", CAPTURE),
     ("Бинды", KEYBINDS),
     ("Система", SYSTEM),
+    ("Питание", POWER),
     ("О программе", ABOUT),
     ("Тема", THEME),
     ("Язык", LANGUAGE),
@@ -133,6 +146,10 @@ pub const MENU: [(&str, &str); 20] = [
     ("Шрифт", FONT_ICON),
     ("Терминал", TERMINAL),
     ("Не беспокоить", DND_MOON),
+    ("Заблокировать", LOCK),
+    ("Спящий режим", SLEEP),
+    ("Перезагрузка", REBOOT),
+    ("Выйти", LOGOUT),
     ("Лупа", SEARCH),
     ("Крестик", TIMES),
     ("Шеврон", CHEVRON),
@@ -194,7 +211,7 @@ mod tests {
     /// глиф в обеих не мешает.
     #[test]
     fn menu_gallery_has_every_icon_once() {
-        assert_eq!(MENU.len(), 20);
+        assert_eq!(MENU.len(), 25);
         let mut glyphs: Vec<&str> = MENU.iter().map(|(_, glyph)| *glyph).collect();
         glyphs.sort_unstable();
         let count = glyphs.len();
