@@ -7,8 +7,10 @@
 //! философия: разные сервисы, один стиль кода.
 //!
 //! Формат запросов подсмотрен в SDK `~/.config/opencode/node_modules` (типы
-//! `SessionCreateData`, `SessionPromptData`, `PermissionRespondData`), поэтому
-//! использование подтверждается не только этим комментарием, но и тестами:
+//! `SessionCreateData`, `SessionPromptData`, `PermissionRespondData`) и сверен
+//! с живой спекой сервера (`GET /doc`): промпты уходят через неблокирующий
+//! `prompt_async` (204), ответы на права — через `POST /permission/{id}/reply`.
+//! Использование подтверждается не только этим комментарием, но и тестами:
 //! сборки с неправильными полями падают на живых проверках.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -215,6 +217,17 @@ impl Client {
         session_from(&value)
     }
 
+    /// Одна сессия по id. `Ok(None)` — сессии нет (404); остальные ошибки —
+    /// причина, а не ответ, и отдаются наружу, чтобы вызывающий не стирал
+    /// состояние по недоступности сервера.
+    pub fn get_session(&self, session_id: &str) -> Result<Option<Session>, Error> {
+        match self.request("GET", &format!("/session/{session_id}"), None) {
+            Ok(value) => session_from(&value).map(Some),
+            Err(why) if why.contains("HTTP 404") => Ok(None),
+            Err(why) => Err(why),
+        }
+    }
+
     /// Последние сессии папки, свежие сверху.
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<Session>, Error> {
         let path = format!("/session?limit={limit}");
@@ -225,19 +238,18 @@ impl Client {
         items.iter().map(session_from).collect()
     }
 
-    /// Отправляет промпт в сессию. Возвращает id сообщения пользователя.
-    pub fn send_message(&self, session_id: &str, text: &str) -> Result<String, Error> {
+    /// Отправляет промпт в сессию и возвращается сразу: сервер отвечает 204
+    /// «Prompt accepted», а результат приходит только через поток `/event`.
+    /// Блокирующий `POST /message` здесь не используется: он держит
+    /// соединение до конца работы агента.
+    pub fn send_prompt_async(&self, session_id: &str, text: &str) -> Result<(), Error> {
         let body = json!({ "parts": [{ "type": "text", "text": text }] });
-        let value = self.request(
+        self.request(
             "POST",
-            &format!("/session/{session_id}/message"),
+            &format!("/session/{session_id}/prompt_async"),
             Some(&body),
-        )?;
-        value
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(|| "ответ без id сообщения".to_string())
+        )
+        .map(|_| ())
     }
 
     /// Прерывает работу агента в сессии.
@@ -247,17 +259,14 @@ impl Client {
     }
 
     /// Ответ на запрос прав: `once` — разрешить один раз, `always` —
-    /// разрешить всегда, `reject` — отказать.
-    pub fn reply_permission(
-        &self,
-        session_id: &str,
-        permission_id: &str,
-        response: &str,
-    ) -> Result<(), Error> {
-        let body = json!({ "response": response });
+    /// разрешить всегда, `reject` — отказать. Эндпоинт без сессии в пути:
+    /// `POST /session/{id}/permissions/{id}` помечен deprecated в спеке
+    /// сервера, а id из события `permission.asked` — это и есть requestID.
+    pub fn reply_permission(&self, permission_id: &str, response: &str) -> Result<(), Error> {
+        let body = json!({ "reply": response });
         self.request(
             "POST",
-            &format!("/session/{session_id}/permissions/{permission_id}"),
+            &format!("/permission/{permission_id}/reply"),
             Some(&body),
         )
         .map(|_| ())
@@ -436,6 +445,81 @@ pub fn is_chunk_length(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 404 означает «сессии нет», а не ошибку: вызывающий сбрасывает
+    /// состояние, а не падает. Проверяется на локальной заглушке, а не на
+    /// живом сервере: тест не должен зависеть от чужих сессий.
+    #[test]
+    fn http_404_maps_to_none() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("слушатель");
+        let port = listener.local_addr().expect("порт").port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut head = vec![0u8; 4096];
+                let _ = stream.read(&mut head);
+                let body = r#"{"name":"NotFoundError","data":{"message":"no such session"}}"#;
+                let response = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        assert_eq!(client.get_session("ses_нет").expect("ответ"), None);
+    }
+
+    /// Закрытый порт — транспортная ошибка, а не 404: сессия остаётся, мост
+    /// разберётся живьём.
+    #[test]
+    fn refused_connection_is_an_error_not_a_missing_session() {
+        let client = Client::new("http://127.0.0.1:1").expect("разбор");
+        assert!(client.get_session("ses_нет").is_err());
+    }
+
+    /// Заглушка HTTP: отдаёт один заранее заданный ответ. Нужна, чтобы
+    /// проверить разбор ответов без живого сервера.
+    fn stub_server(status: &str, body: &str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("слушатель");
+        let port = listener.local_addr().expect("порт").port();
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len(),
+        );
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut head = vec![0u8; 4096];
+                let _ = stream.read(&mut head);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        port
+    }
+
+    /// `prompt_async` возвращает 204 без тела: это успех, а не «ответ не
+    /// json». Ошибка сервера с телом маппится в текст ошибки.
+    #[test]
+    fn prompt_async_accepts_204_and_maps_errors() {
+        let port = stub_server("204 No Content", "");
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        assert!(
+            client.send_prompt_async("ses_1", "привет").is_ok(),
+            "204 — это принятие промпта"
+        );
+
+        let port = stub_server("400 Bad Request", r#"{"name":"BadRequest"}"#);
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        let error = client
+            .send_prompt_async("ses_1", "привет")
+            .expect_err("400 — это ошибка");
+        assert!(error.contains("HTTP 400"), "код виден: {error}");
+    }
 
     #[test]
     fn base_parses_host_and_port_and_rejects_everything_else() {
