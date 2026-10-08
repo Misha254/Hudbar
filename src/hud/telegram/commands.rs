@@ -35,6 +35,9 @@ pub fn execute(
         Command::Help => Ok(Outcome {
             text: help_text(),
             html: true,
+            card: None,
+            ephemeral: false,
+            delete_command: None,
         }),
         Command::New => {
             let session = with_client(client, |client| client.create_session(None))?;
@@ -42,6 +45,9 @@ pub fn execute(
             Ok(Outcome {
                 text: format!("Новая сессия: <code>{session}</code>"),
                 html: true,
+                card: None,
+                ephemeral: false,
+                delete_command: None,
             })
         }
         Command::Sessions => {
@@ -51,6 +57,9 @@ pub fn execute(
                 return Ok(Outcome {
                     text: "Сессий пока нет — напиши текст, и мост создаст первую".to_string(),
                     html: false,
+                    card: None,
+                    ephemeral: false,
+                    delete_command: None,
                 });
             }
             let active = state
@@ -67,7 +76,13 @@ pub fn execute(
                 text.push_str(&format!("\n{}. <code>{session}</code>{marker}", index + 1));
             }
             text.push_str("\n\n/use 2 — перейти");
-            Ok(Outcome { text, html: true })
+            Ok(Outcome {
+                text,
+                html: true,
+                card: None,
+                ephemeral: false,
+                delete_command: None,
+            })
         }
         Command::Use(argument) => {
             let sessions = with_client(client, |client| client.list_sessions(20))?;
@@ -77,11 +92,17 @@ pub fn execute(
                     Ok(Outcome {
                         text: format!("Сессия: <code>{session}</code>"),
                         html: true,
+                        card: None,
+                        ephemeral: false,
+                        delete_command: None,
                     })
                 }
                 None => Ok(Outcome {
                     text: "Такой сессии нет — посмотри /sessions".to_string(),
                     html: false,
+                    card: None,
+                    ephemeral: true,
+                    delete_command: None,
                 }),
             }
         }
@@ -91,27 +112,39 @@ pub fn execute(
                 Ok(Outcome {
                     text: "Остановлено".to_string(),
                     html: false,
+                    card: None,
+                    ephemeral: false,
+                    delete_command: None,
                 })
             }
             None => Ok(Outcome {
                 text: "Активной сессии нет — нечего останавливать".to_string(),
                 html: false,
+                card: None,
+                ephemeral: true,
+                delete_command: None,
             }),
         },
         Command::Permission(reply) => match read_pending(state) {
             Some(pending) => {
                 with_client(client, |client| {
-                    client.reply_permission(&pending.session, &pending.id, reply.response())
+                    client.reply_permission(&pending.id, reply.response())
                 })?;
                 clear_pending_if(state, &pending.id);
                 Ok(Outcome {
                     text: format!("{}: {}", reply.label(), pending.title),
                     html: false,
+                    card: None,
+                    ephemeral: false,
+                    delete_command: None,
                 })
             }
             None => Ok(Outcome {
                 text: "Запросов прав сейчас нет".to_string(),
                 html: false,
+                card: None,
+                ephemeral: true,
+                delete_command: None,
             }),
         },
         Command::Directory(path) => {
@@ -126,12 +159,18 @@ pub fn execute(
                         super::api::escape_html(&directory)
                     ),
                     html: true,
+                    card: None,
+                    ephemeral: false,
+                    delete_command: None,
                 });
             }
             if !std::path::Path::new(path).is_dir() {
                 return Ok(Outcome {
                     text: "Такой папки нет на ноутбуке".to_string(),
                     html: false,
+                    card: None,
+                    ephemeral: false,
+                    delete_command: None,
                 });
             }
             if let Ok(mut state) = state.lock() {
@@ -142,6 +181,9 @@ pub fn execute(
             Ok(Outcome {
                 text: format!("Папка: <code>{path}</code>. Сессия сброшена."),
                 html: true,
+                card: None,
+                ephemeral: false,
+                delete_command: None,
             })
         }
         Command::Status => {
@@ -167,6 +209,9 @@ pub fn execute(
                     super::api::escape_html(&directory)
                 ),
                 html: true,
+                card: None,
+                ephemeral: false,
+                delete_command: None,
             })
         }
         Command::Prompt(text) => {
@@ -178,10 +223,25 @@ pub fn execute(
                     created.id
                 }
             };
-            with_client(client, |client| client.send_message(&session, text))?;
+            // Неблокирующая отправка: сервер отвечает 204, а результат
+            // приходит только через поток событий. Блокирующий POST здесь
+            // держал бы команду до конца работы агента.
+            with_client(client, |client| client.send_prompt_async(&session, text))?;
+            let label = Session {
+                id: session.clone(),
+                title: String::new(),
+                directory: String::new(),
+            }
+            .to_string();
             Ok(Outcome {
                 text: String::new(),
                 html: false,
+                card: Some(CardOpen {
+                    session_id: session,
+                    session_label: label,
+                }),
+                ephemeral: false,
+                delete_command: None,
             })
         }
     }
@@ -295,8 +355,8 @@ pub enum Command {
     Prompt(String),
 }
 
-/// Что исполняет команда: текст для телефона и, если нужно, id сообщения для
-/// правки на месте.
+/// Что исполняет команда: текст для телефона, запрос на карточку и пометки
+/// для жизненного цикла сообщения.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outcome {
     /// Текст ответа ботом.
@@ -304,6 +364,23 @@ pub struct Outcome {
     /// HTML-разметка: мост экранирует приёмник, но командный текст содержит
     /// свои теги `<code>`, и их не надо трогать.
     pub html: bool,
+    /// Открыть живую карточку промпта: сессия уже получила промпт.
+    pub card: Option<CardOpen>,
+    /// Короткое служебное подтверждение: бот удалит его через ~10 с, чтобы
+    /// не засорять ленту.
+    pub ephemeral: bool,
+    /// Удалить команду пользователя после ответа: id сообщения и его дата.
+    /// Ставится только для слэш-команд при включённой настройке.
+    pub delete_command: Option<(i64, i64)>,
+}
+
+/// Запрос на открытие карточки: сессия с промптом и подпись для шапки.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CardOpen {
+    /// Id сессии, куда ушёл промпт.
+    pub session_id: String,
+    /// Подпись для шапки карточки: название или короткий id.
+    pub session_label: String,
 }
 
 /// Разбирает текст сообщения в команду. Пустое сообщение — команда не
@@ -359,7 +436,7 @@ pub fn help_text() -> String {
     [
         "Команды:",
         "",
-        "<b>текст</b> — промпт агенту в активную сессию",
+        "<b>текст</b> — промпт агенту: карточка статуса с кнопкой «Стоп», ответ — новым сообщением",
         "<b>/new</b> — новая сессия",
         "<b>/sessions</b> — последние сессии, для выбора",
         "<b>/use 2</b> или <b>/use ses_…</b> — перейти в сессию",
