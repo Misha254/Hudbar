@@ -37,9 +37,14 @@ chromium. Не хватает:
   `AudioStamp::changed_from` возвращает его и по смене громкости микрофона,
   и по внешнему mute. Время показа и включение — в секции `osd` файла
   `settings.json` и в Control Center. Не покрыто: только яркость.
-- Уведомления opencode: плагин opencode на `session.idle` и ожидание прав
-  дёргает `notify-send`/HUDbar. Сейчас в коде есть только пункт меню
-  «запустить opencode», самого плагина нет.
+- Уведомления opencode: сделано — плагин в `contrib/opencode/hudbar-notify.js`
+  слушает `session.idle`, `permission.updated`, `question.asked` и `session.error`
+  и дёргает `notify-send` в dunst. Пункт меню «запустить opencode» остался
+  отдельной мелочью, плагин ставится руками.
+- Мост Telegram: сделан (релиз 0.7.0). `hud-telegram-rs` + два systemd-юнита,
+  команды и промпты с телефона, живые карточки, смена модели, меню кнопками и
+  веб-панель Mini App за `tailscale serve`. Открытое: туннель и токен панели
+  настраиваются руками, в README раздел про мост добавлен.
 - Secret hardening: инфраструктура stdin **готова и покрыта тестами** —
   `SecretData` с красным `Debug`, `CommandSpec::stdin`, `stdin_bytes`,
   и `run_with_timeout_stdin`, который пишет секрет в pipe отдельным потоком и
