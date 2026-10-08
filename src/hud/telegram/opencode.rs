@@ -13,6 +13,7 @@
 //! Использование подтверждается не только этим комментарием, но и тестами:
 //! сборки с неправильными полями падают на живых проверках.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
@@ -243,13 +244,29 @@ impl Client {
     /// Блокирующий `POST /message` здесь не используется: он держит
     /// соединение до конца работы агента.
     pub fn send_prompt_async(&self, session_id: &str, text: &str) -> Result<(), Error> {
-        let body = json!({ "parts": [{ "type": "text", "text": text }] });
         self.request(
             "POST",
             &format!("/session/{session_id}/prompt_async"),
-            Some(&body),
+            Some(&prompt_body(text)),
         )
         .map(|_| ())
+    }
+
+    /// Карта состояний сессий папки: id сессии → `idle`/`busy`/`retry`.
+    /// Записи неизвестного вида пропускаются: спека на новые значения нет, а
+    /// падать из-за них нельзя.
+    pub fn session_status(&self) -> Result<HashMap<String, String>, Error> {
+        let value = self.request("GET", "/session/status", None)?;
+        let map = value
+            .as_object()
+            .ok_or_else(|| "статусы сессий не объект".to_string())?;
+        let mut out = HashMap::new();
+        for (id, status) in map {
+            if let Some(kind) = status.get("type").and_then(Value::as_str) {
+                out.insert(id.clone(), kind.to_string());
+            }
+        }
+        Ok(out)
     }
 
     /// Прерывает работу агента в сессии.
@@ -368,6 +385,12 @@ impl Client {
             }
         }
     }
+}
+
+/// Тело промпта: `parts` — массив, текстовая часть внутри. Отдельная функция,
+/// чтобы тест проверял форму без сети: сервер принимает только массив.
+pub fn prompt_body(text: &str) -> Value {
+    json!({ "parts": [{ "type": "text", "text": text }] })
 }
 
 /// Сессия из JSON сервера.
@@ -519,6 +542,37 @@ mod tests {
             .send_prompt_async("ses_1", "привет")
             .expect_err("400 — это ошибка");
         assert!(error.contains("HTTP 400"), "код виден: {error}");
+    }
+
+    /// Тело промпта — объект с массивом `parts`, текстовая часть внутри.
+    /// Форма сверена с живой спекой (`prompt_async` в `GET /doc`): сервер
+    /// принимает только массив.
+    #[test]
+    fn prompt_body_is_parts_array_with_text_inside() {
+        let body = prompt_body("привет");
+        let text = serde_json::to_string(&body).expect("json");
+        assert!(text.contains("\"parts\":["), "массив, а не объект: {text}");
+        assert!(text.contains("\"type\":\"text\""), "тип части: {text}");
+        assert!(
+            text.contains("\"text\":\"привет\""),
+            "текст на месте: {text}"
+        );
+    }
+
+    /// Карта статусов разбирается в пары id → тип; записи без типа
+    /// пропускаются, а не роняют разбор.
+    #[test]
+    fn session_status_maps_ids_to_kinds() {
+        let port = stub_server(
+            "200 OK",
+            r#"{"ses_1":{"type":"busy"},"ses_2":{"type":"idle"},"ses_3":{"nonsense":1}}"#,
+        );
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        let map = client.session_status().expect("карта");
+        assert_eq!(map.get("ses_1").map(String::as_str), Some("busy"));
+        assert_eq!(map.get("ses_2").map(String::as_str), Some("idle"));
+        assert!(!map.contains_key("ses_3"), "без типа пропускается");
     }
 
     #[test]
