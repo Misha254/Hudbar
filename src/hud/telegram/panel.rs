@@ -35,6 +35,10 @@ pub struct Panel {
     /// Адрес, который Tailscale отдал панели: `https://узел.tailnet.ts.net`.
     /// Пустой — значит `tailscale serve` ещё не поднят.
     pub url: Option<String>,
+    /// Имя бота без `@`: `Opencode_Hudbar_Bot`.
+    pub bot: Option<String>,
+    /// Короткое имя приложения в BotFather: `Opencode`.
+    pub app: Option<String>,
 }
 
 impl Panel {
@@ -44,6 +48,8 @@ impl Panel {
             token: None,
             port: default_port(),
             url: None,
+            bot: None,
+            app: None,
         }
     }
 }
@@ -89,7 +95,21 @@ pub fn load_from(file: &Path) -> Panel {
         .map(str::trim)
         .filter(|url| url.starts_with("https://"))
         .map(str::to_string);
-    Panel { token, port, url }
+    let name = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    Panel {
+        token,
+        port,
+        url,
+        bot: name("bot"),
+        app: name("app"),
+    }
 }
 
 /// Права файла: 600 у секрета. Windows прав не имеет, поэтому проверка там
@@ -107,8 +127,21 @@ pub fn permissions_are_secret(file: &Path) -> bool {
     }
 }
 
-/// Ссылка для Telegram: адрес панели с токеном во фрагменте. Фрагмент
-/// браузер серверу не отправляет, поэтому токен не осядет в логах туннеля.
+/// Прямая ссылка на приложение с токеном: `t.me/бот/приложение?startapp=…`.
+/// Telegram отдаёт `startapp` странице как `tgWebAppStartParam`, и токен
+/// доезжает без копирования и без ввода руками.
+pub fn deep_link(bot: &str, app: &str, token: &str) -> String {
+    format!(
+        "https://t.me/{}/{}?startapp={}",
+        bot.trim_start_matches('@'),
+        app,
+        token
+    )
+}
+
+/// Ссылка на саму панель с токеном во фрагменте. Фрагмент браузер серверу не
+/// отправляет, поэтому токен не осядет в логах туннеля. Нужна, когда открывать
+/// панель не через Telegram.
 pub fn link(base: &str, token: &str) -> String {
     format!(
         "{}/#{}={}",
@@ -168,6 +201,17 @@ mod tests {
 
     /// Ссылка несёт токен во фрагменте: сервер его не видит, поэтому в логах
     /// туннеля токена не будет. Хвостовой слеш убран, чтобы не было `//`.
+    /// Прямая ссылка ведёт в приложение и несёт токен в `startapp`: ровно
+    /// то, что Telegram отдаст странице как `tgWebAppStartParam`.
+    #[test]
+    fn deep_link_carries_the_token_in_startapp() {
+        assert_eq!(
+            deep_link("@Opencode_Hudbar_Bot", "Opencode", "секрет"),
+            "https://t.me/Opencode_Hudbar_Bot/Opencode?startapp=секрет",
+            "собака у @ убрана, иначе ссылка битая"
+        );
+    }
+
     #[test]
     fn link_puts_the_token_into_the_fragment() {
         assert_eq!(

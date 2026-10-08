@@ -96,7 +96,12 @@ let state={session:null,model:null,models:[],token:''};
 function takeToken(){
   const raw=location.hash.replace(/^#/,'');
   const p=new URLSearchParams(raw.startsWith('t=')?raw:'t='+raw.replace(/^t=/,''));
-  state.token=p.get('t')||'';
+  // Telegram кладёт startapp из ссылки t.me/бот/приложение?startapp=…
+  // в параметр tgWebAppStartParam — это главный путь: токен приходит с
+  // кнопки, вводить его руками не нужно.
+  const handed=document.querySelector('[data-token]');
+  const fromLink=new URLSearchParams(location.search).get('tgWebAppStartParam')||'';
+  state.token=(handed&&handed.dataset.token)||fromLink||p.get('t')||'';
   if(state.token){
     try{localStorage.setItem('hud-token',state.token);}catch{}
     history.replaceState(null,'',location.pathname+location.search);
@@ -235,6 +240,10 @@ mod tests {
         // и запоминается, иначе панель по кнопке была бы мёртвой.
         assert!(html.contains("localStorage"), "токен запоминается");
         assert!(html.contains("askToken"), "есть поле для ввода токена");
+        assert!(
+            html.contains("tgWebAppStartParam"),
+            "токен приходит из startapp-ссылки Telegram"
+        );
     }
 
     #[test]

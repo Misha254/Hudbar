@@ -596,8 +596,12 @@ pub fn find_session<'a>(sessions: &'a [Session], argument: &str) -> Option<&'a S
 fn panel_link() -> Option<String> {
     let panel = super::panel::load();
     let token = panel.token?;
-    let url = panel.url?;
-    Some(super::panel::link(&url, &token))
+    // Прямая ссылка открывает приложение внутри Telegram и отдаёт токен
+    // странице сам: ни копировать, ни вводить руками не нужно.
+    match (&panel.bot, &panel.app) {
+        (Some(bot), Some(app)) => Some(super::panel::deep_link(bot, app, &token)),
+        _ => Some(super::panel::link(&panel.url?, &token)),
+    }
 }
 
 /// Ищет модель по аргументу: номеру из `/models`, полному `провайдер/id`
