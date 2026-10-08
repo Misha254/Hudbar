@@ -45,6 +45,11 @@ const DELETE_DELAY: Duration = Duration::from_secs(10);
 const DELETE_TICK: Duration = Duration::from_secs(5);
 /// Старше этого удалять сообщения пользователей нельзя: ограничение Telegram.
 const DELETE_LIMIT: Duration = Duration::from_secs(48 * 3600);
+/// Карточка считается зависшей, если столько не было событий её сессии:
+/// поток мог молча умереть, а сервер — продолжать работать.
+const STALE_AFTER: Duration = Duration::from_secs(90);
+/// Как часто вотчдог проверяет зависшие карточки.
+const WATCH_INTERVAL: Duration = Duration::from_secs(60);
 /// Пауза после флуд-контроля Telegram, если число секунд не разобралось.
 const RETRY_FALLBACK: Duration = Duration::from_secs(5);
 /// Потолок ожидания флуд-контроля: дольше минуты не ждём, ошибка уходит в
@@ -73,6 +78,9 @@ pub(crate) struct LiveCard {
     status: CardStatus,
     /// Есть ли под карточкой клавиатура (кнопка «Стоп»).
     has_keyboard: bool,
+    /// Когда пришло последнее событие сессии: по нему вотчдог отличает
+    /// зависшую карточку от живой.
+    last_event: Instant,
 }
 
 /// Сообщение с запросом прав: кнопки ещё на экране.
@@ -97,6 +105,10 @@ pub(crate) struct Deletion {
     message: i64,
 }
 
+/// Очередь завершённых сообщений сессии: id сообщения и текст, по порядку
+/// первого появления. Отдельный тип ради читаемости вложенных карт.
+pub(crate) type PendingQueue = Vec<(String, String)>;
+
 /// Мост с конфигом, состоянием и клиентами.
 pub struct Bridge {
     config: Config,
@@ -110,8 +122,13 @@ pub struct Bridge {
     perm_msgs: Arc<Mutex<HashMap<String, PermMsg>>>,
     /// Очередь отложенных удалений.
     deletions: Arc<Mutex<Vec<Deletion>>>,
-    /// Накопитель текста ответа агента.
-    answer: Arc<Mutex<events::Answer>>,
+    /// Текст частей по id сообщения: каждый `part.updated` несёт полный текст
+    /// на текущий момент, а завершается сообщение отдельно.
+    inflight: Arc<Mutex<HashMap<String, String>>>,
+    /// Завершённые сообщения агента по сессии, ждущие конца хода: отправка и
+    /// `Done` — только по `session.idle`, иначе промежуточный ответ ушёл бы
+    /// раньше времени.
+    pending: Arc<Mutex<HashMap<String, PendingQueue>>>,
 }
 
 impl Bridge {
@@ -134,7 +151,8 @@ impl Bridge {
             cards: Arc::new(Mutex::new(HashMap::new())),
             perm_msgs: Arc::new(Mutex::new(HashMap::new())),
             deletions: Arc::new(Mutex::new(Vec::new())),
-            answer: Arc::new(Mutex::new(events::Answer::default())),
+            inflight: Arc::new(Mutex::new(HashMap::new())),
+            pending: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -195,8 +213,14 @@ impl Bridge {
             .name("telegram-deletions".to_string())
             .spawn(move || deletions.deletion_loop())
             .expect("поток удалений");
+        let watch = self.cloned();
+        let watchdog = thread::Builder::new()
+            .name("telegram-watchdog".to_string())
+            .spawn(move || watch.watchdog_loop())
+            .expect("поток вотчдога");
         let _ = updates.join();
         let _ = events.join();
+        let _ = watchdog.join();
         let _ = deletions.join();
     }
 
@@ -238,7 +262,8 @@ impl Bridge {
             cards: Arc::clone(&self.cards),
             perm_msgs: Arc::clone(&self.perm_msgs),
             deletions: Arc::clone(&self.deletions),
-            answer: Arc::clone(&self.answer),
+            inflight: Arc::clone(&self.inflight),
+            pending: Arc::clone(&self.pending),
         }
     }
 }
@@ -259,7 +284,10 @@ pub struct BridgeHandle {
     pub perm_msgs: Arc<Mutex<HashMap<String, PermMsg>>>,
     /// Очередь отложенных удалений.
     pub deletions: Arc<Mutex<Vec<Deletion>>>,
-    pub answer: Arc<Mutex<events::Answer>>,
+    /// Текст частей по id сообщения.
+    pub inflight: Arc<Mutex<HashMap<String, String>>>,
+    /// Завершённые сообщения по сессии, ждущие конца хода.
+    pub pending: Arc<Mutex<HashMap<String, PendingQueue>>>,
 }
 
 impl BridgeHandle {
@@ -589,6 +617,7 @@ impl BridgeHandle {
                             tool: None,
                             status: CardStatus::Running,
                             has_keyboard: true,
+                            last_event: now,
                         },
                     );
                 }
@@ -800,10 +829,126 @@ impl BridgeHandle {
                     if let Err(why) = result {
                         super::log::warn(format!("мост: поток событий: {why}"));
                     }
+                    // Поток упал — состояние могло измениться мимо нас:
+                    // проверяем зависшие карточки сразу, не дожидаясь тика.
+                    self.watchdog_once();
                 }
             }
             thread::sleep(RECONNECT_PAUSE);
         }
+    }
+
+    /// Одна проверка вотчдога: зависшие карточки сверяются с сервером.
+    /// Снимок — под мьютексом, сеть — без него, применение — с перепроверкой:
+    /// мьютекс не держится через сетевые вызовы никогда.
+    pub fn watchdog_once(&self) {
+        let now = Instant::now();
+        let stale: Vec<(String, String)> = self
+            .cards
+            .lock()
+            .ok()
+            .map(|cards| {
+                cards
+                    .iter()
+                    .filter(|(_, card)| {
+                        !is_terminal(card.status)
+                            && now.duration_since(card.last_event) >= STALE_AFTER
+                    })
+                    .map(|(session, card)| (session.clone(), card.label.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if stale.is_empty() {
+            return;
+        }
+        let client = self.client.lock().ok().map(|client| client.clone());
+        let Some(client) = client else {
+            return;
+        };
+        let directory = self.state.lock().ok().map(|state| state.directory.clone());
+        let Some(directory) = directory else {
+            return;
+        };
+        let mut client = client;
+        client.set_directory(&directory);
+        // Карта статусов одна на всех: лишний опрос на каждую сессию ни к чему.
+        let statuses = client.session_status().ok();
+        for (session, _) in &stale {
+            let status = statuses
+                .as_ref()
+                .and_then(|map| map.get(session))
+                .map(String::as_str);
+            // `Ok(None)` — это 404, сессия удалена точно. `Err` — сеть
+            // моргнула: отличить от удаления нельзя, поэтому бездействие.
+            // Сервер уже сказал `idle` — точечная проверка не нужна.
+            let missing = status != Some("idle") && matches!(client.get_session(session), Ok(None));
+            let verdict = watchdog_verdict(true, status, missing);
+            self.apply_watchdog_verdict(session, verdict);
+        }
+    }
+
+    /// Применяет вердикт: перепроверяет свежесть (события могли прийти, пока
+    /// шёл опрос) и только потом финалит.
+    fn apply_watchdog_verdict(&self, session: &str, verdict: WatchVerdict) {
+        match verdict {
+            WatchVerdict::NoChange => {}
+            WatchVerdict::FinalizeDone => {
+                if self.card_still_stale(session) {
+                    self.finish_turn(session);
+                }
+            }
+            WatchVerdict::FinalizeGone => {
+                if self.card_still_stale(session) {
+                    // Накопленное не отправляем: сессия удалена вместе с
+                    // историей, а обрывки чужой работы в чате не нужны.
+                    if let Ok(mut pending) = self.pending.lock() {
+                        pending.remove(session);
+                    }
+                    self.finalize_card(session, CardStatus::Error, Some("сессия не найдена"));
+                    if let Ok(mut cards) = self.cards.lock() {
+                        cards.remove(session);
+                    }
+                    persist_runtime(self);
+                }
+            }
+        }
+    }
+
+    /// Карточка на месте и с последнего взгляда событий не было.
+    fn card_still_stale(&self, session: &str) -> bool {
+        self.cards.lock().ok().is_some_and(|cards| {
+            cards.get(session).is_some_and(|card| {
+                !is_terminal(card.status)
+                    && Instant::now().duration_since(card.last_event) >= STALE_AFTER
+            })
+        })
+    }
+
+    /// Цикл вотчдога: раз в минуту сверяет зависшие карточки с сервером.
+    /// Отдельный поток: опросы сети не должны тормозить ни команды, ни события.
+    fn watchdog_loop(&self) {
+        loop {
+            thread::sleep(WATCH_INTERVAL);
+            self.watchdog_once();
+        }
+    }
+
+    /// Решение вотчдога: зависшая ли карточка, что сказал сервер, есть ли сессия.
+    pub fn watchdog_verdict(
+        stale: bool,
+        status: Option<&str>,
+        session_missing: bool,
+    ) -> WatchVerdict {
+        if !stale {
+            return WatchVerdict::NoChange;
+        }
+        if status == Some("idle") {
+            return WatchVerdict::FinalizeDone;
+        }
+        if session_missing {
+            return WatchVerdict::FinalizeGone;
+        }
+        WatchVerdict::NoChange
     }
 
     /// Одно событие сервера. Возвращает `true`, чтобы остановить поток: мост
@@ -818,6 +963,13 @@ impl BridgeHandle {
             if session.is_some_and(|id| Some(id) != active) {
                 return false;
             }
+        }
+        // Сессия жива: вотчдогу есть от чего отсчитывать простой.
+        if let Some(id) = session
+            && let Ok(mut cards) = self.cards.lock()
+            && let Some(card) = cards.get_mut(id)
+        {
+            card.last_event = Instant::now();
         }
         match event.event_type.as_str() {
             "message.part.updated" => self.on_part(&event.properties),
@@ -848,9 +1000,12 @@ impl BridgeHandle {
             if let (Some(id), Some(text)) = (
                 part.get("messageID").and_then(Value::as_str),
                 part.get("text").and_then(Value::as_str),
-            ) && let Ok(mut answer) = self.answer.lock()
+            ) && let Ok(mut inflight) = self.inflight.lock()
             {
-                answer.feed(id, text);
+                // Пустой текст не храним: нечего будет отправлять.
+                if !text.trim().is_empty() {
+                    inflight.insert(id.to_string(), text.to_string());
+                }
             }
             return;
         }
@@ -870,9 +1025,11 @@ impl BridgeHandle {
         self.refresh_card(&session);
     }
 
-    /// Сообщение завершено: накопленный текст уходит новыми сообщениями
-    /// (телефон даёт push), а карточка — в финальный вид без клавиатуры.
-    /// Запись остаётся до `idle`: он гасит её молча, без дубля «готово».
+    /// Сообщение завершено: текст переезжает из летящих частей в очередь
+    /// сессии. В Telegram ничего не уходит и карточка не финалится: ход
+    /// может продолжиться следующим сообщением, а конец хода — только
+    /// `session.idle`. Значения `finish` спека не описывает, поэтому на него
+    /// не смотрим вообще.
     fn on_message(&self, properties: &Value) {
         let info = match properties.get("info") {
             Some(info) => info,
@@ -892,33 +1049,92 @@ impl BridgeHandle {
             Some(id) => id.to_string(),
             None => return,
         };
+        let session = match properties.get("sessionID").and_then(Value::as_str) {
+            Some(session) => session.to_string(),
+            None => return,
+        };
         // Ошибка агента тоже приходит `completed`: текст ответа пуст, а
-        // событие `session.error` уже ушло отдельным сообщением.
+        // событие `session.error` разберётся отдельно.
         if info.get("error").is_some() {
-            if let Ok(mut answer) = self.answer.lock() {
-                let _ = answer.finish(&message_id);
+            if let Ok(mut inflight) = self.inflight.lock() {
+                inflight.remove(&message_id);
             }
             return;
         }
-        let text = match self
-            .answer
+        let text = self
+            .inflight
             .lock()
             .ok()
-            .and_then(|mut answer| answer.finish(&message_id))
-        {
-            Some(text) => text,
-            None => return,
-        };
-        let Some(notice) = events::answer_notice(&text) else {
+            .and_then(|mut inflight| inflight.remove(&message_id));
+        let Some(text) = text else {
             return;
         };
-        let session = properties
-            .get("sessionID")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        self.send_answer(&notice);
-        self.finalize_card(&session, CardStatus::Done, None);
+        if let Ok(mut pending) = self.pending.lock() {
+            let queue = pending.entry(session).or_default();
+            Self::stash_completed(queue, &message_id, &text);
+        }
+    }
+
+    /// Кладет завершённое сообщение в очередь сессии: повтор по тому же id
+    /// заменяет, а не дублирует. Порядок — по первому появлению.
+    pub fn stash_completed(queue: &mut PendingQueue, id: &str, text: &str) {
+        if let Some(slot) = queue.iter_mut().find(|(mid, _)| mid == id) {
+            slot.1 = text.to_string();
+        } else {
+            queue.push((id.to_string(), text.to_string()));
+        }
+    }
+
+    /// Забирает очередь целиком, отдавая только сообщения с видимым текстом,
+    /// по порядку. Пустые забираются тоже: отправлять их нечего, а хранить —
+    /// незачем.
+    pub fn drain_visible(queue: &mut PendingQueue) -> Vec<String> {
+        std::mem::take(queue)
+            .into_iter()
+            .filter_map(|(_, text)| {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+            .collect()
+    }
+
+    /// Отправляет накопленные завершённые сообщения сессии — каждое один раз,
+    /// по порядку, новыми сообщениями. Вызывается только в конце хода.
+    fn flush_pending(&self, session: &str) {
+        let texts = self
+            .pending
+            .lock()
+            .ok()
+            .map(|mut pending| {
+                pending
+                    .remove(session)
+                    .map(|mut queue| Self::drain_visible(&mut queue))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        for text in &texts {
+            if let Some(notice) = events::answer_notice(text) {
+                self.send_answer(&notice);
+            }
+        }
+    }
+
+    /// Конец хода: накопленные ответы уходят, карточка — в `Done` без
+    /// клавиатуры, запись гасится сразу. Дубля «готово» нет: это и есть конец.
+    fn finish_turn(&self, session: &str) {
+        self.flush_pending(session);
+        self.finalize_card(session, CardStatus::Done, None);
+        if let Ok(mut cards) = self.cards.lock() {
+            cards.remove(session);
+        }
+        persist_runtime(self);
+        if self.config.dunst {
+            mirror(&events::idle_notice());
+        }
     }
 
     /// Ответ агента новыми сообщениями: первое и хвост. Зеркало в dunst —
@@ -1081,10 +1297,10 @@ impl BridgeHandle {
         }
     }
 
-    /// Сессия в idle: живая запись гасится молча. Терминальная (готово,
-    /// ошибка, остановка) уже показана — дубль не нужен. Активная финалится
-    /// в «готово»: работа могла состоять из одних инструментов без текста.
-    /// Без записи — старый fallback отдельным сообщением: лучше лишний
+    /// Сессия в idle: конец хода. Накопленные ответы уходят, карточка —
+    /// в `Done`, запись гасится сразу: дубля «готово» нет, это и есть конец.
+    /// Терминальная запись (готово, ошибка, остановка) уже показана — гасится
+    /// молча. Без записи — старый fallback отдельным сообщением: лучше лишний
     /// «готово», чем тишина после работы.
     fn on_idle(&self, properties: &Value) {
         let session = properties
@@ -1099,24 +1315,19 @@ impl BridgeHandle {
             .and_then(|cards| cards.get(&session).map(|card| card.status));
         match status {
             None => {
+                self.flush_pending(&session);
                 self.send_notice(&events::idle_notice());
             }
             Some(status) if is_terminal(status) => {
                 // Уже показана (готово, ошибка, остановка) — гасим молча.
+                self.flush_pending(&session);
                 if let Ok(mut cards) = self.cards.lock() {
                     cards.remove(&session);
                 }
                 persist_runtime(self);
             }
             Some(_) => {
-                self.finalize_card(&session, CardStatus::Done, None);
-                if let Ok(mut cards) = self.cards.lock() {
-                    cards.remove(&session);
-                }
-                persist_runtime(self);
-                if self.config.dunst {
-                    mirror(&events::idle_notice());
-                }
+                self.finish_turn(&session);
             }
         }
     }
@@ -1254,6 +1465,38 @@ impl BridgeHandle {
             }
         }
     }
+}
+
+/// Вердикт вотчдога по зависшей карточке. Чистая функция ради тестов: сеть
+/// уже опрошена, здесь только решение.
+///
+/// - простой меньше порога — не трогать, хоть сервер и говорит `idle`
+///   (событие в пути, поток разберётся сам);
+/// - сервер говорит `idle` — ход кончился, финалим `Done`;
+/// - сессии нет (404, а не ошибка сети) — финалим «не найдена»;
+/// - всё остальное (`busy`, `retry`, пусто, сеть моргнула) — бездействие.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchVerdict {
+    /// Ничего не делать.
+    NoChange,
+    /// Ход кончился: отправить накопленное, карточка в `Done`.
+    FinalizeDone,
+    /// Сессия удалена: карточка в ❌ «сессия не найдена».
+    FinalizeGone,
+}
+
+/// Решение вотчдога: зависшая ли карточка, что сказал сервер, есть ли сессия.
+pub fn watchdog_verdict(stale: bool, status: Option<&str>, session_missing: bool) -> WatchVerdict {
+    if !stale {
+        return WatchVerdict::NoChange;
+    }
+    if status == Some("idle") {
+        return WatchVerdict::FinalizeDone;
+    }
+    if session_missing {
+        return WatchVerdict::FinalizeGone;
+    }
+    WatchVerdict::NoChange
 }
 
 /// Снимает `pending`, если это тот же запрос: иначе ответ по одной кнопке
@@ -1861,5 +2104,77 @@ mod tests {
         let (refs, _) = (config::load_refs_from(&broken), ());
         assert!(refs.0.is_empty() && refs.1.is_empty(), "битый файл — пусто");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Очередь завершённых: повтор по тому же id заменяет, порядок — по
+    /// первому появлению, пустые не отдаются, но очередь чистят.
+    #[test]
+    fn completed_queue_replaces_dedupes_and_skips_empty() {
+        let mut queue = Vec::new();
+        BridgeHandle::stash_completed(&mut queue, "msg_1", "первая");
+        BridgeHandle::stash_completed(&mut queue, "msg_2", "   ");
+        BridgeHandle::stash_completed(&mut queue, "msg_1", "первая дописана");
+        BridgeHandle::stash_completed(&mut queue, "msg_3", "третья");
+        assert_eq!(
+            BridgeHandle::drain_visible(&mut queue),
+            vec!["первая дописана", "третья"],
+            "порядок и замена, пустые мимо"
+        );
+        assert!(queue.is_empty(), "очередь забрана целиком");
+        assert!(
+            BridgeHandle::drain_visible(&mut queue).is_empty(),
+            "второй раз отдавать нечего"
+        );
+    }
+
+    /// Вердикт вотчдога: свежие не трогаем, `idle` финалим, удаление
+    /// подтверждаем только точным 404, остальное — бездействие.
+    #[test]
+    fn watchdog_verdict_covers_stale_idle_gone_and_noise() {
+        use WatchVerdict::*;
+        assert_eq!(
+            watchdog_verdict(false, Some("idle"), false),
+            NoChange,
+            "свежая карточка не трогается даже при idle: событие в пути"
+        );
+        assert_eq!(
+            watchdog_verdict(true, Some("idle"), false),
+            FinalizeDone,
+            "сервер сказал idle — ход кончился"
+        );
+        assert_eq!(
+            watchdog_verdict(true, None, true),
+            FinalizeGone,
+            "точный 404 — сессия удалена"
+        );
+        for status in [None, Some("busy"), Some("retry"), Some("unknown")] {
+            assert_eq!(
+                watchdog_verdict(true, status, false),
+                NoChange,
+                "без idle и без 404 — бездействие: {status:?}"
+            );
+        }
+        assert_eq!(
+            watchdog_verdict(true, Some("idle"), true),
+            FinalizeDone,
+            "idle важнее удаления: ход кончился штатно"
+        );
+    }
+
+    /// Новейшая картинка побеждает: из быстрой серии правок уходит только
+    /// последняя, промежуточные отбрасываются пропуском дублей и троттлингом.
+    #[test]
+    fn newest_render_wins_over_stale_edits() {
+        let old = Instant::now() - EDIT_THROTTLE - Duration::from_secs(1);
+        let first = render_key("текст 1", true);
+        let second = render_key("текст 1 дописан", true);
+        // Первая правка ушла…
+        assert!(should_render(&render_key("черновик", true), &first, old));
+        // …вторая пришла раньше троттлинга — ждёт…
+        assert!(!should_render(&first, &second, Instant::now()));
+        // …а когда троттлинг вышел, уходит именно она, а не первая.
+        assert!(should_render(&first, &second, old));
+        // Повтор той же картинки после отправки — не уходит никогда.
+        assert!(!should_render(&second, &second, old));
     }
 }
