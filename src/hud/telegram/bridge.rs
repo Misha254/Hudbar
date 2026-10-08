@@ -389,6 +389,11 @@ impl BridgeHandle {
             _ => None,
         };
         let is_stop = matches!(command, commands::Command::Stop);
+        let session_before = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.session.clone());
         match self.execute(command) {
             Ok(mut outcome) => {
                 // Сессия и папка могли смениться (/new, /use, /dir, первый
@@ -396,6 +401,18 @@ impl BridgeHandle {
                 // при смене, — так дешевле, чем отслеживать, что именно
                 // поменялось.
                 persist_runtime(self);
+                // Сессия сменилась — старая лента больше не нужна: карточка
+                // чужой сессии в чате только путает, поэтому она уходит
+                // вместе с кнопками. Промптом это не задевает: новая карточка
+                // откроется ниже, уже после чистки.
+                let session_after = self
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.session.clone());
+                if session_after != session_before {
+                    self.wipe_chat();
+                }
                 if let Some(card) = outcome.card.take() {
                     self.open_card(&card.session_id, &card.session_label);
                 }
@@ -722,6 +739,62 @@ impl BridgeHandle {
         if self.edit_card_send(chat, message, &text, true, session_id) {
             self.note_card_render(session_id, &text, true);
         }
+    }
+
+    /// Чистит ленту при смене сессии: карточки и сообщения с правами прошлой
+    /// сессии удаляются, записи стираются. Запросы прав в состоянии тоже
+    /// снимаются — они belonged к прошлой сессии, и кнопка «Разрешить» после
+    /// перехода била бы не туда.
+    ///
+    /// Удаление идёт через очередь, а не сразу: `deleteMessage` на сообщении
+    /// старше 48 часов Telegram отвергнет, и лимит проверяет отправитель.
+    /// Прямо здесь сеть не дёргается — мост не должен вставать из-за Telegram.
+    fn wipe_chat(&self) {
+        let cards: Vec<(i64, i64)> = self
+            .cards
+            .lock()
+            .ok()
+            .map(|mut cards| {
+                let live: Vec<(i64, i64)> = cards
+                    .values()
+                    .map(|card| (card.chat, card.message))
+                    .collect();
+                cards.clear();
+                live
+            })
+            .unwrap_or_default();
+        let permissions: Vec<(i64, i64)> = self
+            .perm_msgs
+            .lock()
+            .ok()
+            .map(|mut messages| {
+                let live: Vec<(i64, i64)> = messages
+                    .values()
+                    .map(|perm| (perm.chat, perm.message))
+                    .collect();
+                messages.clear();
+                live
+            })
+            .unwrap_or_default();
+        if let Ok(mut state) = self.state.lock() {
+            state.pending_permission = None;
+        }
+        if cards.is_empty() && permissions.is_empty() {
+            return;
+        }
+        // Удаляем сразу, а не через очередь: ответ о переходе отправляется
+        // после выхода из `handle_update`, и старые карточки не должны
+        // мелькнуть под ним. Ошибки — в журнал: нечего удалять тоже не повод
+        // молчать о зависшей кнопке.
+        for (chat, message) in cards.into_iter().chain(permissions) {
+            if Some(chat) != self.config.chat_id {
+                continue;
+            }
+            if let Err(why) = self.api.delete_message(chat, message) {
+                super::log::warn(format!("мост: запись прошлой сессии не удалена: {why}"));
+            }
+        }
+        persist_runtime(self);
     }
 
     /// Финал карточки: done, error или stopped. Идёт мимо троттлинга: после
@@ -1877,6 +1950,86 @@ mod tests {
                 .pending_permission
                 .is_none()
         );
+    }
+
+    /// Смена сессии чистит ленту: карточки и сообщения с правами прошлой
+    /// сессии уходят, записи стираются, `pending_permission` снимается —
+    /// иначе кнопка «Разрешить» после перехода била бы не туда.
+    #[test]
+    fn switching_sessions_wipes_the_chat() {
+        let dir = std::env::temp_dir().join(format!("hud-tg-wipe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let (bridge, path) = bridge_with_temp_state(&dir);
+        let handle = bridge.cloned();
+        if let Ok(mut cards) = handle.cards.lock() {
+            cards.insert(
+                "ses_old".to_string(),
+                LiveCard {
+                    chat: 1,
+                    message: 11,
+                    label: "старая".to_string(),
+                    started: Instant::now(),
+                    last_edit: Instant::now(),
+                    last_render: String::new(),
+                    tool: None,
+                    status: CardStatus::Done,
+                    has_keyboard: false,
+                    last_event: Instant::now(),
+                    expires: None,
+                },
+            );
+        }
+        if let Ok(mut messages) = handle.perm_msgs.lock() {
+            messages.insert(
+                "perm_1".to_string(),
+                PermMsg {
+                    chat: 1,
+                    message: 12,
+                    title: "bash rm -rf".to_string(),
+                },
+            );
+        }
+        if let Ok(mut state) = handle.state.lock() {
+            state.session = Some("ses_old".to_string());
+            state.pending_permission = Some(commands::PendingPermission {
+                id: "perm_1".to_string(),
+                session: "ses_old".to_string(),
+                title: "bash rm -rf".to_string(),
+            });
+        }
+        // Сеть недоступна в тесте: удаление упадёт и уйдёт в журнал, а суть
+        // проверки — что записи и `pending` исчезли.
+        handle.wipe_chat();
+        assert!(
+            handle.cards.lock().expect("карточки").is_empty(),
+            "карточки прошлой сессии стёрты"
+        );
+        assert!(
+            handle.perm_msgs.lock().expect("права").is_empty(),
+            "сообщения с правами стёрты"
+        );
+        assert!(
+            handle
+                .state
+                .lock()
+                .expect("состояние")
+                .pending_permission
+                .is_none(),
+            "запрос прав прошлой сессии больше не ждёт ответа"
+        );
+        let value = read_temp_state(&path);
+        let empty = |key: &str| {
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|items| items.is_empty())
+        };
+        assert!(
+            empty("cards") && empty("permissions"),
+            "state-файл чист: {value}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Мост для тестов состояния: живой путь заменён временным каталогом,
