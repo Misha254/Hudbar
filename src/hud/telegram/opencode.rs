@@ -61,6 +61,62 @@ impl std::fmt::Display for Session {
     }
 }
 
+/// Модель в виде, в котором сервер её принимает и хранит: пара
+/// «провайдер + id». Именно её ждёт `ModelRef` в спеке.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelRef {
+    /// Провайдер: `vibecode-claude`, `opencode`.
+    pub provider: String,
+    /// Id модели у провайдера: `claude-sonnet-4-6`.
+    pub id: String,
+}
+
+impl ModelRef {
+    /// Пара из значений, без проверки: пустые строки отбрасывает вызывающий.
+    pub fn new(provider: &str, id: &str) -> Self {
+        Self {
+            provider: provider.trim().to_string(),
+            id: id.trim().to_string(),
+        }
+    }
+
+    /// `provider/id` — так модель пишут в конфиге opencode.
+    pub fn full_id(&self) -> String {
+        format!("{}/{}", self.provider, self.id)
+    }
+}
+
+/// Модель для выбора: пара из `ModelRef` плюс человеческое имя.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Model {
+    /// Провайдер и id.
+    pub reference: ModelRef,
+    /// Имя для человека: `Claude Sonnet 4.6`. Пустое — покажем id.
+    pub name: String,
+}
+
+impl Model {
+    /// Подпись для списка: имя, а при его отсутствии — id.
+    pub fn label(&self) -> &str {
+        if self.name.is_empty() {
+            &self.reference.id
+        } else {
+            &self.name
+        }
+    }
+
+    /// Помечается ли модель текущей в сессии.
+    pub fn is_current(&self, current: Option<&ModelRef>) -> bool {
+        current == Some(&self.reference)
+    }
+}
+
+impl std::fmt::Display for Model {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{} ({})", self.label(), self.reference.provider)
+    }
+}
+
 /// Событие из потока `GET /event`: тип и свойства как есть.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
@@ -210,9 +266,24 @@ impl Client {
 
     /// Новая сессия в папке моста.
     pub fn create_session(&self, title: Option<&str>) -> Result<Session, Error> {
+        self.create_session_modeled(title, None)
+    }
+
+    /// Новая сессия, при желании — сразу на выбранной модели: тело
+    /// `POST /session` по спеке принимает `model` с `id` и `providerID`.
+    /// Новая сессия иначе взяла бы модель по умолчанию, и выбранная с
+    /// телефона работала бы только в старой.
+    pub fn create_session_modeled(
+        &self,
+        title: Option<&str>,
+        model: Option<&ModelRef>,
+    ) -> Result<Session, Error> {
         let mut body = serde_json::Map::new();
         if let Some(title) = title {
             body.insert("title".to_string(), Value::String(title.to_string()));
+        }
+        if let Some(model) = model {
+            body.insert("model".to_string(), model_body(model));
         }
         let value = self.request("POST", "/session", Some(&Value::Object(body)))?;
         session_from(&value)
@@ -272,6 +343,72 @@ impl Client {
     /// Прерывает работу агента в сессии.
     pub fn abort_session(&self, session_id: &str) -> Result<(), Error> {
         self.request("POST", &format!("/session/{session_id}/abort"), None)
+            .map(|_| ())
+    }
+
+    /// Модели, которые можно выбрать: только подключённые провайдеры. В
+    /// ответе `GET /provider` их 229, из них с ключами единицы, а список из
+    /// всех отвечал бы «модель есть», но работать она не смогла бы.
+    pub fn list_models(&self) -> Result<Vec<Model>, Error> {
+        let value = self.request("GET", "/provider", None)?;
+        let connected: Vec<&str> = value
+            .get("connected")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let all = value
+            .get("all")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "список провайдеров не список".to_string())?;
+        let mut models: Vec<Model> = Vec::new();
+        for provider in all {
+            let id = match provider.get("id").and_then(Value::as_str) {
+                Some(id) if connected.contains(&id) => id,
+                _ => continue,
+            };
+            let Some(entries) = provider.get("models").and_then(Value::as_object) else {
+                continue;
+            };
+            for (model_id, model) in entries {
+                if model_id.is_empty() {
+                    continue;
+                }
+                models.push(Model {
+                    reference: ModelRef::new(id, model_id),
+                    name: model
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                });
+            }
+        }
+        // Порядок от провайдера к провайдеру и по имени внутри: список на
+        // телефоне должен быть устойчивым, иначе номера «съезжают» и
+        // `/model 7` выбрал бы не то.
+        models.sort_by(|left, right| {
+            left.reference
+                .provider
+                .cmp(&right.reference.provider)
+                .then_with(|| sort_key(&left.reference.id).cmp(&sort_key(&right.reference.id)))
+        });
+        Ok(models)
+    }
+
+    /// Модель сессии сейчас: `None`, если сервер её не назвал (спека на
+    /// обязательность `model` не указывает).
+    pub fn session_model(&self, session_id: &str) -> Result<Option<ModelRef>, Error> {
+        let value = self.request("GET", &format!("/session/{session_id}"), None)?;
+        Ok(model_ref_from(&value))
+    }
+
+    /// Модель сессии: `POST /session/{id}/model` отвечает 204, а сама
+    /// подхватывается со следующего запроса агента. Тело — ровно то, что
+    /// ждёт схема `ModelRef`: `id` и `providerID`.
+    pub fn set_session_model(&self, session_id: &str, model: &ModelRef) -> Result<(), Error> {
+        let body = json!({ "model": model_body(model) });
+        self.request("POST", &format!("/session/{session_id}/model"), Some(&body))
             .map(|_| ())
     }
 
@@ -415,6 +552,37 @@ pub fn session_from(value: &Value) -> Result<Session, Error> {
         title,
         directory,
     })
+}
+
+/// Тело модели для запроса: спекой принимается только `id` и `providerID`.
+fn model_body(model: &ModelRef) -> Value {
+    json!({ "id": model.id, "providerID": model.provider })
+}
+
+/// Модель из ответа сессии: `model: {id, providerID}`. Пустые строки — не
+/// модель, а мусор, такой ответ считается отсутствующей моделью.
+fn model_ref_from(value: &Value) -> Option<ModelRef> {
+    let model = value.get("model")?;
+    let id = model
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let provider = model
+        .get("providerID")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if id.is_empty() || provider.is_empty() {
+        return None;
+    }
+    Some(ModelRef::new(provider, id))
+}
+
+/// Ключ сортировки без учёта регистра: `GPT 6` и `gpt 6` в одном списке
+/// должны вставать рядом, а не вразнобой.
+fn sort_key(id: &str) -> String {
+    id.to_lowercase()
 }
 
 /// URL-кодирование значения параметра: пробел — `%20`, кириллица — байты.
@@ -665,5 +833,250 @@ mod tests {
             !is_chunk_length("evt_11aee1f60001"),
             "id события не длина чанка"
         );
+    }
+
+    /// Тело смены модели: спекой `ModelRef` принимает ровно `id` и
+    /// `providerID`. Лишние поля сервер не ждёт, а пустые значения он
+    /// отвергнет, поэтому проверяем форму, а не только наличие ключей.
+    #[test]
+    fn model_body_has_exactly_id_and_provider() {
+        let body = model_body(&ModelRef::new("vibecode-claude", "claude-sonnet-4-6"));
+        assert_eq!(
+            body,
+            json!({ "id": "claude-sonnet-4-6", "providerID": "vibecode-claude" })
+        );
+        let keys: Vec<&String> = body.as_object().expect("объект").keys().collect();
+        assert_eq!(keys.len(), 2, "ни `variant`, ни лишнего: {body}");
+    }
+
+    /// Модель из ответа сессии: неполная пара — не модель. Иначе в списке
+    /// появилось бы «текущая» с пустым провайдером.
+    #[test]
+    fn session_model_needs_both_halves() {
+        // Ответ сессии: модель лежит под ключом `model`.
+        let full =
+            json!({ "model": { "id": "claude-sonnet-4-6", "providerID": "vibecode-claude" } });
+        assert_eq!(
+            model_ref_from(&full),
+            Some(ModelRef::new("vibecode-claude", "claude-sonnet-4-6"))
+        );
+        assert_eq!(model_ref_from(&json!({})), None, "модели нет");
+        assert_eq!(model_ref_from(&json!({ "model": null })), None);
+        assert_eq!(
+            model_ref_from(&json!({ "model": { "id": "x" } })),
+            None,
+            "нет провайдера"
+        );
+        assert_eq!(
+            model_ref_from(&json!({ "model": { "id": "  ", "providerID": "p" } })),
+            None,
+            "пустой id — не модель"
+        );
+    }
+
+    /// Порядок списка устойчив: сортировка по провайдеру и id без учёта
+    /// регистра. Номера в `/models` не должны «съезжать» между вызовами.
+    #[test]
+    fn model_sort_is_case_insensitive_and_stable() {
+        let mut models = [
+            Model {
+                reference: ModelRef::new("vibecode", "GPT-6"),
+                name: String::new(),
+            },
+            Model {
+                reference: ModelRef::new("opencode", "zeta"),
+                name: String::new(),
+            },
+            Model {
+                reference: ModelRef::new("vibecode", "gpt-5"),
+                name: String::new(),
+            },
+            Model {
+                reference: ModelRef::new("vibecode", "Fable"),
+                name: String::new(),
+            },
+        ];
+        models.sort_by(|left, right| {
+            left.reference
+                .provider
+                .cmp(&right.reference.provider)
+                .then_with(|| sort_key(&left.reference.id).cmp(&sort_key(&right.reference.id)))
+        });
+        let ids: Vec<String> = models.iter().map(|m| m.reference.full_id()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "opencode/zeta",
+                "vibecode/Fable",
+                "vibecode/gpt-5",
+                "vibecode/GPT-6"
+            ],
+            "провайдер, потом id без регистра: {ids:?}"
+        );
+    }
+
+    /// `ModelRef` печатается как в конфиге opencode: `провайдер/id`.
+    #[test]
+    fn model_ref_prints_as_provider_slash_id() {
+        assert_eq!(
+            ModelRef::new("vibecode-claude", "claude-sonnet-4-6").full_id(),
+            "vibecode-claude/claude-sonnet-4-6"
+        );
+        assert_eq!(
+            ModelRef::new("  opencode  ", " free ").full_id(),
+            "opencode/free",
+            "края обрезаны"
+        );
+    }
+
+    /// Заглушка, которая читает тело запроса и отвечает заранее заданным
+    /// ответом. Возвращает порт и канал с полученным телом: тесты проверяют
+    /// не только форму ответа, но и то, что мост отправил серверу.
+    fn stub_echo(status: &str, body: &str) -> (u16, std::sync::mpsc::Receiver<String>) {
+        use std::sync::mpsc;
+        // Строки уходят в поток, поэтому владение переходит внутрь него.
+        let status = status.to_string();
+        let body = body.to_string();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("слушатель");
+        let port = listener.local_addr().expect("порт").port();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = vec![0u8; 8192];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                buffer.truncate(read);
+                // Заголовки и тело пришли одним куском: тело начинается
+                // после пустой строки, иначе `read_exact` ждал бы данных,
+                // которых уже нет.
+                let split = buffer
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|at| at + 4)
+                    .unwrap_or(read);
+                let head = String::from_utf8_lossy(&buffer[..split]).to_string();
+                let mut payload = buffer[split..].to_vec();
+                let length = head
+                    .split("Content-Length:")
+                    .nth(1)
+                    .and_then(|rest| rest.split("\r\n").next())
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while payload.len() < length {
+                    let mut more = vec![0u8; length - payload.len()];
+                    match stream.read(&mut more) {
+                        Ok(0) | Err(_) => break,
+                        Ok(count) => payload.extend_from_slice(&more[..count]),
+                    }
+                }
+                payload.truncate(length);
+                let _ = sender.send(String::from_utf8_lossy(&payload).to_string());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (port, receiver)
+    }
+
+    /// Смена модели уходит на `POST /session/{id}/model` телом ровно с
+    /// `model: {id, providerID}`, а 204 без тела считается успехом.
+    #[test]
+    fn set_session_model_posts_model_ref_and_accepts_204() {
+        let (port, sent) = stub_echo("204 No Content", "");
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        let model = ModelRef::new("vibecode-claude", "claude-sonnet-4-6");
+        assert!(
+            client.set_session_model("ses_1", &model).is_ok(),
+            "204 — успех"
+        );
+        let body = sent.recv_timeout(Duration::from_secs(5)).expect("тело");
+        let value: Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(
+            value,
+            json!({ "model": { "id": "claude-sonnet-4-6", "providerID": "vibecode-claude" } })
+        );
+    }
+
+    /// Новая сессия на выбранной модели: `model` едет в теле `POST /session`.
+    /// Без него новая сессия взяла бы модель по умолчанию, и выбор с телефона
+    /// работал бы только в старой сессии.
+    #[test]
+    fn create_session_with_model_sends_it_in_the_body() {
+        let session = serde_json::json!({ "id": "ses_new", "title": "", "directory": "" });
+        let (port, sent) = stub_echo("200 OK", &session.to_string());
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        let model = ModelRef::new("vibecode", "gpt-5.6-luna");
+        let created = client
+            .create_session_modeled(None, Some(&model))
+            .expect("сессия");
+        assert_eq!(created.id, "ses_new");
+        let body = sent.recv_timeout(Duration::from_secs(5)).expect("тело");
+        let value: Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(
+            value,
+            json!({ "model": { "id": "gpt-5.6-luna", "providerID": "vibecode" } }),
+            "без модели было бы пусто: {body}"
+        );
+
+        // Без выбранной модели ключа в теле нет вовсе.
+        let (port, sent) = stub_echo("200 OK", &session.to_string());
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        client.create_session(None).expect("сессия");
+        let body = sent.recv_timeout(Duration::from_secs(5)).expect("тело");
+        assert_eq!(body, "{}", "пустое тело, а не model: null");
+    }
+
+    /// Список моделей берётся только у подключённых провайдеров и
+    /// сортируется устойчиво. Форма ответа сверена с живым `GET /provider`.
+    #[test]
+    fn models_come_from_connected_providers_only_and_are_sorted() {
+        let body = serde_json::json!({
+            "all": [
+                { "id": "opencode", "models": { "zeta": { "id": "zeta", "name": "Zeta" } } },
+                {
+                    "id": "vibecode",
+                    "models": {
+                        "GPT-6": { "id": "GPT-6", "name": "GPT 6" },
+                        "fable": { "id": "fable" },
+                        "": { "id": "", "name": "Пустой" }
+                    }
+                },
+                { "id": "secret", "models": { "x": { "id": "x", "name": "X" } } },
+                { "id": "без моделей", "models": {} }
+            ],
+            "connected": ["vibecode", "opencode"],
+            "default": {}
+        });
+        let (port, _sent) = stub_echo("200 OK", &body.to_string());
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        let models = client.list_models().expect("список");
+        let ids: Vec<String> = models.iter().map(|m| m.reference.full_id()).collect();
+        assert_eq!(
+            ids,
+            vec!["opencode/zeta", "vibecode/fable", "vibecode/GPT-6"],
+            "только connected, без пустых id, порядок устойчив: {ids:?}"
+        );
+        assert_eq!(models[1].label(), "fable", "без имени показываем id");
+        assert_eq!(models[2].label(), "GPT 6", "имя из ответа");
+    }
+
+    /// Провайдер без `connected` в ответе — пустой список, а не падение:
+    /// спека требует поле, но полагаться на это при отладке нельзя.
+    #[test]
+    fn models_survive_a_response_without_connected() {
+        let body = serde_json::json!({
+            "all": [{ "id": "opencode", "models": { "free": { "id": "free" } } }]
+        });
+        let (port, _sent) = stub_echo("200 OK", &body.to_string());
+        let mut client = Client::new(&format!("http://127.0.0.1:{port}")).expect("разбор");
+        client.set_directory("/tmp");
+        assert!(client.list_models().expect("список").is_empty());
     }
 }
