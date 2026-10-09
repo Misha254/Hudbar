@@ -1,5 +1,5 @@
 //! Нативное окно биндов niri (KP_8). Замена `keybind.sh`+rofi.
-//! XDG-окно на tiny-skia/cosmic-text, как `hud_settings.rs`.
+//! XDG-окно на tiny-skia/cosmic-text, как окно настроек было.
 
 use std::collections::HashMap;
 use std::os::fd::AsFd;

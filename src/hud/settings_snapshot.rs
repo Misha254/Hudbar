@@ -6,7 +6,7 @@
 //! такому PNG можно придираться к геометрии и цветам.
 //!
 //! Запуск:
-//!   hud-settings-rs --snapshot <section> <out.png> [--theme normal|pixel]
+//!   <окно> --snapshot <section> <out.png> [--theme normal|pixel]
 //!
 //! Секции: overview, panel, appearance, notifications, controls, wallpaper.
 

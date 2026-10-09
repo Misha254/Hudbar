@@ -2599,15 +2599,12 @@ mod tests {
     fn no_section_is_labelled_as_under_development() {
         // Строка склеена из кусков, иначе сам тест поймал бы себя же.
         let forbidden = ["в раз", "работке"].concat();
-        for source in [
-            include_str!("settings_ui.rs"),
-            include_str!("../bin/hud_settings.rs"),
-        ] {
-            assert!(
-                !source.contains(&forbidden),
-                "подпись заглушки вернулась в исходники"
-            );
-        }
+        // Окно настроек удалено, остался только общий слой интерфейса: он и
+        // проверяется на возвращение подписи-заглушки.
+        assert!(
+            !include_str!("settings_ui.rs").contains(&forbidden),
+            "подпись заглушки вернулась в исходники"
+        );
     }
 
     #[test]

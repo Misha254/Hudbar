@@ -6,7 +6,6 @@ The repository has one canonical entrypoint for each HUD feature. Files currentl
 | Component | Canonical entrypoint | Implementation | Role |
 | --- | --- | --- | --- |
 | Top bar | `hudbar` | Rust binary | Wayland layer-shell bar and panels |
-| Legacy settings window | `hud-settings` | shell wrapper + `hud-settings-rs` | Retained for compatibility; no current UI route |
 | niri binds | `hud-keybinds` | shell wrapper + `hud-keybinds-rs` | Native keybind viewer |
 | yazi binds | `hud-yazibinds` | shell wrapper + `hud-yazibinds-rs` | Native yazi keybind viewer |
 | Settings backend | `hud-setting` | Python CLI | Persist settings and restart affected services |
@@ -20,18 +19,17 @@ All persistent HUD state is stored in `~/.config/hudbar/settings.json` under the
 is read only during migration. `hud-migrate-settings` merges it with any existing flat HUDbar
 settings, writes a backup before changing the canonical file, and leaves legacy files untouched.
 
-## Legacy Settings Window
+## Removed Legacy Settings Window
 
-`hud-settings-rs` and the `hud-settings` wrapper are retained as legacy code. The current menu and
-the native keybind/wallpaper windows cover the old window's user-facing settings, so current menu
-and panel routes no longer launch it. The release build and manual wrapper remain available for
-compatibility. Remove the legacy binary, wrapper, and old-window modules only after the Wi-Fi,
-audio, and Bluetooth stage is complete and those routes are verified in the new menu.
+The window, its `hud-settings-rs` binary and the `hud-settings` wrapper are gone: the menu and
+the native keybind/wallpaper windows cover the settings it used to own, and nothing launched it.
+The shared UI layer (`settings_ui`, `settings_view`, `settings_snapshot`, `settings_widgets`)
+stays, because the menu, wallpaper, VPN and schemes windows are built on it. The stale paragraph
+The Wi-Fi, audio and Bluetooth stages it had covered are complete and live in the menu instead.
 
 ## Deprecated active routes
 
 `keybind.sh` and `yazibind.sh` are the previous Rofi implementations. They are no longer used by
 the canonical niri keybinds; they remain on disk so an existing setup can be rolled back manually.
 
-`hud-settings-rs`, `hud-keybinds-rs`, and `hud-yazibinds-rs` are implementation binaries, not
-user-facing commands. Wrappers own toggle behavior and resolve binaries relative to `$HOME`.
+`hud-keybinds-rs` and `hud-yazibinds-rs` are implementation binaries, not user-facing commands. Wrappers own toggle behavior and resolve binaries relative to `$HOME`.

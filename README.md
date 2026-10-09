@@ -203,7 +203,7 @@ DND, воркспейсы, элементы трея.
 
 | Файл | Кто читает | Когда |
 | --- | --- | --- |
-| `settings.json` | `settings.rs`, `hud-settings`, `hud-theme` | при старте и изменении файла |
+| `settings.json` | `settings.rs`, `hud-theme` | при старте и изменении файла |
 | `colors.css` | `palette.rs` | каждый проход главного цикла |
 | `font` | `ui::configured_font` | один раз на старте |
 

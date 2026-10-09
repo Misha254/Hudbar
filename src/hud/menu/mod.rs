@@ -54,7 +54,7 @@ pub mod vpn_api;
 pub mod wifi;
 
 // Модули hud, нужные подмодулям меню. Реэкспорт, а не `super::super::`: в
-// `main.rs` меню лежит в `hud::menu`, а в `hud-settings-rs` — в корне
+// `main.rs` меню лежит в `hud::menu`, а в бинаре меню — в корне
 // крейта, и путь до общих модулей у них разный.
 use action::{Action, Live};
 use state::Menu;
