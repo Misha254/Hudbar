@@ -651,7 +651,9 @@ fn net_row(lang: Language, net: &WifiNet, active_uuid: Option<&str>) -> Node {
     }
 }
 
-/// Статусная строка: «Wi-Fi: вкл · <сеть|не подключено>».
+/// Статусная строка: «Wi-Fi: вкл · <сеть|не подключено>». Сама строка —
+/// переключатель радио (`Enter` гасит и включает), поэтому отдельной строки
+/// «Выключить Wi-Fi» под ней нет: она повторяла то же самое вторым способом.
 fn status_row(lang: Language, snapshot: &WifiSnapshot) -> Node {
     let label = match (&snapshot.radio, &snapshot.device) {
         (Block::Missing, _) | (_, Block::Missing) => {
@@ -713,28 +715,21 @@ fn status_row(lang: Language, snapshot: &WifiSnapshot) -> Node {
             }
         }
     };
-    Node::info(
-        settings_icons::NETWORK,
-        &format!("{label}: {radio} · {link}"),
-    )
-    .with_id("wifi/status")
-}
-
-/// Строка радио: включить или выключить. Без UUID и SSID, только `radio wifi`.
-fn radio_row(lang: Language, snapshot: &WifiSnapshot) -> Option<Node> {
-    let on = snapshot.radio.ready().copied()?;
-    let title = if on {
-        if ru(lang) {
-            "Выключить Wi-Fi"
-        } else {
-            "Turn Wi-Fi off"
-        }
-    } else if ru(lang) {
-        "Включить Wi-Fi"
-    } else {
-        "Turn Wi-Fi on"
-    };
-    Some(Node::action(settings_icons::NETWORK, title, radio_action(!on)).with_id("wifi/radio"))
+    match snapshot.radio.ready().copied() {
+        // Состояние известно — строка переключает радио. Неизвестно или
+        // нет адаптера (выше — ранние возвраты) — оставляем справкой.
+        Some(on) => Node::action(
+            settings_icons::NETWORK,
+            &format!("{label}: {radio} · {link}"),
+            radio_action(!on),
+        )
+        .with_id("wifi/status"),
+        None => Node::info(
+            settings_icons::NETWORK,
+            &format!("{label}: {radio} · {link}"),
+        )
+        .with_id("wifi/status"),
+    }
 }
 
 /// Подменю со всеми сетями: тот же список, что и в разделе, но без обрезки.
@@ -764,9 +759,6 @@ pub fn build_nodes(snapshot: &WifiSnapshot, lang: Language) -> Vec<Node> {
     let mut rows = vec![status_row(lang, snapshot)];
     if snapshot.has_no_device() {
         return rows;
-    }
-    if let Some(radio) = radio_row(lang, snapshot) {
-        rows.push(radio);
     }
     // Радио выключено — список сетей не показываем: nmcli его всё равно не
     // отдаёт, а пустой уровень выглядит поломкой.
@@ -1098,7 +1090,12 @@ mod tests {
         let rows = build_nodes(&snapshot, Language::Ru);
         let titles: Vec<&str> = rows.iter().map(|n| n.title.as_str()).collect();
         assert_eq!(titles[0], "Wi-Fi: выкл · не подключено");
-        assert!(titles.contains(&"Включить Wi-Fi"));
+        // Отдельной строки «Включить Wi-Fi» больше нет: заголовок сам
+        // переключает радио.
+        assert!(matches!(
+            rows[0].kind,
+            super::super::tree::NodeKind::Action(_)
+        ));
         assert!(
             !titles.iter().any(|t| t.contains("My")),
             "сети при выключенном радио не показываются: {titles:?}"
@@ -1139,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn radio_row_toggles_with_exact_argv() {
+    fn radio_action_toggles_with_exact_argv() {
         let off = radio_action(false);
         let runner = RecordingRunner::new();
         off.perform_with(&runner).expect("выполнено");

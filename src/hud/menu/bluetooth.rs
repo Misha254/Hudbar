@@ -591,7 +591,10 @@ fn ru(lang: Language) -> bool {
     lang == Language::Ru
 }
 
-/// Статусная строка раздела: «Bluetooth: вкл · <имя>».
+/// Статусная строка раздела: «Bluetooth: вкл · <имя>». Сама строка —
+/// переключатель питания (`Enter` гасит и включает), поэтому отдельной строки
+/// «Выключить Bluetooth» под ней нет: она повторяла то же самое вторым
+/// способом.
 fn status_row(lang: Language, snapshot: &BluetoothSnapshot) -> Node {
     let title = match &snapshot.adapter {
         Block::Missing => {
@@ -662,7 +665,15 @@ fn status_row(lang: Language, snapshot: &BluetoothSnapshot) -> Node {
         Some(name) => format!("{title} · {name}"),
         None => title.to_string(),
     };
-    Node::info(settings_icons::BLUETOOTH, &text).with_id("bluetooth/status")
+    let powered = snapshot.adapter.ready().and_then(|adapter| adapter.powered);
+    match powered {
+        // Состояние известно — строка переключает питание. Неизвестно (или
+        // нет адаптера, это выше — ранние возвраты) — оставляем справкой:
+        // действовать по неизвестному состоянию нельзя.
+        Some(on) => Node::action(settings_icons::BLUETOOTH, &text, power_action(!on))
+            .with_id("bluetooth/status"),
+        None => Node::info(settings_icons::BLUETOOTH, &text).with_id("bluetooth/status"),
+    }
 }
 
 /// Подпись устройства: имя плюс «· подключено», когда точно подключено.
@@ -699,14 +710,11 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
     // Действия над адаптером — только когда он реально есть: power/scan по
     // несуществующему контроллеру заведомо провал, а строка статуса уже
     // объяснила, что адаптера нет.
-    if let Some(adapter) = snapshot
+    if snapshot
         .adapter
         .ready()
-        .filter(|adapter| !adapter.address.is_empty())
+        .is_some_and(|adapter| !adapter.address.is_empty())
     {
-        if let Some(power) = power_row(lang, adapter) {
-            rows.push(power);
-        }
         rows.push(
             Node::action(
                 settings_icons::NETWORK,
@@ -781,35 +789,6 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
         .with_id("bluetooth/refresh"),
     );
     rows
-}
-
-/// Кнопка включения/выключения радио.
-/// `Some(true)` — включён, предлагаем выключить; `Some(false)` — выключен,
-/// предлагаем включить; `None` (строки `Powered` не было) — кнопки нет вовсе:
-/// включать «на всякий случай» значит действовать по неизвестному состоянию.
-fn power_row(lang: Language, adapter: &BluetoothAdapter) -> Option<Node> {
-    let title = match adapter.powered {
-        Some(true) => {
-            if ru(lang) {
-                "Выключить Bluetooth"
-            } else {
-                "Turn Bluetooth off"
-            }
-        }
-        Some(false) => {
-            if ru(lang) {
-                "Включить Bluetooth"
-            } else {
-                "Turn Bluetooth on"
-            }
-        }
-        None => return None,
-    };
-    let action = match adapter.powered {
-        Some(true) => power_action(false),
-        _ => power_action(true),
-    };
-    Some(Node::action(settings_icons::BLUETOOTH, title, action).with_id("bluetooth/power"))
 }
 
 /// Подменю одного устройства: первая строка — главное действие (подключить/
@@ -1611,39 +1590,44 @@ mod tests {
         );
     }
 
-    /// Кнопка питания: вкл — выключить, выкл — включить, неизвестно — кнопки
-    /// нет. Статусная строка при этом уже сказала «состояние неизвестно».
+    /// Питание живёт на статусной строке: вкл — гасит, выкл — включает, а
+    /// неизвестное состояние оставляет справкой без команды. Действовать по
+    /// неизвестному нельзя, а «включить на всякий случай» — это оно и есть.
     #[test]
-    fn power_row_follows_powered_and_hides_on_unknown() {
-        let on = parse_adapter(SHOW);
-        let row = power_row(Language::Ru, &on).expect("кнопка есть");
-        assert_eq!(row.title, "Выключить Bluetooth");
-        match &row.kind {
-            super::super::tree::NodeKind::Action(Action::RefreshAndRun { command, .. }) => {
-                assert_eq!(command.argv().1, ["power", "off"]);
-            }
-            other => panic!("ожидалась команда, {other:?}"),
-        }
-        let off = parse_adapter(SHOW_OFF);
-        let row = power_row(Language::Ru, &off).expect("кнопка есть");
-        assert_eq!(row.title, "Включить Bluetooth");
-        let unknown = parse_adapter(SHOW_NO_POWER);
-        assert_eq!(unknown.powered, None);
-        assert!(
-            power_row(Language::Ru, &unknown).is_none(),
-            "по неизвестному состоянию кнопку не предлагаем"
-        );
-        // И в собранном разделе кнопки нет, а статус честный.
-        let snapshot = BluetoothSnapshot {
-            adapter: Block::Ready(unknown),
+    fn status_row_switches_power_and_stays_plain_when_unknown() {
+        let snapshot = |adapter| BluetoothSnapshot {
+            adapter: Block::Ready(adapter),
             known: Block::Ready(Vec::new()),
             paired: Block::Ready(Vec::new()),
             connected: Block::Ready(Vec::new()),
             infos: HashMap::new(),
         };
-        let nodes = build_nodes(&snapshot, Language::Ru);
+        let power = |node: &super::super::tree::Node| match &node.kind {
+            super::super::tree::NodeKind::Action(Action::RefreshAndRun { command, .. }) => {
+                command.argv().1
+            }
+            other => panic!("ожидалась команда питания, {other:?}"),
+        };
+
+        let on = status_row(Language::Ru, &snapshot(parse_adapter(SHOW)));
+        assert_eq!(on.title, "Bluetooth: вкл · hci0");
+        assert_eq!(power(&on), ["power", "off"]);
+
+        let off = status_row(Language::Ru, &snapshot(parse_adapter(SHOW_OFF)));
+        assert_eq!(off.title, "Bluetooth: выкл · hci0");
+        assert_eq!(power(&off), ["power", "on"]);
+
+        let unknown = parse_adapter(SHOW_NO_POWER);
+        assert_eq!(unknown.powered, None);
+        let row = status_row(Language::Ru, &snapshot(unknown.clone()));
+        assert_eq!(row.title, "Bluetooth: состояние неизвестно · hci0");
+        assert!(
+            matches!(row.kind, super::super::tree::NodeKind::Info),
+            "по неизвестному состоянию команда не предлагается"
+        );
+        // И в собранном разделе отдельной кнопки питания больше нет.
+        let nodes = build_nodes(&snapshot(unknown), Language::Ru);
         let titles: Vec<&str> = nodes.iter().map(|node| node.title.as_str()).collect();
-        assert!(titles.contains(&"Bluetooth: состояние неизвестно · hci0"));
         assert!(
             !titles
                 .iter()

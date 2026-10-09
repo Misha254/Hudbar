@@ -103,6 +103,12 @@ impl Level {
         let query = self.list.query().to_string();
         let rows = self.rows_for(nodes, lang);
         self.list.set_items(rows);
+        // Высота страницы задаётся по длине списка, а список у динамического
+        // раздела меняется на месте: Bluetooth начинал с пяти строк (сети
+        // скрыты), а после обхода становился длиннее. Со страницей в пять
+        // строк список прокручивался, а карточка рисовала его целиком — и под
+        // последней строкой оставалась пустота.
+        self.list.set_page(super::view::rows_shown(self.list.len()));
         self.set_query(&query);
         if let Some(id) = previous
             && let Some(index) = self.list.items().iter().position(|item| item.id == id)
@@ -1720,6 +1726,48 @@ mod tests {
             Node::toggle("v", "Громкость", || true, |_| {}),
             Node::action("m", "Устройство", Action::Run("true", &[])),
         ]
+    }
+
+    /// Раздел, который стал длиннее, не должен прокручиваться: высота
+    /// страницы считается по новой длине списка. Иначе список листается при
+    /// свободном месте, а карточка рисует под ним пустую строку.
+    #[test]
+    fn a_longer_dynamic_level_fits_without_scrolling() {
+        let mut menu = dynamic_menu();
+        menu.move_sel(1);
+        assert_eq!(menu.enter(), Outcome::Pushed);
+        let key = ProviderKey::new("test-audio");
+        let (_, generation) = menu.take_dynamic_requests()[0];
+        let few: Vec<Node> = (0..3)
+            .map(|i| Node::action("s", &format!("мало {i}"), Action::Back))
+            .collect();
+        assert!(menu.apply_dynamic(key, generation, Ok(few)));
+        let short = menu.current().list.len();
+        assert_eq!(
+            menu.current().list.page(),
+            super::super::view::rows_shown(short),
+            "страница по трём строкам"
+        );
+
+        let fresh = menu.refresh_dynamic(key).expect("запрос на обновление");
+        let many: Vec<Node> = (0..7)
+            .map(|i| Node::action("s", &format!("строка {i}"), Action::Back))
+            .collect();
+        assert!(menu.apply_dynamic(key, fresh, Ok(many)));
+        let len = menu.current().list.len();
+        assert!(len > short, "раздел стал длиннее");
+        assert_eq!(
+            menu.current().list.page(),
+            super::super::view::rows_shown(len),
+            "страница пересчитана под новую длину"
+        );
+        menu.move_sel(99);
+        assert_eq!(menu.current().list.top(), 0, "всё влезает — прокрутки нет");
+        assert_eq!(
+            super::super::view::rows_for(&menu.frame()),
+            len,
+            "карточка не должна рисовать пустую строку снизу"
+        );
     }
 
     /// Вход в динамический раздел сразу показывает загрузку и ставит один

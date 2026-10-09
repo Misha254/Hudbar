@@ -9,6 +9,14 @@ Telegram-мост: opencode с телефона — промпты, сессии
 ### Changed
 - Menu card transparency now matches the panel exactly (0.9 instead of 0.94). The two windows sit side by side on screen, and the four-point difference read as one being opaque and the other not.
 
+### Fixed
+- Меню больше не оставляет пустую строку под последним пунктом: высота карточки считается по реально нарисованным строкам, а не по всей длине списка, из-за чего при прокрутке снизу зияла пустота.
+- Длинный динамический раздел (Bluetooth, Wi-Fi) больше не прокручивается при свободном месте: высота страницы пересчитывается после обновления снимка, а не остаётся от первого состояния, когда строк было меньше.
+
+### Changed
+- «Выключить Wi-Fi» и «Выключить Bluetooth» убраны: статусная строка сама переключает (`Enter`), иначе раздел повторял одно и то же двумя способами.
+- Полоса громкости встала по середине строки и стала длиннее (150 px): место взято у зоны значения, которой 168 px хватало под длинные подписи, а громкости хватает короткой. Уровень и mute видны справа как «40%» и «40% выкл».
+
 ### Added
 - Audio rows are now one volume slider per device: icon, device name, level bar, percentage and mute. `Shift+←`/`Shift+→` step the volume by 5%, `Enter` toggles mute. The audio section went from eleven rows to five, and the duplicated «Тише на 5%» / «Громче на 5%» / «Mute» pairs (identical for output and input, with no device name) are gone.
 

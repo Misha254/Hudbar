@@ -293,7 +293,8 @@ impl Node {
     /// Уровень и mute для полоски. Значение живёт в узле, а меняет его
     /// команда из строки: так полоса рисуется по тому, что вернул опрос.
     pub fn with_level(mut self, level: u8, muted: bool) -> Self {
-        self.level = Some(level.min(100));
+        let level = level.min(100);
+        self.level = Some(level);
         self.muted = muted;
         self
     }
@@ -341,6 +342,16 @@ impl Node {
 
 /// Значение строки из `get`-функции узла. Пустая строка — значения нет.
 /// Язык нужен только тумблеру: «вкл»/«выкл» или «on»/«off».
+/// Правое значение строки громкости: процент и mute.
+pub fn level_value(level: u8, muted: bool, lang: Language) -> String {
+    let level = level.min(100);
+    match (muted, lang) {
+        (true, Language::Ru) => format!("{level}% выкл"),
+        (true, Language::En) => format!("{level}% off"),
+        (false, _) => format!("{level}%"),
+    }
+}
+
 pub fn node_value(kind: &NodeKind, lang: Language) -> String {
     match kind {
         NodeKind::Submenu(_)
@@ -452,10 +463,17 @@ pub fn row_for(node: &Node, depth: usize, index: usize, lang: Language) -> Item 
         icon: node.icon,
         id: node.identity().to_string(),
         title: node.title.clone(),
+        // Процент и mute — тем же правым значением, что вкл/выкл у
+        // тумблеров: полоса без числа не читается. Считаем здесь, из
+        // уровня узла: значение-функция у ползунка захватила бы уровень,
+        // а замыкание с захватом не приводится к `fn() -> String`.
         value: node
             .value
             .map(|get| get())
-            .unwrap_or_else(|| node_value(&node.kind, lang)),
+            .unwrap_or_else(|| match node.level {
+                Some(level) => level_value(level, node.muted, lang),
+                None => node_value(&node.kind, lang),
+            }),
         caption: None,
         keywords: node.keywords,
         kind: item_kind(&node.kind),

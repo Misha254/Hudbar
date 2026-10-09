@@ -76,8 +76,13 @@ pub const TOGGLE_D: f32 = 16.0;
 pub const THUMB_D: f32 = 28.0;
 /// Ширина зоны значения справа.
 pub const VALUE_W: f32 = 168.0;
-/// Ширина полосы громкости между названием и процентом.
-pub const METER_W: f32 = 96.0;
+/// Ширина полосы громкости между названием и процентом. Места под полосу
+/// взято у значения: `VALUE_W` в 168 px нужен длинным значениям вроде
+/// «Масштаб 100%», а громкости хватает короткой подписи, и оставшееся
+/// ушло бы в пустоту.
+pub const METER_W: f32 = 150.0;
+/// Место под процент громкости: «100% выкл» — самый длинный текст.
+pub const VOLUME_VALUE_W: f32 = 92.0;
 /// Толщина полосы: тоньше строки текста, но не волосок.
 pub const METER_H: f32 = 6.0;
 /// Ширина зоны шеврона.
@@ -120,10 +125,12 @@ pub fn row_band(view: &MenuView<'_>) -> f32 {
 /// и высоту задаёт сам ввод.
 pub fn rows_for(frame: &Frame) -> usize {
     if frame.secret.is_some() {
-        SECRET_ROWS
-    } else {
-        rows_shown(frame.items.len())
+        return SECRET_ROWS;
     }
+    // Столько строк реально нарисуется: сколько осталось ниже `top`. Считать
+    // по `items.len()` нельзя — при прокрутке к концу карточка вырастала на
+    // прокрученные строки, и под последней строкой зияла пустота.
+    rows_shown(frame.items.len().saturating_sub(frame.top))
 }
 
 pub fn rows_shown(count: usize) -> usize {
@@ -808,15 +815,7 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool, lang: L
     let right = rect.right() - PAD;
     // Ширина зоны названия: до значения или до шеврона, чтобы длинное имя не
     // наезжало на правую часть.
-    let trailing = match item.kind {
-        super::item::ItemKind::Submenu | super::item::ItemKind::Leaf => CHEVRON_W,
-        super::item::ItemKind::Picker(_) => THUMB_D + CHEVRON_W + spacing::SM,
-        // У громкости справа полоса с процентом, а не только число: уровень
-        // должен читаться взглядом, не выбирая строку и не глядя в подпись.
-        super::item::ItemKind::Volume { .. } => METER_W + VALUE_W + spacing::SM,
-        _ => CHEVRON_W + VALUE_W + spacing::SM,
-    };
-    let label_w = (right - trailing - label_x).max(0.0);
+    let label_w = (right - trailing_w(&item.kind) - label_x).max(0.0);
     let label_rect = Rect::new(label_x, rect.y, label_w, rect.h);
     if !item.icon.is_empty() {
         let icon_rect = center_band(Rect::new(icon_x, rect.y, ICON, rect.h), row_band(view));
@@ -866,16 +865,32 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool, lang: L
 
 /// Дорожка полосы: от края названия до места значения справа. `None`, если
 /// названию не хватило места — тогда полосы просто нет.
+/// Сколько места справа от названия резервирует строка: шеврон, значение,
+/// миниатюра пикера или полоса громкости с процентом.
+fn trailing_w(kind: &super::item::ItemKind) -> f32 {
+    use super::item::ItemKind;
+    match kind {
+        ItemKind::Submenu | ItemKind::Leaf => CHEVRON_W,
+        ItemKind::Picker(_) => THUMB_D + CHEVRON_W + spacing::SM,
+        // У громкости справа полоса с процентом, а не только число: уровень
+        // должен читаться взглядом, не выбирая строку и не глядя в подпись.
+        ItemKind::Volume { .. } => METER_W + VOLUME_VALUE_W + spacing::SM,
+        _ => CHEVRON_W + VALUE_W + spacing::SM,
+    }
+}
+
 fn meter_track(label_rect: Rect, row_right: f32) -> Rect {
-    let right = row_right - PAD - VALUE_W - spacing::SM;
+    let right = row_right - PAD - VOLUME_VALUE_W - spacing::SM;
     if right <= label_rect.right() + spacing::MD {
         return Rect::new(0.0, 0.0, 0.0, 0.0);
     }
+    // Высота здесь — вся строка: полосу центрируют уже по ней. Дорожка в
+    // 6 px уводила заливку к верхнему краю строки, а не в её середину.
     Rect::new(
         label_rect.right() + spacing::MD,
         label_rect.y,
         right - label_rect.right() - spacing::MD,
-        METER_H,
+        label_rect.h,
     )
 }
 
@@ -1254,19 +1269,21 @@ mod tests {
             meter_fill(track, 90) > meter_fill(track, 40),
             "больше уровень — шире заливка"
         );
-        // У обычной строки справа шеврон, а не полоса: места под дорожку
-        // там нет, и она не должна рисоваться поверх названия.
-        let plain = meter_track(label_rect_for(false), CARD_W);
+        // Справа у обычной строки шеврон, а не полоса: она не должна
+        // резервировать под дорожку место. Проверяем `trailing`, а не
+        // `meter_track`: дорожку считают одинаково, рисует её вызывающий
+        // по `item.level`.
         assert!(
-            plain.w <= spacing::MD,
-            "у обычной строки полосы нет: {}",
-            plain.w
+            super::trailing_w(&plain_item().kind) < super::trailing_w(&volume_item().kind),
+            "обычная строка резервирует меньше, чем громкость: {} против {}",
+            super::trailing_w(&plain_item().kind),
+            super::trailing_w(&volume_item().kind)
         );
         // Совсем узкая строка: места не остаётся даже при `None` слева.
         let squeezed = Rect::new(
             60.0,
             0.0,
-            CARD_W - PAD - VALUE_W - spacing::SM - 60.0,
+            CARD_W - PAD - VOLUME_VALUE_W - spacing::SM - 60.0,
             ROW_H,
         );
         assert_eq!(
@@ -1277,12 +1294,71 @@ mod tests {
         assert!(meter_rect(Rect::new(0.0, 0.0, 0.0, 0.0), 50).is_none());
     }
 
+    /// Полоса стоит по середине строки, а не липнет к её верху: дорожка
+    /// берётся высотой во всю строку и центрируется уже по ней.
+    #[test]
+    fn meter_sits_in_the_middle_of_the_row() {
+        let row = Rect::new(24.0, 300.0, CARD_W, ROW_H);
+        let base = label_rect_for(true);
+        // Название лежит в строке, значит и дорожка берёт её `y`.
+        let label = Rect::new(base.x, row.y, base.w, base.h);
+        let track = meter_track(label, row.right());
+        let scale = type_scale(false);
+        let bar = meter_rect(center_band(track, scale.label * 2.0), 50).unwrap();
+        let row_middle = row.y + row.h / 2.0;
+        let bar_middle = bar.y + bar.h / 2.0;
+        assert!(
+            (bar_middle - row_middle).abs() < 0.51,
+            "полоса ниже середины строки на {}",
+            bar_middle - row_middle
+        );
+        assert!(
+            bar.y >= row.y && bar.bottom() <= row.bottom(),
+            "полоса должна помещаться в строку"
+        );
+    }
+
+    /// Обычная строка и строка громкости — только ради сравнения правой
+    /// части при расчёте места.
+    fn plain_item() -> super::super::item::Item {
+        super::super::item::Item {
+            icon: settings_icons::NETWORK,
+            id: "test".to_string(),
+            title: "Обычная строка".to_string(),
+            value: String::new(),
+            caption: None,
+            keywords: &[],
+            kind: super::super::item::ItemKind::Toggle {
+                get: || true,
+                set: |_| {},
+            },
+            level: None,
+            muted: false,
+            origin: super::super::item::Origin { depth: 0, index: 0 },
+        }
+    }
+
+    fn volume_item() -> super::super::item::Item {
+        use super::super::item::ItemKind;
+        use super::super::system::CommandSpec;
+        let set = CommandSpec::new("wpctl");
+        super::super::item::Item {
+            kind: ItemKind::Volume {
+                down: set.clone(),
+                up: set.clone(),
+                mute: set,
+            },
+            level: Some(50),
+            ..plain_item()
+        }
+    }
+
     /// Настоящая геометрия названия в строке: строки громкости резервируют
     /// под полосу больше, чем обычные.
     fn label_rect_for(volume: bool) -> Rect {
         let right = CARD_W - PAD;
         let trailing = if volume {
-            METER_W + VALUE_W + spacing::SM
+            METER_W + VOLUME_VALUE_W + spacing::SM
         } else {
             CHEVRON_W + VALUE_W + spacing::SM
         };
