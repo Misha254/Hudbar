@@ -6,6 +6,9 @@
 
 Telegram-мост: opencode с телефона — промпты, сессии, модели, права и веб-панель.
 
+### Changed
+- Menu card transparency now matches the panel exactly (0.9 instead of 0.94). The two windows sit side by side on screen, and the four-point difference read as one being opaque and the other not.
+
 ### Fixed
 - Menu highlight jumped one row down as soon as the list scrolled: the highlighted index added `top` to an already absolute `selected`, so moving to «Режим питания» landed on «Панель управления». The scrolled list also left empty space under the last row: the list scrolled in pages of 8 while the card drew 10, so fewer rows remained than slots. Both fixed, and the page is now set from the drawn row count when a level opens.
 
