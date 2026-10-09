@@ -206,7 +206,8 @@ impl Menu {
         root: Vec<Node>,
         action_runner: fn(&Action) -> Result<(), String>,
     ) -> Self {
-        let list = ItemList::new(level_rows(&root, 0, Language::Ru));
+        let mut list = ItemList::new(level_rows(&root, 0, Language::Ru));
+        list.set_page(super::view::rows_shown(list.len()));
         Self {
             root,
             levels: vec![Level {
@@ -592,7 +593,8 @@ impl Menu {
         match &node.kind {
             NodeKind::Submenu(children) if !children.is_empty() => {
                 let lang = self.lang;
-                let list = ItemList::new(level_rows(children, depth + 1, lang));
+                let mut list = ItemList::new(level_rows(children, depth + 1, lang));
+                list.set_page(super::view::rows_shown(list.len()));
                 let (title, identity) = (node.title.clone(), node.identity().to_string());
                 self.levels.push(Level {
                     title,
@@ -620,7 +622,8 @@ impl Menu {
             self.pending.push((key, generation));
         }
         let nodes = slot_nodes(key, slot.state(), lang);
-        let list = ItemList::new(level_rows(&nodes, depth + 1, lang));
+        let mut list = ItemList::new(level_rows(&nodes, depth + 1, lang));
+        list.set_page(super::view::rows_shown(list.len()));
         self.levels.push(Level {
             title: title.to_string(),
             list,

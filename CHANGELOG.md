@@ -6,6 +6,9 @@
 
 Telegram-мост: opencode с телефона — промпты, сессии, модели, права и веб-панель.
 
+### Fixed
+- Menu highlight jumped one row down as soon as the list scrolled: the highlighted index added `top` to an already absolute `selected`, so moving to «Режим питания» landed on «Панель управления». The scrolled list also left empty space under the last row: the list scrolled in pages of 8 while the card drew 10, so fewer rows remained than slots. Both fixed, and the page is now set from the drawn row count when a level opens.
+
 ### Added
 - Мост Telegram (`hud-telegram-rs`) и два юнита в установку: `opencode-serve.service` и `hud-telegram.service`. Ставятся, но не включаются: токен и чат заполняет человек. Секреты — в `~/.config/hudbar/telegram.json` (`bot_token`, `chat_id`), рабочее состояние — в `~/.local/state/hudbar/telegram-state.json`. Команды принимаются только из чата владельца: апдейты других чатов и групп игнорируются.
 - Команды бота: `/help`, `/new`, `/sessions`, `/use`, `/stop`, `/status`, `/dir`, `/menu`, `/panel`, `/models`, `/model`, `/yes`, `/always`, `/no`, плюс любой текст как промпт. У каждой есть русское слово (`/меню`, `сессии`, `стоп`, `модели`), а номера в списках совпадают с номерами в тексте — выбор не промахивается.

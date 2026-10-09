@@ -701,18 +701,36 @@ fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
     }
 }
 
-/// Список строк: выбранная подсвечена и отмечена полосой, между строками
-/// hairline.
-fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize, row_h: f32) {
-    let list = Rect::new(card.x, card.y + HEADER_H, card.w, rows as f32 * row_h);
-    let start = frame
+/// Строки окна с их абсолютными индексами: ровно те, что рисуются, и не
+/// больше. Больше рисовать незачем — под последней строкой оставалось пустое
+/// поле, когда список прокручен до конца.
+fn window_rows(frame: &Frame, rows: usize) -> Vec<(usize, &Item)> {
+    frame
         .items
         .iter()
         .enumerate()
         .skip(frame.top)
         .take(rows)
-        .collect::<Vec<_>>();
-    let selected_row = frame.top + frame.selected;
+        .collect()
+}
+
+/// Абсолютный индекс подсвеченной строки.
+///
+/// `selected` — индекс во всём списке, а позиция в цикле отрисовки тоже
+/// абсолютная: `enumerate` идёт до `skip`. Прибавлять тут `top` значило бы
+/// подсветить строку на `top` ниже нужной, то есть перескочить через
+/// выбранную, как только список прокрутится.
+fn selected_row(frame: &Frame) -> usize {
+    frame.selected
+}
+
+/// Список строк: выбранная подсвечена и отмечена полосой, между строками
+/// hairline.
+fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize, row_h: f32) {
+    let start = window_rows(frame, rows);
+    let shown = start.len();
+    let list = Rect::new(card.x, card.y + HEADER_H, card.w, shown as f32 * row_h);
+    let selected_row = selected_row(frame);
     for (index, (position, item)) in start.iter().enumerate() {
         let rect = Rect::new(list.x, list.y + index as f32 * row_h, list.w, row_h);
         // Разделитель рисуется над строкой, а не под ней: под последней
@@ -1050,8 +1068,85 @@ pub fn font_name(pixel: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::state::Status;
+    use super::super::{Action, Menu, Node};
     use super::*;
+
+    /// Список из десяти строк, выбор девятой: прокрутка ещё не нужна, и
+    /// подсветка обязана совпадать с выбором.
+    #[test]
+    fn highlight_stays_on_the_selected_row_after_scrolling() {
+        let mut menu = Menu::new(rows(10));
+        for _ in 0..8 {
+            menu.move_sel(1);
+        }
+        let frame = menu.frame();
+        assert_eq!(frame.selected, 8, "выбрана девятая строка");
+        assert_eq!(selected_row(&frame), frame.selected, "подсветка = выбор");
+    }
+
+    /// Длинный список с прокруткой: `top` уходит вниз, и подсветка всё равно
+    /// должна указывать на выбранную строку. Раньше индекс складывался с
+    /// `top`, и курсор перескакивал через строку — на «Панель управления»
+    /// вместо «Режим питания».
+    #[test]
+    fn highlight_is_absolute_not_offset_by_the_scroll() {
+        let mut menu = Menu::new(rows(30));
+        for _ in 0..20 {
+            menu.move_sel(1);
+        }
+        let frame = menu.frame();
+        assert!(frame.top > 0, "список прокручен: {}", frame.top);
+        let row = selected_row(&frame);
+        let window: Vec<usize> = window_rows(&frame, MAX_ROWS)
+            .iter()
+            .map(|(index, _)| *index)
+            .collect();
+        assert!(
+            window.contains(&row),
+            "подсвеченная строка {row} должна быть в окне {window:?}"
+        );
+        assert_ne!(
+            row,
+            frame.top + frame.selected,
+            "индекс не должен смещаться на top={}",
+            frame.top
+        );
+    }
+
+    /// Под последней нарисованной строкой не остаётся пустого поля: оконных
+    /// строк ровно столько, сколько осталось в списке, и они не выходят за
+    /// его конец.
+    #[test]
+    fn no_empty_rows_are_drawn_below_the_last_one() {
+        let mut menu = Menu::new(rows(12));
+        for _ in 0..11 {
+            menu.move_sel(1);
+        }
+        let frame = menu.frame();
+        let window = window_rows(&frame, MAX_ROWS);
+        assert!(
+            !window.is_empty(),
+            "у прокрученного списка есть что показывать: top={}",
+            frame.top
+        );
+        let last = window.last().expect("строка").0;
+        assert_eq!(
+            last + 1,
+            frame.items.len(),
+            "окно должно упереться в конец списка, а не оставить пустоты"
+        );
+    }
+
+    /// Меню из `count` строк для проверки навигации.
+    fn rows(count: usize) -> Vec<Node> {
+        let owned: Vec<String> = (0..count).map(|index| format!("строка {index}")).collect();
+        owned
+            .iter()
+            .map(|title| Node::action("", title, Action::Back))
+            .collect()
+    }
+
+    use super::super::state::Status;
 
     fn palette_for(pixel: bool) -> UiPalette {
         theme(pixel, palette::Palette::default()).0
