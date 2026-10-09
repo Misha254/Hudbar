@@ -41,6 +41,18 @@ pub enum ItemKind {
     },
     /// Внешний выбор: обои, приложение. Идентификатор — на будущее для M4.
     Picker(&'static str),
+    /// Громкость устройства одной строкой: полоса, mute по Enter, шаг
+    /// стрелками. Отдельные строки «тише» и «громче» занимали по две на
+    /// устройство и не показывали, о чём речь: при звуке и микрофоне
+    /// подписи были одинаковыми.
+    Volume {
+        /// Команда уменьшения громкости.
+        down: super::system::CommandSpec,
+        /// Команда увеличения.
+        up: super::system::CommandSpec,
+        /// Переключение mute.
+        mute: super::system::CommandSpec,
+    },
 }
 
 impl ItemKind {
@@ -99,6 +111,10 @@ pub struct Item {
     /// Синонимы для поиска: взяты из узла, чтобы «Не беспокоить»
     /// находилось по «dnd» без «(DND)» в названии.
     pub keywords: &'static [&'static str],
+    /// Уровень для полосы: проценты 0..=100. `None` — полосы нет.
+    pub level: Option<u8>,
+    /// Устройство заглушено: показывается значком у полосы.
+    pub muted: bool,
     /// Поведение строки.
     pub kind: ItemKind,
     /// Место строки в дереве.
@@ -399,6 +415,9 @@ impl PartialEq for ItemKind {
                 },
             ) => (min1, max1, step1, unit1) == (min2, max2, step2, unit2),
             (ItemKind::Picker(left), ItemKind::Picker(right)) => left == right,
+            // Команды громкости собираются заново при каждой пересборке
+            // уровня, и их равенство ничего не значит для формы строки.
+            (ItemKind::Volume { .. }, ItemKind::Volume { .. }) => true,
             _ => false,
         }
     }
@@ -412,6 +431,8 @@ mod tests {
 
     fn item(title: &str, depth: usize, index: usize) -> Item {
         Item {
+            level: None,
+            muted: false,
             icon: "",
             id: title.to_string(),
             title: title.to_string(),

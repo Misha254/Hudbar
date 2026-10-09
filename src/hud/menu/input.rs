@@ -50,6 +50,8 @@ pub enum MenuInput {
     Move(isize),
     /// `Shift+↑`/`Shift+↓` над действием «порядок модулей».
     Nudge(isize),
+    /// `Shift+←`/`Shift+→` на строке громкости: шаг вниз или вверх.
+    Volume(i32),
     /// Прокрутить список на страницу.
     Page(isize),
     /// В начало или в конец.
@@ -143,6 +145,15 @@ pub fn translate(event: KeyEvent, query: &str) -> MenuInput {
     if event.shift && !event.ctrl && matches!(event.key, Key::Up | Key::Down) {
         return MenuInput::Nudge(match event.key {
             Key::Up => -1,
+            _ => 1,
+        });
+    }
+    // `Shift+←/→` — шаг громкости на строке-ползунке. Обычные стрелки
+    // заняты: `←` возвращает на уровень выше, `→` входит в подменю. Раньше
+    // громкость менялась отдельными строками, и таскать её было нечем.
+    if event.shift && !event.ctrl && matches!(event.key, Key::Left | Key::Right) {
+        return MenuInput::Volume(match event.key {
+            Key::Left => -1,
             _ => 1,
         });
     }
@@ -242,6 +253,26 @@ mod tests {
             ctrl: true,
             ..KeyEvent::default()
         }
+    }
+
+    /// `Shift+←/→` — шаг громкости на ползунке. Обычные стрелки заняты:
+    /// `←` возвращает на уровень выше, `→` входит в подменю, и отдавать их
+    /// ползунку означало бы сломать привычку.
+    #[test]
+    fn shift_arrows_drive_the_volume_slider() {
+        let shift = |key| KeyEvent {
+            key,
+            shift: true,
+            ..KeyEvent::default()
+        };
+        assert_eq!(translate(shift(Key::Left), ""), MenuInput::Volume(-1));
+        assert_eq!(translate(shift(Key::Right), ""), MenuInput::Volume(1));
+        // Без Shift стрелки остаются навигацией.
+        assert_eq!(translate(press(Key::Left), ""), MenuInput::Back);
+        assert_eq!(translate(press(Key::Right), ""), MenuInput::Activate);
+        // Shift+↑/↓ — по-прежнему перенос модуля, а не громкость.
+        assert_eq!(translate(shift(Key::Up), ""), MenuInput::Nudge(-1));
+        assert_eq!(translate(shift(Key::Down), ""), MenuInput::Nudge(1));
     }
 
     #[test]

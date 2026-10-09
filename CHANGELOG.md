@@ -9,6 +9,9 @@ Telegram-мост: opencode с телефона — промпты, сессии
 ### Changed
 - Menu card transparency now matches the panel exactly (0.9 instead of 0.94). The two windows sit side by side on screen, and the four-point difference read as one being opaque and the other not.
 
+### Added
+- Audio rows are now one volume slider per device: icon, device name, level bar, percentage and mute. `Shift+←`/`Shift+→` step the volume by 5%, `Enter` toggles mute. The audio section went from eleven rows to five, and the duplicated «Тише на 5%» / «Громче на 5%» / «Mute» pairs (identical for output and input, with no device name) are gone.
+
 ### Fixed
 - Menu highlight jumped one row down as soon as the list scrolled: the highlighted index added `top` to an already absolute `selected`, so moving to «Режим питания» landed on «Панель управления». The scrolled list also left empty space under the last row: the list scrolled in pages of 8 while the card drew 10, so fewer rows remained than slots. Both fixed, and the page is now set from the drawn row count when a level opens.
 

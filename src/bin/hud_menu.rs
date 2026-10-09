@@ -313,6 +313,9 @@ impl MenuApp {
         match input {
             MenuInput::Ignore => {}
             MenuInput::Move(delta) => self.menu.move_sel(delta),
+            MenuInput::Volume(delta) => {
+                self.menu.adjust_volume(delta);
+            }
             MenuInput::Nudge(delta) => {
                 if self.menu.nudge_module(delta as i32) == Outcome::Changed {
                     let lang = self.menu.lang();

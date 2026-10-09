@@ -392,7 +392,7 @@ impl Menu {
         if depth == 0 && item.caption.is_some() {
             return self.jump_to_leaf(&item);
         }
-        match item.kind {
+        match item.kind.clone() {
             ItemKind::Submenu => {
                 if self.push(&item.title) {
                     Outcome::Pushed
@@ -505,6 +505,11 @@ impl Menu {
                     Outcome::Idle
                 }
             },
+            ItemKind::Volume { mute, .. } => {
+                // Enter на полоске — это mute: громкость ею не меняется, а
+                // отдельной строки ради переключения больше нет.
+                self.queue_command(&item, vec![mute], super::system::ProviderKey::AUDIO)
+            }
             ItemKind::Picker(_) | ItemKind::Number { .. } => {
                 if depth == 0 {
                     // Число и пикер на корне выглядели бы странно: их значения
@@ -541,6 +546,46 @@ impl Menu {
                 Outcome::Idle
             }
         }
+    }
+
+    /// `Shift+стрелки` на строке громкости: шаг вниз или вверх.
+    pub fn adjust_volume(&mut self, direction: i32) -> Outcome {
+        let Some(item) = self.current().list.selected_item().cloned() else {
+            return Outcome::Idle;
+        };
+        let ItemKind::Volume { down, up, .. } = item.kind.clone() else {
+            return Outcome::Idle;
+        };
+        let command = if direction < 0 { down } else { up };
+        self.queue_command(&item, vec![command], super::system::ProviderKey::AUDIO)
+    }
+
+    /// Кладёт команду в очередь worker-а: сама она звук и сеть ждут в
+    /// subprocess, а меню живёт в UI-потоке. Строка помечается занятой до
+    /// ответа, а статус показывает, что именно ушло.
+    fn queue_command(
+        &mut self,
+        item: &Item,
+        commands: Vec<super::system::CommandSpec>,
+        refresh: super::system::ProviderKey,
+    ) -> Outcome {
+        self.command_generation += 1;
+        let generation = self.command_generation;
+        let describe = commands
+            .iter()
+            .map(|command| command.log_line())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        self.busy.insert(item.id.clone());
+        self.pending_commands.push(CommandJob {
+            generation,
+            commands,
+            refresh,
+            row: item.id.clone(),
+        });
+        self.status = Some(Status::Applied(describe));
+        self.rebuild_current();
+        Outcome::Changed
     }
 
     /// Стрелки влево-вправо на числовом пункте: значение в пределах границ.
@@ -1461,6 +1506,70 @@ mod tests {
             "перечитать частичное состояние"
         );
         assert!(menu.status().is_some_and(|status| status.is_failed()));
+    }
+
+    /// На строке-ползунке Enter переключает mute, а `Shift+←/→` кладёт в
+    /// очередь шаг громкости. На любой другой строке и то и другое — no-op:
+    /// шаг громкости вне раздела звука означал бы, что меняется устройство,
+    /// которого тут нет.
+    #[test]
+    fn volume_row_answers_enter_and_shift_arrows_only_on_itself() {
+        let mut menu = Menu::new(vec![volume_node("Звук · Speaker", 40)]);
+        assert_eq!(menu.adjust_volume(-1), Outcome::Changed, "шаг вниз");
+        assert_eq!(menu.adjust_volume(1), Outcome::Changed, "шаг вверх");
+        assert_eq!(menu.enter(), Outcome::Changed, "Enter — mute");
+        assert_eq!(menu.pending_commands.len(), 3, "три команды в очереди");
+        assert!(
+            menu.pending_commands
+                .iter()
+                .any(|job| job.commands.iter().any(|command| command
+                    .argv()
+                    .1
+                    .iter()
+                    .any(|arg| arg == "toggle"))),
+            "mute ушёл отдельной командой"
+        );
+
+        let mut menu = Menu::new(vec![Node::action("", "Обычная", Action::Back)]);
+        assert_eq!(menu.adjust_volume(-1), Outcome::Idle, "не ползунок — пусто");
+        assert_eq!(menu.adjust_volume(1), Outcome::Idle, "не ползунок — пусто");
+        // Enter на обычной строке ведёт себя как всегда: на корне он
+        // закрывает меню, и ползунок тут ни при чём.
+        assert_eq!(
+            menu.enter(),
+            Outcome::Closed,
+            "Enter на корне закрывает меню"
+        );
+        assert!(
+            menu.pending_commands
+                .iter()
+                .all(|job| job.commands.is_empty()
+                    || !job.commands.iter().any(|command| command
+                        .argv()
+                        .1
+                        .iter()
+                        .any(|arg| arg == "toggle"))),
+            "у обычной строки команд mute нет"
+        );
+    }
+
+    /// Строка-ползунок для проверки: подставлены команды, важно только то,
+    /// что строка ведёт себя как громкость.
+    fn volume_node(title: &str, level: u8) -> Node {
+        Node::volume(
+            "",
+            title,
+            super::super::system::CommandSpec::new("wpctl")
+                .arg("set-volume")
+                .arg("5%-"),
+            super::super::system::CommandSpec::new("wpctl")
+                .arg("set-volume")
+                .arg("5%+"),
+            super::super::system::CommandSpec::new("wpctl")
+                .arg("set-mute")
+                .arg("toggle"),
+        )
+        .with_level(level, false)
     }
 
     #[test]

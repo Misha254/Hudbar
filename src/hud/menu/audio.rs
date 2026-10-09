@@ -301,6 +301,24 @@ pub fn prettify_device_name(name: &str) -> String {
     last.replace('_', " ")
 }
 
+/// Команда шага громкости для ползунка: `wpctl set-volume -l 1.0 target 5%-`.
+fn volume_command(target: &str, step: &str) -> CommandSpec {
+    CommandSpec::new("wpctl")
+        .arg("set-volume")
+        .arg("-l")
+        .arg("1.0")
+        .arg(target)
+        .arg(&format!("{VOLUME_STEP}%{step}"))
+}
+
+/// Команда переключения mute для ползунка.
+fn mute_command(target: &str) -> CommandSpec {
+    CommandSpec::new("wpctl")
+        .arg("set-mute")
+        .arg(target)
+        .arg("toggle")
+}
+
 /// Относительный шаг громкости: `wpctl set-volume -l 1.0 target 5%-`.
 fn volume_action(target: &str, step: &str) -> Action {
     Action::RefreshAndRun {
@@ -346,6 +364,7 @@ fn endpoint_rows(
     label: &str,
     icon: &'static str,
     block: &Block<Endpoint>,
+    device: Option<&str>,
 ) -> Vec<Node> {
     let block = match block {
         Block::Ready(endpoint) => endpoint,
@@ -356,36 +375,30 @@ fn endpoint_rows(
             return vec![Node::info(icon, &format!("{label}: {}", short(reason)))];
         }
     };
-    let state = match (block.muted, lang) {
-        (true, Language::Ru) => "выкл",
-        (true, Language::En) => "off",
-        (false, Language::Ru) => "вкл",
-        (false, Language::En) => "on",
+    // Одна строка на устройство: имя, полоса, процент и mute по Enter.
+    // Раньше здесь стояли четыре строки — «уровень», «тише», «громче» и
+    // «Mute», — и у звука с микрофоном подписи были одинаковыми: в списке
+    // из одиннадцати строк было непонятно, где чья громкость.
+    // Имя устройства в заголовке: без него строки «Звук» и «Микрофон» не
+    // отличались, а это разные устройства с разной громкостью.
+    let name = device
+        .map(prettify_device_name)
+        .filter(|name| !name.is_empty());
+    let title = match &name {
+        Some(name) => format!("{label} · {name}"),
+        None => label.to_string(),
     };
     vec![
-        Node::info(icon, &format!("{label}: {}% {state}", block.volume)),
-        Node::action(
-            settings_icons::MINUS,
-            if lang == Language::Ru {
-                "Тише на 5%"
-            } else {
-                "Quieter by 5%"
-            },
-            volume_action(target, "-"),
+        Node::volume(
+            icon,
+            &title,
+            volume_command(target, "-"),
+            volume_command(target, "+"),
+            mute_command(target),
         )
-        .with_id(&volume_id(kind, "-")),
-        Node::action(
-            settings_icons::PLUS,
-            if lang == Language::Ru {
-                "Громче на 5%"
-            } else {
-                "Louder by 5%"
-            },
-            volume_action(target, "+"),
-        )
-        .with_id(&volume_id(kind, "+")),
-        Node::action(settings_icons::SOUND, "Mute", mute_action(target))
-            .with_id(&format!("audio/mute/{kind}")),
+        .with_level(block.volume as u8, block.muted)
+        .with_id(&format!("audio/volume/{kind}"))
+        .search_as(&["volume", "громкость", "звук", "микрофон", "volume"]),
     ]
 }
 
@@ -490,6 +503,7 @@ pub fn build_nodes(snapshot: &AudioSnapshot, lang: Language) -> Vec<Node> {
         if ru { "Звук" } else { "Output" },
         settings_icons::SOUND,
         &snapshot.output,
+        snapshot.sink_default.as_deref(),
     ));
     rows.extend(endpoint_rows(
         lang,
@@ -498,6 +512,7 @@ pub fn build_nodes(snapshot: &AudioSnapshot, lang: Language) -> Vec<Node> {
         if ru { "Микрофон" } else { "Input" },
         settings_icons::DOT,
         &snapshot.input,
+        snapshot.source_default.as_deref(),
     ));
     rows.extend(device_block(
         lang,
@@ -538,6 +553,7 @@ pub fn build_nodes(snapshot: &AudioSnapshot, lang: Language) -> Vec<Node> {
 mod tests {
     use super::super::action::{Action, RecordingRunner};
     use super::super::system::{CommandOutput, CommandSpec, ScriptedRunner, SlotState};
+    use super::super::tree::NodeKind;
     use super::*;
 
     const SINKS_JSON: &str = r#"[{"index":88,"state":"SUSPENDED","name":"easyeffects_sink","description":"Easy Effects Sink"},
@@ -668,14 +684,37 @@ mod tests {
             .expect("снимок");
         let nodes = build_nodes(&snapshot, Language::Ru);
         let titles: Vec<&str> = nodes.iter().map(|node| node.title.as_str()).collect();
+        // Одна строка на направление: имя устройства, полоса, mute по Enter.
+        let output = nodes
+            .iter()
+            .find(|node| node.title.starts_with("Звук ·"))
+            .expect("строка звука");
+        assert_eq!(output.level, Some(40), "уровень виден в строке: {titles:?}");
+        assert!(!output.muted, "звук не заглушен");
+        let input = nodes
+            .iter()
+            .find(|node| node.title.starts_with("Микрофон ·"))
+            .expect("строка микрофона");
+        assert!(!input.muted, "в сценарии микрофон не заглушен");
         assert!(
-            titles.iter().any(|title| title.contains("Звук: 40% вкл")),
-            "{titles:?}"
+            matches!(output.kind, NodeKind::Volume { .. }),
+            "строка звука — ползунок"
         );
-        assert!(titles.contains(&"Тише на 5%"));
-        assert!(titles.contains(&"Громче на 5%"));
         assert!(titles.contains(&"Устройства вывода"));
         assert!(titles.contains(&"Устройства ввода"));
+        // Отдельных строк «тише» и «громче» больше нет: на звук и микрофон
+        // они давали шесть одинаковых подписей без указания, чья это громкость.
+        assert!(
+            !titles.iter().any(|title| title.contains("Тише")),
+            "строк-переключателей не осталось: {titles:?}"
+        );
+        // Пять строк вместо одиннадцати: две полоски, два списка и
+        // обновление. Раньше на каждый из двух устройств шло четыре строки.
+        assert_eq!(
+            nodes.len(),
+            5,
+            "две полоски, два списка, обновить: {titles:?}"
+        );
 
         let outputs = nodes
             .iter()
@@ -700,48 +739,48 @@ mod tests {
         let runner = ScriptedRunner::new(full_script());
         let snapshot = AudioProvider.fetch(&runner).expect("снимок");
         let nodes = build_nodes(&snapshot, Language::Ru);
-        let expected = [
+        // У ползунка три команды на устройство: шаг вниз, шаг вверх и
+        // mute. Проверяются точные аргументы: строка без проверки легко
+        // начала бы менять громкость не того устройства.
+        for (id, title, down, up, mute) in [
             (
-                "audio/volume/output/-",
-                "run wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-",
+                "audio/volume/output",
+                "Звук",
+                "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-",
+                "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+",
+                "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
             ),
             (
-                "audio/volume/output/+",
-                "run wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+",
+                "audio/volume/input",
+                "Микрофон",
+                "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SOURCE@ 5%-",
+                "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SOURCE@ 5%+",
+                "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle",
             ),
-            (
-                "audio/mute/output",
-                "run wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
-            ),
-            (
-                "audio/volume/input/-",
-                "run wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SOURCE@ 5%-",
-            ),
-            (
-                "audio/volume/input/+",
-                "run wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SOURCE@ 5%+",
-            ),
-            (
-                "audio/mute/input",
-                "run wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle",
-            ),
-        ];
-        for (id, argv) in expected {
+        ] {
             let node = nodes
                 .iter()
                 .find(|node| node.identity() == id)
                 .unwrap_or_else(|| panic!("нет строки {id}"));
-            let action = match &node.kind {
-                super::super::tree::NodeKind::Action(action) => action,
-                other => panic!("{id} не действие: {other:?}"),
+            assert!(
+                node.title.starts_with(title),
+                "{id} должен называться как {title}: {}",
+                node.title
+            );
+            let NodeKind::Volume {
+                down: d,
+                up: u,
+                mute: m,
+            } = &node.kind
+            else {
+                panic!("{id} не ползунок: {:?}", node.kind);
             };
-            match action {
-                Action::RefreshAndRun { refresh, .. } => assert_eq!(*refresh, ProviderKey::AUDIO),
-                other => panic!("{id}: ожидался RefreshAndRun, {other:?}"),
+            // Команда сравнивается по строке запуска, а не выполняется:
+            // выполняется она в worker-потоке окна, и здесь нужен только
+            // точный состав аргументов.
+            for (command, argv) in [(d, down), (u, up), (m, mute)] {
+                assert_eq!(&command.log_line(), argv, "строка {id}");
             }
-            let recorder = RecordingRunner::new();
-            action.perform_with(&recorder).expect("выполнено");
-            assert_eq!(recorder.calls(), vec![argv.to_string()], "строка {id}");
         }
 
         let devices = nodes
@@ -796,10 +835,8 @@ mod tests {
         action.perform_with(&recorder).expect("выполнено");
         assert_eq!(
             recorder.calls(),
-            vec![
-                "run pactl set-default-source alsa_input.pci-0000_00_1f.3.HiFi__Mic1__source"
-                    .to_string()
-            ]
+            vec!["run pactl set-default-source alsa_input.pci-0000_00_1f.3.HiFi__Mic1__source"],
+            "микрофон выбирается точной командой"
         );
     }
 
@@ -871,9 +908,12 @@ mod tests {
             .into_iter()
             .map(|node| node.title)
             .collect();
+        // Без pactl имя устройства неизвестно: строка остаётся, но без
+        // «· Динамики» — придумывать нечего.
+        assert!(titles.iter().any(|title| title == "Звук"), "{titles:?}");
         assert!(
-            titles.iter().any(|title| title.contains("Звук: 40%")),
-            "{titles:?}"
+            !titles.iter().any(|title| title.contains('·')),
+            "имени устройства нет, и строка его не выдумывает: {titles:?}"
         );
         assert!(titles.iter().any(|title| title == "pactl нет"));
     }
@@ -912,14 +952,20 @@ mod tests {
         script[0] = ok("Volume: 0.40 [MUTED]");
         let runner = ScriptedRunner::new(script);
         let snapshot = AudioProvider.fetch(&runner).expect("снимок");
-        let titles: Vec<String> = build_nodes(&snapshot, Language::Ru)
-            .into_iter()
-            .map(|node| node.title)
-            .collect();
-        assert!(
-            titles.iter().any(|title| title == "Звук: 40% выкл"),
-            "{titles:?}"
-        );
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        let sound = nodes
+            .iter()
+            .find(|node| node.title.starts_with("Звук"))
+            .expect("строка звука");
+        // Mute — флаг у полосы, а не слово в заголовке: заголовок у полоски
+        // один, и «40% выкл» читалось как часть названия устройства.
+        assert!(sound.muted, "звук заглушен помечен");
+        assert_eq!(sound.level, Some(40), "уровень на месте");
+        let mic = nodes
+            .iter()
+            .find(|node| node.title.starts_with("Микрофон"))
+            .expect("строка микрофона");
+        assert!(!mic.muted, "микрофон в сценарии не заглушен");
     }
 
     #[test]

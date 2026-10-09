@@ -76,6 +76,10 @@ pub const TOGGLE_D: f32 = 16.0;
 pub const THUMB_D: f32 = 28.0;
 /// Ширина зоны значения справа.
 pub const VALUE_W: f32 = 168.0;
+/// Ширина полосы громкости между названием и процентом.
+pub const METER_W: f32 = 96.0;
+/// Толщина полосы: тоньше строки текста, но не волосок.
+pub const METER_H: f32 = 6.0;
 /// Ширина зоны шеврона.
 pub const CHEVRON_W: f32 = 16.0;
 /// Плотность затемнения вокруг карточки.
@@ -807,6 +811,9 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool, lang: L
     let trailing = match item.kind {
         super::item::ItemKind::Submenu | super::item::ItemKind::Leaf => CHEVRON_W,
         super::item::ItemKind::Picker(_) => THUMB_D + CHEVRON_W + spacing::SM,
+        // У громкости справа полоса с процентом, а не только число: уровень
+        // должен читаться взглядом, не выбирая строку и не глядя в подпись.
+        super::item::ItemKind::Volume { .. } => METER_W + VALUE_W + spacing::SM,
         _ => CHEVRON_W + VALUE_W + spacing::SM,
     };
     let label_w = (right - trailing - label_x).max(0.0);
@@ -851,7 +858,91 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool, lang: L
             );
         }
     }
+    if let Some(level) = item.level {
+        meter(view, rect, label_rect, level, item.muted, selected);
+    }
     indicator(view, rect, item, two_line, lang);
+}
+
+/// Дорожка полосы: от края названия до места значения справа. `None`, если
+/// названию не хватило места — тогда полосы просто нет.
+fn meter_track(label_rect: Rect, row_right: f32) -> Rect {
+    let right = row_right - PAD - VALUE_W - spacing::SM;
+    if right <= label_rect.right() + spacing::MD {
+        return Rect::new(0.0, 0.0, 0.0, 0.0);
+    }
+    Rect::new(
+        label_rect.right() + spacing::MD,
+        label_rect.y,
+        right - label_rect.right() - spacing::MD,
+        METER_H,
+    )
+}
+
+/// Дорожка с заливкой по уровню. `None`, когда места нет совсем.
+fn meter_rect(band: Rect, _level: u8) -> Option<Rect> {
+    if band.w <= 0.0 {
+        return None;
+    }
+    Some(Rect::new(
+        band.x,
+        band.y + (band.h - METER_H) / 2.0,
+        band.w,
+        METER_H,
+    ))
+}
+
+/// Ширина заливки по уровню в процентах.
+fn meter_fill(track: Rect, level: u8) -> f32 {
+    track.w * f32::from(level.min(100)) / 100.0
+}
+
+/// Полоса громкости: заполнение по уровню, у заглушенного устройства вместо
+/// заливки — приглушённая. Сама полоса рисуется всегда: иначе строка без
+/// выбора не сказала бы, где сейчас звук.
+fn meter(
+    view: &mut MenuView<'_>,
+    rect: Rect,
+    label_rect: Rect,
+    level: u8,
+    muted: bool,
+    selected: bool,
+) {
+    let band = center_band(
+        meter_track(label_rect, rect.right()),
+        view.scale.label * 2.0,
+    );
+    let Some(track_rect) = meter_rect(band, level) else {
+        return;
+    };
+    fill_round_rect(
+        view.pixmap,
+        track_rect.x * SCALE,
+        track_rect.y * SCALE,
+        track_rect.w * SCALE,
+        track_rect.h * SCALE,
+        METER_H * SCALE / 2.0,
+        view.ui.border_subtle,
+    );
+    let filled = meter_fill(track_rect, level);
+    if filled > 0.5 {
+        let color = if muted {
+            view.ui.muted
+        } else if selected {
+            view.ui.accent
+        } else {
+            view.ui.border
+        };
+        fill_round_rect(
+            view.pixmap,
+            track_rect.x * SCALE,
+            track_rect.y * SCALE,
+            filled * SCALE,
+            track_rect.h * SCALE,
+            METER_H * SCALE / 2.0,
+            color,
+        );
+    }
 }
 
 /// Правая часть строки: круг тумблера, круглая миниатюра пикера, значение или
@@ -1139,6 +1230,64 @@ mod tests {
             frame.items.len(),
             "окно должно упереться в конец списка, а не оставить пустоты"
         );
+    }
+
+    /// Геометрия полосы: у строки громкости место под неё есть, заливка
+    /// растёт с уровнем и не вылезает за дорожку. Проверяется числами по
+    /// настоящей геометрии строки, а не пикселями: цвет после смешивания —
+    /// плохая мера «нарисовано».
+    #[test]
+    fn meter_tracks_the_level_and_fits_the_row() {
+        let label = label_rect_for(true);
+        let track = meter_track(label, CARD_W);
+        assert!(track.w > 0.0, "у строки громкости место под полосу есть");
+        assert!(
+            track.w <= METER_W + spacing::MD + 1.0,
+            "полоса не шире задуманного: {}",
+            track.w
+        );
+        assert_eq!(meter_fill(track, 0), 0.0, "ноль процентов — пусто");
+        assert_eq!(meter_fill(track, 50), track.w / 2.0, "половина — половина");
+        assert_eq!(meter_fill(track, 100), track.w, "сотня — вся дорожка");
+        assert_eq!(meter_fill(track, 250), track.w, "выше сотни не вылезает");
+        assert!(
+            meter_fill(track, 90) > meter_fill(track, 40),
+            "больше уровень — шире заливка"
+        );
+        // У обычной строки справа шеврон, а не полоса: места под дорожку
+        // там нет, и она не должна рисоваться поверх названия.
+        let plain = meter_track(label_rect_for(false), CARD_W);
+        assert!(
+            plain.w <= spacing::MD,
+            "у обычной строки полосы нет: {}",
+            plain.w
+        );
+        // Совсем узкая строка: места не остаётся даже при `None` слева.
+        let squeezed = Rect::new(
+            60.0,
+            0.0,
+            CARD_W - PAD - VALUE_W - spacing::SM - 60.0,
+            ROW_H,
+        );
+        assert_eq!(
+            meter_fill(meter_track(squeezed, CARD_W), 50),
+            0.0,
+            "наезжать на значение нельзя"
+        );
+        assert!(meter_rect(Rect::new(0.0, 0.0, 0.0, 0.0), 50).is_none());
+    }
+
+    /// Настоящая геометрия названия в строке: строки громкости резервируют
+    /// под полосу больше, чем обычные.
+    fn label_rect_for(volume: bool) -> Rect {
+        let right = CARD_W - PAD;
+        let trailing = if volume {
+            METER_W + VALUE_W + spacing::SM
+        } else {
+            CHEVRON_W + VALUE_W + spacing::SM
+        };
+        let label_x = PAD + ICON + spacing::MD;
+        Rect::new(label_x, 0.0, (right - trailing - label_x).max(0.0), ROW_H)
     }
 
     /// Меню из `count` строк для проверки навигации.
@@ -1430,6 +1579,8 @@ mod tests {
                     value: String::new(),
                     caption: None,
                     keywords: &[],
+                    level: None,
+                    muted: false,
                     kind: super::super::item::ItemKind::Leaf,
                     origin: super::super::item::Origin { depth: 0, index },
                 })
@@ -1468,6 +1619,8 @@ mod tests {
                     value: String::new(),
                     caption: None,
                     keywords: &[],
+                    level: None,
+                    muted: false,
                     kind: super::super::item::ItemKind::Leaf,
                     origin: super::super::item::Origin { depth: 0, index },
                 })

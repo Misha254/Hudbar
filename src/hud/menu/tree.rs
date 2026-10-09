@@ -41,6 +41,15 @@ pub enum NodeKind {
     },
     /// Внешний выбор: обои, приложение, звук.
     Picker(&'static str),
+    /// Строка-ползунок громкости: полоса, mute по Enter, шаг стрелками.
+    Volume {
+        /// Команда уменьшения.
+        down: super::system::CommandSpec,
+        /// Команда увеличения.
+        up: super::system::CommandSpec,
+        /// Переключение mute.
+        mute: super::system::CommandSpec,
+    },
     /// Динамический раздел: строки появляются после опроса системы через
     /// `system::ProviderSlot`. В дереве — только вход, содержимое не хранится.
     Dynamic {
@@ -83,6 +92,10 @@ pub struct Node {
     /// «Выключение», а не самостоятельные пункты, и в общем списке они были бы
     /// шумом из двух одинаковых «Отмена».
     pub search: bool,
+    /// Уровень для полосы, проценты 0..=100. `None` — полосы нет.
+    pub level: Option<u8>,
+    /// Заглушено ли устройство: у полосы горит значок mute.
+    pub muted: bool,
 }
 
 impl Node {
@@ -97,6 +110,8 @@ impl Node {
             keywords: &[],
             value: None,
             search: true,
+            level: None,
+            muted: false,
         }
     }
 
@@ -111,6 +126,8 @@ impl Node {
             keywords: &[],
             value: None,
             search: true,
+            level: None,
+            muted: false,
         }
     }
 
@@ -125,6 +142,8 @@ impl Node {
             keywords: &[],
             value: None,
             search: true,
+            level: None,
+            muted: false,
         }
     }
 
@@ -145,6 +164,8 @@ impl Node {
             keywords: &[],
             value: None,
             search: true,
+            level: None,
+            muted: false,
         }
     }
 
@@ -178,6 +199,8 @@ impl Node {
             keywords: &[],
             value: None,
             search: true,
+            level: None,
+            muted: false,
         }
     }
 
@@ -192,6 +215,8 @@ impl Node {
             keywords: &[],
             value: None,
             search: true,
+            level: None,
+            muted: false,
         }
     }
 
@@ -206,6 +231,8 @@ impl Node {
             keywords: &[],
             value: None,
             search: true,
+            level: None,
+            muted: false,
         }
     }
 
@@ -220,6 +247,8 @@ impl Node {
             keywords: &[],
             value: None,
             search: true,
+            level: None,
+            muted: false,
         }
     }
 
@@ -242,6 +271,30 @@ impl Node {
     /// Добавляет условие показа.
     pub fn when(mut self, visible: fn() -> bool) -> Self {
         self.visible = Some(visible);
+        self
+    }
+
+    /// Строка-ползунок громкости: полоса, mute по Enter, шаг стрелками.
+    pub fn volume(
+        icon: &'static str,
+        title: &str,
+        down: super::system::CommandSpec,
+        up: super::system::CommandSpec,
+        mute: super::system::CommandSpec,
+    ) -> Self {
+        Self {
+            icon,
+            title: title.to_string(),
+            kind: NodeKind::Volume { down, up, mute },
+            ..Self::action(icon, title, Action::Back)
+        }
+    }
+
+    /// Уровень и mute для полоски. Значение живёт в узле, а меняет его
+    /// команда из строки: так полоса рисуется по тому, что вернул опрос.
+    pub fn with_level(mut self, level: u8, muted: bool) -> Self {
+        self.level = Some(level.min(100));
+        self.muted = muted;
         self
     }
 
@@ -294,6 +347,7 @@ pub fn node_value(kind: &NodeKind, lang: Language) -> String {
         | NodeKind::Action(_)
         | NodeKind::Picker(_)
         | NodeKind::Dynamic { .. }
+        | NodeKind::Volume { .. }
         | NodeKind::Info => String::new(),
         NodeKind::Toggle { get, .. } => {
             let on = get();
@@ -358,6 +412,11 @@ pub fn item_kind(kind: &NodeKind) -> ItemKind {
         NodeKind::Dynamic { .. } => ItemKind::Submenu,
         NodeKind::Info => ItemKind::Leaf,
         NodeKind::Action(action) => ItemKind::Action(action.clone()),
+        NodeKind::Volume { down, up, mute } => ItemKind::Volume {
+            down: down.clone(),
+            up: up.clone(),
+            mute: mute.clone(),
+        },
         NodeKind::Toggle { get, set } => ItemKind::Toggle {
             get: *get,
             set: *set,
@@ -400,6 +459,10 @@ pub fn row_for(node: &Node, depth: usize, index: usize, lang: Language) -> Item 
         caption: None,
         keywords: node.keywords,
         kind: item_kind(&node.kind),
+        // Уровень и mute живут в узле: полоса рисуется по ним, а сами
+        // значения меняет команда из строки.
+        level: node.level,
+        muted: node.muted,
         origin: Origin { depth, index },
     }
 }

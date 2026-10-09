@@ -303,7 +303,7 @@ impl MenuApp {
             MenuInput::Move(delta) => self.menu.move_sel(delta),
             // `Nudge` в этом окне бессмысленно: порядок модулей панели не
             // входит в его дерево, поэтому нажатие не делает ничего.
-            MenuInput::Nudge(_) => {}
+            MenuInput::Nudge(_) | MenuInput::Volume(_) => {}
             MenuInput::Page(lines) => self.menu.scroll(lines * PAGE),
             MenuInput::Jump(end) => {
                 let last = self.menu.current().list.len().saturating_sub(1);
