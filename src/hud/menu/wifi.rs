@@ -40,11 +40,6 @@ use std::time::Duration;
 /// отпустит пользователя и worker останется висеть.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(25);
 
-/// Сколько сетей показывать прямо в разделе. Остальные — в подменю «Все
-/// сети»: поиск меню по динамическим строкам не ходит, а молча терять
-/// сети нельзя.
-pub const MAX_INLINE_NETWORKS: usize = 12;
-
 /// Тип защиты сети: открытая или с паролем.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Security {
@@ -732,7 +727,7 @@ fn status_row(lang: Language, snapshot: &WifiSnapshot) -> Node {
     }
 }
 
-/// Подменю со всеми сетями: тот же список, что и в разделе, но без обрезки.
+/// Подменю со всеми доступными сетями.
 fn all_networks_submenu(
     lang: Language,
     snapshot: &WifiSnapshot,
@@ -747,11 +742,11 @@ fn all_networks_submenu(
         .map(|net| net_row(lang, net, active_uuid))
         .collect();
     let title = if ru(lang) {
-        format!("Все сети ({})", networks.len())
+        format!("Доступные сети ({})", networks.len())
     } else {
-        format!("All networks ({})", networks.len())
+        format!("Available networks ({})", networks.len())
     };
-    Some(Node::submenu(settings_icons::NETWORK, &title, children).with_id("wifi/all"))
+    Some(Node::submenu(settings_icons::NETWORK, &title, children).with_id("wifi/networks"))
 }
 
 /// Строки раздела «Wi-Fi» из готового снимка.
@@ -771,16 +766,10 @@ pub fn build_nodes(snapshot: &WifiSnapshot, lang: Language) -> Vec<Node> {
             .active
             .as_ref()
             .and_then(|active| active.uuid.as_deref());
-        let inline = networks
-            .iter()
-            .take(MAX_INLINE_NETWORKS)
-            .map(|net| net_row(lang, net, active_uuid))
-            .collect::<Vec<Node>>();
-        let hidden = networks.len().saturating_sub(MAX_INLINE_NETWORKS);
-        rows.extend(inline);
-        if hidden > 0
-            && let Some(submenu) = all_networks_submenu(lang, snapshot, active_uuid)
-        {
+        // Сети живут в подменю, а не в корне раздела: в корне статусная
+        // строка («Wi-Fi: вкл · сеть») сливалась с первой точкой из списка —
+        // отличать их приходилось по иконке. Так же устроен Bluetooth.
+        if let Some(submenu) = all_networks_submenu(lang, snapshot, active_uuid) {
             rows.push(submenu);
         }
     }
@@ -1074,7 +1063,9 @@ mod tests {
             "переключателя по недостоверному состоянию нет: {titles:?}"
         );
         assert!(
-            titles.iter().any(|t| t.contains("My:Net")),
+            net_rows(&rows)
+                .iter()
+                .any(|row| row.title.contains("My:Net")),
             "прочитанные сети показываются: {titles:?}"
         );
     }
@@ -1310,8 +1301,8 @@ mod tests {
             networks: Block::Ready(parse_networks(LISTS)),
         };
         let rows = build_nodes(&snapshot, Language::Ru);
-        let protected = rows
-            .iter()
+        let protected = net_rows(&rows)
+            .into_iter()
             .find(|row| row.title.starts_with("Дом"))
             .expect("защищённая сеть без профиля в списке");
         match &protected.kind {
@@ -1439,8 +1430,9 @@ mod tests {
             Language::Ru,
         );
         let ids = |rows: Vec<Node>| {
-            rows.into_iter()
-                .map(|n| n.identity().to_string())
+            net_rows(&rows)
+                .into_iter()
+                .map(|row| row.identity().to_string())
                 .collect::<Vec<_>>()
         };
         let (first, second) = (ids(first), ids(second));
@@ -1448,8 +1440,23 @@ mod tests {
         assert!(second.contains(&"wifi/net/My:Net".to_string()));
     }
 
+    /// Сети раздела: подменю целиком, без обрезки.
+    fn net_rows(rows: &[Node]) -> Vec<&Node> {
+        let menu = rows
+            .iter()
+            .find(|row| row.identity() == "wifi/networks")
+            .expect("подменю со списком сетей");
+        match &menu.kind {
+            super::super::tree::NodeKind::Submenu(children) => children.iter().collect(),
+            other => panic!("ожидалось подменю, {other:?}"),
+        }
+    }
+
+    /// Сети не мешаются в корне раздела: там только статус, подменю, ошибка
+    /// и обновление. Раньше первая точка стояла вплотную к строке статуса, и
+    /// отличать их приходилось по иконке.
     #[test]
-    fn inline_list_is_capped_and_the_rest_lives_in_a_submenu() {
+    fn networks_live_in_a_submenu_and_not_in_the_root() {
         let many: String = (0..20)
             .map(|index| format!(" :net{index}:{}:WPA2:AA:BB\n", 20 + index))
             .collect();
@@ -1460,12 +1467,23 @@ mod tests {
             networks: Block::Ready(parse_networks(&many)),
         };
         let rows = build_nodes(&snapshot, Language::Ru);
-        let inline = rows
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.identity().starts_with("wifi/net/")),
+            "в корне не должно быть сетей: {:?}",
+            rows.iter().map(|row| row.identity()).collect::<Vec<_>>()
+        );
+        let menu = rows
             .iter()
-            .filter(|r| r.identity().starts_with("wifi/net/"))
-            .count();
-        assert_eq!(inline, MAX_INLINE_NETWORKS);
-        assert!(rows.iter().any(|r| r.identity() == "wifi/all"));
+            .find(|row| row.identity() == "wifi/networks")
+            .expect("подменю со списком сетей");
+        let title = &menu.title;
+        assert_eq!(title, "Доступные сети (20)");
+        let super::super::tree::NodeKind::Submenu(children) = &menu.kind else {
+            panic!("ожидалось подменю, {:?} ({title})", menu.kind);
+        };
+        assert_eq!(children.len(), 20, "в подменю все сети, без обрезки");
     }
 
     #[test]

@@ -7,6 +7,7 @@
 Telegram-мост: opencode с телефона — промпты, сессии, модели, права и веб-панель.
 
 ### Changed
+- Список доступных Wi-Fi точек переехал в подменю «Доступные сети (N)», как «Сопряжённые» и «Найденные» в Bluetooth. В корне раздела остались статус, подменю, ошибка и обновление: раньше первая точка стояла вплотную к строке «Wi-Fi: вкл · сеть» и отличалась от неё только иконкой. Списка в корне больше нет — точек любое количество, обрезка на 12 убрана.
 - Menu card transparency now matches the panel exactly (0.9 instead of 0.94). The two windows sit side by side on screen, and the four-point difference read as one being opaque and the other not.
 
 ### Fixed
