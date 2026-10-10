@@ -93,9 +93,11 @@ mod log;
 #[allow(dead_code)]
 #[path = "../hud/menu/mod.rs"]
 mod menu;
-#[allow(dead_code)]
 #[path = "../hud/palette.rs"]
 mod palette;
+#[allow(dead_code)]
+#[path = "../hud/power_profile.rs"]
+mod power_profile;
 #[path = "../hud/repeat.rs"]
 mod repeat;
 #[allow(dead_code)]

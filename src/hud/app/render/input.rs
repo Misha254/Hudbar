@@ -268,7 +268,10 @@ impl App {
                     "DND" => crate::hud::actions::dnd_toggle(),
                     "Звук" => crate::hud::actions::vol_mute_toggle(&self.shared),
                     "Микрофон" => crate::hud::actions::mic_mute_toggle(&self.shared),
-                    "Обои" => crate::hud::actions::spawn("wall.sh"),
+                    // Раньше это открывало rofi-пикер из `wall.sh`. Теперь
+                    // выбор обоев — своё окно HUDbar, а `wall.sh` остался
+                    // только применением (awww + matugen).
+                    "Обои" => crate::hud::actions::spawn("hud-wallpaper"),
                     "Питание" => {
                         crate::hud::actions::spawn_with_args("hud-menu", &["power"])
                     }

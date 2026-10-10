@@ -9,7 +9,7 @@
 //! `Exclusive`: ждать их (`Run`) значило бы повесить и меню, и rofi. Поэтому
 //! скрипты с интерфейсом запускаются откреплённо (`Spawn`) с закрытием меню,
 //! а `Run` остаётся быстрым неинтерактивным командам (`wall.sh --random`,
-//! `power-cycle.sh`, `dnd`-переключения): меню ждёт завершения, но остаётся
+//! переключатели без внешней команды): меню ждёт завершения, но остаётся
 //! открытым и показывает статус.
 
 use super::super::data::oneshot;
@@ -114,11 +114,27 @@ fn has_capture() -> bool {
 fn has_record() -> bool {
     has_script("record.sh")
 }
-fn has_power_cycle() -> bool {
-    has_script("power-cycle.sh")
+/// Профиль питания есть не везде: без `/sys`-файла и без сервиса
+/// PowerProfiles пункт скрывается, а не падает по `Enter`.
+fn has_power_profile() -> bool {
+    crate::power_profile::supported()
+}
+
+/// Правое значение строки профиля: текущий, а не название действия.
+fn power_profile_value() -> String {
+    let ru = super::settings::load().language == Language::Ru;
+    crate::power_profile::current_label(ru).to_string()
 }
 /// Замок: `dynalock.sh` умеет гасить экран и запускать блокировку. Без него
 /// пункт скрыт, а не показывает ошибку по нажатию.
+/// Гибернация есть не на каждой машине: без `disk` в `/sys/power/state`
+/// ядро не умеет писать образ в swap, и строка была бы обещанием, которое
+/// не выполнится.
+fn has_hibernate() -> bool {
+    std::fs::read_to_string("/sys/power/state")
+        .is_ok_and(|states| states.split_whitespace().any(|state| state == "disk"))
+}
+
 fn has_dynalock() -> bool {
     has_script("dynalock.sh")
 }
@@ -527,6 +543,7 @@ fn dnd_row(lang: Language) -> Node {
         values::dnd,
         values::set_dnd,
     )
+    .with_id("system/dnd")
     .search_as(&["dnd", "днд", "do not disturb"])
 }
 
@@ -718,13 +735,16 @@ fn system_section(lang: Language) -> Node {
             values::coffee,
             values::set_coffee,
         )
+        .with_id("system/coffee")
         .search_as(&["coffee", "кофе", "caffeine"]),
         Node::action(
             settings_icons::BATTERY,
             t("Режим питания", "Power profile"),
-            Action::Run("power-cycle.sh", &[]),
+            Action::Native(super::action::Native::PowerProfileCycle),
         )
-        .when(has_power_cycle)
+        .with_value(power_profile_value)
+        .with_id("system/power-profile")
+        .when(has_power_profile)
         .search_as(&["power", "питание", "профиль", "battery"]),
     ];
     // Панель управления дописывается отдельно: целей может не оказаться
@@ -880,6 +900,16 @@ fn power_section(lang: Language) -> Node {
                 Action::Niri(&["msg", "action", "quit", "--skip-confirmation"]),
             )
             .search_as(&["logout", "выход", "выйти"]),
+            confirm_node(
+                settings_icons::HIBERNATE,
+                t("Гибернация?", "Hibernate?"),
+                t("Да, в спячку", "Yes, hibernate"),
+                t("Отмена", "Cancel"),
+                "systemctl",
+                &["hibernate"],
+            )
+            .when(has_hibernate)
+            .search_as(&["hibernate", "гибернация", "спячка", "suspend-to-disk"]),
             confirm_node(
                 settings_icons::REBOOT,
                 t("Перезагрузить?", "Reboot?"),
@@ -1269,6 +1299,49 @@ mod tests {
     /// Раздел «Питание»: обратимые действия в начале, необратимые — в конце
     /// и обязательно за вопросом. Проверка по порядку, а не по наличию:
     /// список из трёх строк, где «Выключение» стоит первым, опасен.
+    /// Гибернация показывается только там, где ядро её умеет: решение
+    /// принимает `/sys/power/state`, а не наличие `systemctl`.
+    #[test]
+    fn hibernate_follows_the_kernel_states() {
+        let states = |text: &str| text.split_whitespace().any(|state| state == "disk");
+        assert!(states("freeze mem disk"), "диск есть — гибернация есть");
+        assert!(!states("freeze mem"), "без диска обещать нечего");
+    }
+
+    /// Строка гибернации в «Питание» — с вопросом и `systemctl hibernate`,
+    /// и на этой машине скрыта: `/sys/power/state` без `disk`.
+    #[test]
+    fn hibernate_row_is_a_confirmed_systemctl_call() {
+        use super::super::tree::NodeKind;
+        let power = tree_in(Language::Ru)
+            .into_iter()
+            .find(|node| node.identity() == "Питание")
+            .expect("раздел «Питание»");
+        let rows = power.children().expect("у раздела есть дети");
+        let hibernate = rows.iter().find(|node| node.title == "Гибернация?");
+        match hibernate {
+            Some(row) => {
+                let NodeKind::Submenu(answers) = &row.kind else {
+                    panic!("ожидался вопрос, {:?}", row.kind);
+                };
+                let yes = answers
+                    .iter()
+                    .find(|answer| answer.title.starts_with("Да"))
+                    .expect("есть подтверждение");
+                let NodeKind::Action(Action::Spawn(program, args)) = &yes.kind else {
+                    panic!("подтверждение должно звать systemctl, {:?}", yes.kind);
+                };
+                assert_eq!(*program, "systemctl");
+                assert_eq!(*args, ["hibernate"]);
+            }
+            // На машине без гибернации строки нет — и это правильно.
+            None => assert!(
+                !has_hibernate(),
+                "строка спрятана, хотя ядро гибернацию умеет"
+            ),
+        }
+    }
+
     #[test]
     fn power_section_puts_destructive_rows_last_and_behind_a_question() {
         use super::super::tree::NodeKind;

@@ -84,9 +84,11 @@ mod log;
 #[allow(dead_code)]
 #[path = "../hud/menu/mod.rs"]
 mod menu;
-#[allow(dead_code)]
 #[path = "../hud/palette.rs"]
 mod palette;
+#[allow(dead_code)]
+#[path = "../hud/power_profile.rs"]
+mod power_profile;
 #[path = "../hud/repeat.rs"]
 mod repeat;
 #[allow(dead_code)]
@@ -152,6 +154,9 @@ hud-menu-rs — меню HUDbar
       keybinds, system, power, about. Вложенный уровень — через слэш:
       hud-menu-rs system/control откроет «Панель управления» сразу.
       Неизвестное имя открывает корень.
+  hud-menu-rs --action <личность строки>
+      Выполнить строку меню по её личности, не открывая окно. Для биндов,
+      которым нужно одно нажатие: hud-menu-rs --action system/dnd.
   hud-menu-rs --snapshot <root|style|search|empty> <out.png> [--theme normal|pixel]
       Снимок состояния без Wayland.
   hud-menu-rs --all <каталог>
@@ -814,6 +819,47 @@ extern "C" fn on_sigterm(_signal: i32) {
     SIGNAL_EXIT.store(true, Ordering::Relaxed);
 }
 
+/// Действие по личности строки, без окна: бинд зовёт HUDbar напрямую, а
+/// скрипт-обёртка ему не нужен.
+mod action {
+    use crate::menu::tree::{Node, NodeKind};
+
+    pub fn run_by_id(id: &str) -> Result<(), String> {
+        if id.is_empty() {
+            return Err("--action требует личность строки".to_string());
+        }
+        let root = crate::menu::real::tree();
+        let Some(kind) = find(&root, id) else {
+            return Err(format!("нет строки {id}"));
+        };
+        match kind {
+            NodeKind::Action(action) => action.perform(),
+            NodeKind::Toggle { get, set } => {
+                set(!get());
+                Ok(())
+            }
+            _ => Err(format!("строка {id} не действие")),
+        }
+        .map_err(|error| format!("{id}: {error}"))
+    }
+
+    /// Поиск по всему дереву: строка может лежать во вложенном разделе, как
+    /// `system/dnd` в «Системе».
+    pub(super) fn find<'a>(nodes: &'a [Node], id: &str) -> Option<&'a NodeKind> {
+        for node in nodes {
+            if node.identity() == id {
+                return Some(&node.kind);
+            }
+            if let NodeKind::Submenu(children) = &node.kind
+                && let Some(found) = find(children, id)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "-h" || arg == "--help") {
@@ -826,6 +872,7 @@ fn main() {
             "--all" => render_all(args.get(1).map(String::as_str)),
             "--real" => render_real(args.get(1).map(String::as_str)),
             "--icons" => render_icons(args.get(1).map(String::as_str)),
+            "--action" => action::run_by_id(args.get(1).map(String::as_str).unwrap_or("")),
             _ => run(args.first().map(String::as_str).unwrap_or("")),
         };
         if let Err(error) = outcome {
@@ -1127,4 +1174,25 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod action_tests {
+    #[test]
+    fn the_tree_has_rows_a_bind_can_call_by_id() {
+        // Бинды зовут `--action <id>`, поэтому у каждой такой строки должна
+        // быть личность, иначе нажатие молча ничего не сделает.
+        for id in ["system/dnd", "system/coffee", "system/power-profile"] {
+            let root = crate::menu::real::tree();
+            assert!(
+                super::action::find(&root, id).is_some(),
+                "нет строки {id} для бинда"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_id_is_an_error_rather_than_a_silent_no_op() {
+        assert!(super::action::find(&crate::menu::real::tree(), "system/нет").is_none());
+    }
 }

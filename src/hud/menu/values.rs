@@ -281,13 +281,84 @@ pub fn coffee() -> bool {
     oneshot::coffee_on()
 }
 
-/// Переключение кофе-мода. Цель игнорируется намеренно: скрипт сам
-/// переключает состояние, а `enter` всегда зовёт `set` с противоположным —
-/// этого достаточно, чтобы скрипт сработал ровно один раз.
+/// Переключение кофе-мода. Цель игнорируется намеренно: `enter` всегда зовёт
+/// `set` с противоположным, а состояние переключается здесь же — по файлу в
+/// рантайме, как это делал `coffee-toggle.sh`.
+///
+/// Кофе-режим — это не только галочка: он держит `swayidle` убитым, чтобы
+/// экран не гас и компьютер не засыпал. Поэтому выключение возвращает
+/// `sleep.sh`, а включение его глушит. Логика ровно та же, что была в скрипте,
+/// только без оболочки.
 pub fn set_coffee(_on: bool) {
-    if !log::status("coffee-toggle.sh", &[]) {
-        log::warn("coffee-toggle.sh не запустился");
+    let dir = oneshot::runtime_dir();
+    let state = dir.join("hud-coffee");
+    let pid_file = dir.join("hud-idle.pid");
+    let sleep = idle_sleep_running(&pid_file);
+    if state.is_file() {
+        let _ = std::fs::remove_file(&state);
+        if !sleep {
+            spawn_sleep();
+        }
+        dunstify("Caffeine OFF", "Idle management enabled");
+    } else {
+        if let Err(error) = std::fs::write(&state, "") {
+            log::warn(format!("состояние кофе-мода не записать: {error}").as_str());
+            return;
+        }
+        if sleep {
+            stop_idle(&pid_file);
+        }
+        dunstify("☕ Caffeine ON", "Idle, dim and suspend disabled");
     }
+}
+
+/// Жив ли `swayidle` из `sleep.sh`: pid-файл может быть протухшим, поэтому
+/// проверяем имя процесса, а не только наличие файла.
+fn idle_sleep_running(pid_file: &std::path::Path) -> bool {
+    let Ok(pid) = std::fs::read_to_string(pid_file) else {
+        return false;
+    };
+    let pid = pid.trim();
+    if pid.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|comm| comm.trim() == "swayidle")
+}
+
+/// Снять ожидание сна: убить `swayidle` и убрать pid-файл, чтобы `sleep.sh`
+/// не поднял второй экземпляр.
+fn stop_idle(pid_file: &std::path::Path) {
+    if let Ok(pid) = std::fs::read_to_string(pid_file) {
+        let _ = std::fs::remove_file(pid_file);
+        let pid: i32 = pid.trim().parse().unwrap_or(0);
+        if pid > 0 {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGTERM,
+            );
+        }
+    }
+}
+
+/// Вернуть управление сном: `sleep.sh` сам пишет pid-файл, поэтому просто
+/// запускаем его отдельной сессией — как это делал скрипт через `setsid -f`.
+fn spawn_sleep() {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let script = std::path::PathBuf::from(home).join(".local/bin/sleep.sh");
+    let _ = std::process::Command::new("setsid")
+        .arg("-f")
+        .arg(&script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// Уведомление о смене кофе-режима: те же слова, что слал скрипт.
+fn dunstify(summary: &str, body: &str) {
+    log::status("dunstify", &["-a", "caffeine", summary, body]);
 }
 
 /// Идёт ли запись экрана.

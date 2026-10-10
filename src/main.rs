@@ -1,4 +1,10 @@
 mod hud;
+// Меню обращается к профилю питания как `crate::power_profile`: в бинарях это
+// плоский модуль у корня, а панель держит всё в `hud`. Поэтому и здесь он
+// объявлен рядом с `hud`, а не внутри него.
+#[allow(dead_code)]
+#[path = "hud/power_profile.rs"]
+mod power_profile;
 
 use std::os::fd::AsFd;
 use std::sync::Arc;

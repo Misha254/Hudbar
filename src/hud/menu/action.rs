@@ -20,6 +20,35 @@ use super::super::log;
 use super::super::settings::Module;
 use super::system::{CommandOutput, CommandRunner, CommandSpec, ProviderKey};
 
+/// Операции без внешней команды: их исполняет сам HUDbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Native {
+    /// Следующий профиль питания по кругу.
+    PowerProfileCycle,
+}
+
+impl Native {
+    fn perform(self, ru: bool) -> Result<(), String> {
+        match self {
+            Native::PowerProfileCycle => {
+                let profile = crate::power_profile::cycle()?;
+                let _ = Self::status(profile, ru);
+                Ok(())
+            }
+        }
+    }
+
+    /// Что показать в статусе: новое значение операции, а не её имя.
+    pub fn status(profile: &str, ru: bool) -> String {
+        let label = crate::power_profile::label(profile, ru);
+        if ru {
+            format!("Режим питания: {label}")
+        } else {
+            format!("Power profile: {label}")
+        }
+    }
+}
+
 /// Операция над состоянием системы.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Live {
@@ -137,6 +166,9 @@ pub enum Action {
         /// Чей слот обновить после успеха.
         refresh: ProviderKey,
     },
+    /// Операция, которую выполняет сам HUDbar: внешней команды за ней нет,
+    /// поэтому её нельзя выразить через `Live` — тот всегда про программу.
+    Native(Native),
     /// Явное обновление динамического раздела из строки «Обновить».
     /// Выполняется только через `Menu::enter`: прямой `perform` — no-op,
     /// потому что слот живёт в меню, а не в исполнителе.
@@ -163,6 +195,9 @@ impl Action {
         match self {
             Action::Patch(patch) => patch.label(),
             Action::Live(live) => live.label().to_string(),
+            Action::Native(Native::PowerProfileCycle) => {
+                crate::power_profile::current_label(true).to_string()
+            }
             Action::Run(program, _) | Action::Spawn(program, _) => (*program).to_string(),
             Action::Niri(args) => format!("niri {}", args.join(" ")),
             Action::Back => "Отмена".to_string(),
@@ -201,12 +236,21 @@ impl Action {
         }
     }
 
+    /// Операция без внешней команды — для `--action`, который зовёт её по
+    /// личности строки из бина.
+    pub fn native(&self) -> Option<Native> {
+        match self {
+            Action::Native(native) => Some(*native),
+            _ => None,
+        }
+    }
+
     /// Имя внешней команды для теста: у `Run` и `Spawn` это имя программы, у
     /// `Niri` — первое слово аргументов. Пусто у `Patch` и `Live`, потому что
     /// там команда не нужна.
     pub fn command(&self) -> Option<&'static str> {
         match self {
-            Action::Patch(_) | Action::Live(_) | Action::RestartHudbar => None,
+            Action::Patch(_) | Action::Live(_) | Action::RestartHudbar | Action::Native(_) => None,
             Action::Run(program, _) | Action::Spawn(program, _) => Some(program),
             Action::Niri(args) => args.first().copied(),
             // Возврат уровня решает меню, а не исполнитель: программы нет.
@@ -228,7 +272,7 @@ impl Action {
     /// применяется. Скрипты и настройки — нет: человек продолжает выбирать.
     pub fn closes_menu(&self) -> bool {
         match self {
-            Action::Patch(_) | Action::Live(_) => false,
+            Action::Patch(_) | Action::Live(_) | Action::Native(_) => false,
             Action::Run(_, _) => false,
             Action::Spawn(_, _) | Action::Niri(_) | Action::RestartHudbar => true,
             // Возврат уровня меню не закрывает: это «Отмена», а не выход.
@@ -257,6 +301,7 @@ impl Action {
     pub fn perform_with(&self, runner: &dyn Runner) -> Result<(), String> {
         match self {
             Action::Patch(patch) => runner.save(patch),
+            Action::Native(native) => native.perform(true),
             Action::Live(live) => {
                 let (program, args) = live.command();
                 let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();

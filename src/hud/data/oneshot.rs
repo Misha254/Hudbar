@@ -285,17 +285,21 @@ fn read_trim(path: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
-/// Включён ли кофе-мод: `coffee-toggle.sh` хранит состояние в `hud-coffee`
+/// Включён ли кофе-мод: состояние лежит в `hud-coffee` в рантайме
 /// в runtime-каталоге пользователя. Меню читает тот же файл, чтобы значение не
 /// зависело от живого списка процессов.
 pub fn coffee_on() -> bool {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+    coffee_state_present(&runtime_dir().join("hud-coffee"))
+}
+
+/// Каталог состояния в рантайме: XDG_RUNTIME_DIR, иначе `/run/user/<uid>`.
+pub fn runtime_dir() -> std::path::PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
         .map(std::path::PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| {
             std::path::PathBuf::from(format!("/run/user/{}", nix::unistd::getuid().as_raw()))
-        });
-    coffee_state_present(&dir.join("hud-coffee"))
+        })
 }
 
 fn coffee_state_present(path: &std::path::Path) -> bool {
