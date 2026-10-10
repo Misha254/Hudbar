@@ -6,6 +6,9 @@
 
 Telegram-мост: opencode с телефона — промпты, сессии, модели, права и веб-панель.
 
+### Removed
+- Мост Telegram удалён: `hud-telegram-rs`, модуль `src/hud/telegram/` (около 9800 строк), systemd-юниты `hud-telegram` и `opencode-serve`, Mini App и раздел про мост из README. Код остался в ветке `telegram-bridge-backup`. Токен бота в `~/.config/hudbar/telegram.json` оставлен на будущее.
+
 ### Changed
 - `hud-menu-rs` понимает вложенный уровень через слэш: `hud-menu-rs system/control` открывает «Панель управления» сразу. Бинд `super+Escape` переведён с `control.sh` на этот вызов, сам скрипт удалён.
 - «Панель управления» больше не запускает `control.sh` с лаунчером rofi: это подменю в меню со списком конфигов, а строки открывают их в `kitty -e nvim`. Из списка ушли noctalia и noctalia-config, добавились waybar, dunst, kitty, `niri/binds.kdl` и сам проект hudbar. Пути, которых нет на диске, строкой не показываются.

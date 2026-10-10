@@ -41,10 +41,10 @@ chromium. Не хватает:
   слушает `session.idle`, `permission.updated`, `question.asked` и `session.error`
   и дёргает `notify-send` в dunst. Пункт меню «запустить opencode» остался
   отдельной мелочью, плагин ставится руками.
-- Мост Telegram: сделан (релиз 0.7.0). `hud-telegram-rs` + два systemd-юнита,
-  команды и промпты с телефона, живые карточки, смена модели, меню кнопками и
-  веб-панель Mini App за `tailscale serve`. Открытое: туннель и токен панели
-  настраиваются руками, в README раздел про мост добавлен.
+- Мост Telegram: удалён 12 октября 2026 по решению владельца — код,
+  `hud-telegram-rs`, systemd-юниты `hud-telegram` и `opencode-serve` и Mini App
+  вынесены из сборки. Ветка `telegram-bridge-backup` сохраняет прежнее
+  состояние; идея, как управлять opencode с телефона иначе, пока открыта.
 - Secret hardening: инфраструктура stdin **готова и покрыта тестами** —
   `SecretData` с красным `Debug`, `CommandSpec::stdin`, `stdin_bytes`,
   и `run_with_timeout_stdin`, который пишет секрет в pipe отдельным потоком и

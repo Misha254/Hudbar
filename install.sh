@@ -83,7 +83,7 @@ install_default_file() {
 log "building release binaries"
 run cargo build --release --bins --manifest-path "$ROOT_DIR/Cargo.toml"
 
-for binary in hudbar hud-menu-rs hud-keybinds-rs hud-yazibinds-rs hud-vpn-rs hud-telegram-rs; do
+for binary in hudbar hud-menu-rs hud-keybinds-rs hud-yazibinds-rs hud-vpn-rs; do
     install_file "$ROOT_DIR/target/release/$binary" "$PREFIX/bin/$binary" 0755
 done
 
@@ -100,13 +100,6 @@ fi
 
 install_default_file "$ROOT_DIR/config/hudbar/settings.json" "$CONFIG_HOME/hudbar/settings.json"
 
-# Мост Telegram: systemd-юниты для сервера opencode и самого моста. Юниты
-# ставятся, но не включаются: токен и чат в telegram.json заполняет человек,
-# а включать сервис без них бессмысленно.
-mkdir -p "$CONFIG_HOME/systemd/user"
-for unit in opencode-serve hud-telegram; do
-    install_file "$ROOT_DIR/contrib/systemd/$unit.service" "$CONFIG_HOME/systemd/user/$unit.service" 0644
-done
 install_file "$ROOT_DIR/config/hudbar/colors.css" "$CONFIG_HOME/hudbar/colors.css"
 install_file "$ROOT_DIR/config/hudbar/font" "$CONFIG_HOME/hudbar/font"
 
@@ -116,7 +109,6 @@ else
     log "installation complete"
     log "binaries: $PREFIX/bin"
     log "config: $CONFIG_HOME/hudbar"
-    log "bridge units: $CONFIG_HOME/systemd/user/{opencode-serve,hud-telegram}.service (enable manually: systemctl --user enable --now opencode-serve hud-telegram)"
     if (( FORCE )); then
         log "backups: $BACKUP_ROOT"
     fi

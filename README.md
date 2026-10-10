@@ -30,26 +30,9 @@
 
 ## Мост Telegram
 
-`hud-telegram-rs` открывает сессию opencode с телефона: промпты, список сессий и моделей, смена
-модели, ответы на запросы прав, живая статус-карточка хода и веб-панель Mini App с поиском и полем
-ввода. Секреты — в `~/.config/hudbar/telegram.json`, состояние — в
-`~/.local/state/hudbar/telegram-state.json`.
-
-Установщик кладёт юниты в `~/.config/systemd/user/`, но **не включает** их: токен от BotFather и
-`chat_id` вписывает человек.
-
-```bash
-# 1. заполнить ~/.config/hudbar/telegram.json: bot_token и chat_id
-#    chat_id бот узнаёт сам, когда ему пишут /start
-systemctl --user daemon-reload
-systemctl --user enable --now opencode-serve hud-telegram
-```
-
-Панель Mini App включается отдельно: у неё свой файл секрета с правами `600`, и `/panel` отдаёт
-ссылку `t.me/бот/приложение?startapp=…`, через которую токен доезжает из Telegram. Наружу панель
-выставляет `tailscale serve` — сам мост слушает только localhost.
-
-Плагин opencode для dunst лежит отдельно, ставится руками: `contrib/opencode/`.
+Мост удалён 12 октября 2026: код, systemd-юниты и Mini App вынесены из сборки. Код остался в
+ветке `telegram-bridge-backup`, если понадобится снова. Плагин opencode для dunst лежит
+отдельно и к мосту отношения не имеет: `contrib/opencode/`.
 
 ## Сборка и запуск
 
