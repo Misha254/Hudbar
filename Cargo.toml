@@ -1,6 +1,6 @@
 [package]
 name = "hudbar"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 
 # Release-профиль панели и окон: сборки одноразовые, поэтому единый codegen-unit
