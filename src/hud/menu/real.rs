@@ -229,6 +229,23 @@ fn apps_section(lang: Language) -> Node {
         title,
         vec![
             Node::action(
+                settings_icons::YOUTUBE,
+                t("YouTube", "YouTube"),
+                // Режим приложения: окно без вкладок и панелей, сайт
+                // внутри. Отдельный профиль не нужен — окно и есть приложение.
+                Action::Spawn(
+                    "flatpak",
+                    &[
+                        "run",
+                        "app.zen_browser.zen",
+                        "--app",
+                        "https://www.youtube.com",
+                    ],
+                ),
+            )
+            .with_id("apps/youtube")
+            .search_as(&["youtube", "ютуб", "видео", "video"]),
+            Node::action(
                 settings_icons::APPS,
                 t("Zen", "Zen"),
                 Action::Spawn("flatpak", &["run", "app.zen_browser.zen"]),

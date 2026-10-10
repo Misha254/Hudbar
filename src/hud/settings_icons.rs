@@ -57,6 +57,8 @@ pub const REBOOT: &str = "\u{f079}";
 pub const LOCK: &str = "\u{f023}";
 pub const SLEEP: &str = "\u{f236}";
 pub const LOGOUT: &str = "\u{f2f5}";
+/// YouTube: значок из Font Awesome (`f167`), проверен по cmap шрифта.
+pub const YOUTUBE: &str = "\u{f167}";
 /// Гибернация: «zzz» из Font Awesome (`f4e4`). Проверен по cmap
 /// JetBrainsMono Nerd Font. Сон — это кровать `f236`, гибернация должна
 /// читаться иначе, иначе две строки в «Питание» выглядят одинаково.
