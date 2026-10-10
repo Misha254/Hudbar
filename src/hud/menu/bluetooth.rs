@@ -707,7 +707,7 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
             .with_id("bluetooth/adapter-error"),
         );
     }
-    // Действия над адаптером — только когда он реально есть: power/scan по
+    // Строка поиска — только когда адаптер реально есть: `scan` по
     // несуществующему контроллеру заведомо провал, а строка статуса уже
     // объяснила, что адаптера нет.
     if snapshot
@@ -715,30 +715,7 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
         .ready()
         .is_some_and(|adapter| !adapter.address.is_empty())
     {
-        rows.push(
-            Node::action(
-                settings_icons::NETWORK,
-                if ru(lang) {
-                    "Начать поиск"
-                } else {
-                    "Start scanning"
-                },
-                scan_action(true),
-            )
-            .with_id("bluetooth/scan/on"),
-        );
-        rows.push(
-            Node::action(
-                settings_icons::MINUS,
-                if ru(lang) {
-                    "Остановить поиск"
-                } else {
-                    "Stop scanning"
-                },
-                scan_action(false),
-            )
-            .with_id("bluetooth/scan/off"),
-        );
+        rows.push(scan_row(lang, snapshot));
     }
     if let Some(row) = block_failure_row(
         lang,
@@ -789,6 +766,47 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
         .with_id("bluetooth/refresh"),
     );
     rows
+}
+
+/// Строка поиска: сама запускает и останавливает сканирование. Две строки
+/// «Начать поиск» и «Остановить поиск» повторяли одно действие двумя
+/// способами, как до этого питание адаптера.
+fn scan_row(lang: Language, snapshot: &BluetoothSnapshot) -> Node {
+    let discovering = snapshot
+        .adapter
+        .ready()
+        .and_then(|adapter| adapter.discovering);
+    let title = match discovering {
+        Some(true) => {
+            if ru(lang) {
+                "Поиск: идёт"
+            } else {
+                "Scan: running"
+            }
+        }
+        Some(false) => {
+            if ru(lang) {
+                "Поиск: выкл"
+            } else {
+                "Scan: off"
+            }
+        }
+        // Строки `Discovering` просто не было в выводе: «поиск не идёт» тут
+        // был бы выдумкой, как и «выключен» у питания.
+        None => {
+            if ru(lang) {
+                "Поиск: состояние неизвестно"
+            } else {
+                "Scan: state unknown"
+            }
+        }
+    };
+    match discovering {
+        Some(on) => {
+            Node::action(settings_icons::SEARCH, title, scan_action(!on)).with_id("bluetooth/scan")
+        }
+        None => Node::info(settings_icons::SEARCH, title).with_id("bluetooth/scan"),
+    }
 }
 
 /// Подменю одного устройства: первая строка — главное действие (подключить/
@@ -1588,6 +1606,47 @@ mod tests {
             !titles.contains(&"Подключить".to_string()),
             "Connect без известного connected: {titles:?}"
         );
+    }
+
+    /// Поиск — одна строка вместо «Начать»/«Остановить»: идёт — останавливает,
+    /// выключен — запускает, неизвестно — справка без команды.
+    #[test]
+    fn scan_row_toggles_and_stays_plain_when_unknown() {
+        let snapshot = |adapter| BluetoothSnapshot {
+            adapter: Block::Ready(adapter),
+            known: Block::Ready(Vec::new()),
+            paired: Block::Ready(Vec::new()),
+            connected: Block::Ready(Vec::new()),
+            infos: HashMap::new(),
+        };
+        let scan = |node: &super::super::tree::Node| match &node.kind {
+            super::super::tree::NodeKind::Action(Action::RefreshAndRun { command, .. }) => {
+                command.argv().1
+            }
+            other => panic!("ожидалась команда поиска, {other:?}"),
+        };
+        let finding = SHOW.replace("Discovering: no", "Discovering: yes");
+        let row = scan_row(Language::Ru, &snapshot(parse_adapter(&finding)));
+        assert_eq!(row.title, "Поиск: идёт");
+        assert_eq!(scan(&row), ["scan", "off"]);
+
+        let off = scan_row(Language::Ru, &snapshot(parse_adapter(SHOW)));
+        assert_eq!(off.title, "Поиск: выкл");
+        assert_eq!(scan(&off), ["scan", "on"]);
+
+        let unknown = parse_adapter(SHOW_OFF);
+        let row = scan_row(Language::Ru, &snapshot(unknown));
+        assert_eq!(row.title, "Поиск: состояние неизвестно");
+        assert!(
+            matches!(row.kind, super::super::tree::NodeKind::Info),
+            "без `Discovering` команду не предлагаем"
+        );
+
+        // И в разделе ровно одна строка про поиск, а не две.
+        let nodes = build_nodes(&snapshot(parse_adapter(SHOW)), Language::Ru);
+        let titles: Vec<&str> = nodes.iter().map(|node| node.title.as_str()).collect();
+        let scans = titles.iter().filter(|title| title.contains("оиск")).count();
+        assert_eq!(scans, 1, "строк про поиск ровно одна: {titles:?}");
     }
 
     /// Питание живёт на статусной строке: вкл — гасит, выкл — включает, а
