@@ -452,12 +452,21 @@ pub const SECTIONS: [(&str, &str); 9] = [
     ("about", "О программе"),
 ];
 
-/// Заголовок раздела по идентификатору.
+/// Заголовок раздела по идентификатору. Вложенный путь `system/control`
+/// заголовка не имеет: у него есть только родитель.
 pub fn section_title(id: &str) -> Option<&'static str> {
+    if let Some((parent, _)) = id.split_once('/') {
+        return section_title(parent);
+    }
     SECTIONS
         .iter()
         .find(|(key, _)| *key == id)
         .map(|(_, title)| *title)
+}
+
+/// Такой раздел (возможно, вложенный) есть в дереве.
+pub fn has_section(id: &str) -> bool {
+    section_title(id).is_some()
 }
 
 /// Открывает раздел сразу при старте. Возвращает `true`, если раздел найден:
@@ -465,6 +474,27 @@ pub fn section_title(id: &str) -> Option<&'static str> {
 /// Вход идёт по позиции в `SECTIONS`, а не по заголовку: настоящее дерево
 /// строится на текущем языке, и русская подпись здесь не обязана совпасть.
 pub fn open_section(menu: &mut Menu, id: &str) -> bool {
+    // Вложенный путь: сначала родительский раздел, потом строка с такой
+    // личностью. Нужен биндам вида `super+Escape → hud-menu-rs system/control`,
+    // чтобы до подменю можно было доехать в один запуск.
+    if let Some((parent, _)) = id.split_once('/') {
+        if !open_section(menu, parent) {
+            return false;
+        }
+        // Личность строки записана целиком (`system/control`), а не хвостом:
+        // хвост у разных разделов повторяется.
+        let Some(index) = menu
+            .current()
+            .list
+            .items()
+            .iter()
+            .position(|item| item.id == id)
+        else {
+            return false;
+        };
+        menu.current_mut().list.select(index);
+        return menu.enter() == state::Outcome::Pushed;
+    }
     let Some(index) = SECTIONS.iter().position(|(key, _)| *key == id) else {
         return false;
     };
@@ -479,6 +509,35 @@ pub fn open_section(menu: &mut Menu, id: &str) -> bool {
 mod tests {
     use super::state::Outcome;
     use super::*;
+
+    /// Вложенный вход: `system/control` открывает подменю сразу, за один
+    /// запуск. Так бинд доезжает до нужного места без второго нажатия.
+    #[test]
+    fn a_nested_path_enters_the_child_level() {
+        let mut menu = super::real::menu();
+        assert!(super::open_section(&mut menu, "system/control"));
+        assert_eq!(menu.depth(), 2, "вход в подменю раздела");
+        let titles: Vec<&str> = menu
+            .current()
+            .list
+            .items()
+            .iter()
+            .map(|item| item.title.as_str())
+            .collect();
+        assert!(
+            titles.iter().any(|title| title.contains("kitty")),
+            "открылся список целей: {titles:?}"
+        );
+    }
+
+    /// Несуществующий вложенный уровень не должен оставлять меню в
+    /// полуоткрытом состоянии: максимум — корень.
+    #[test]
+    fn an_unknown_child_stays_where_it_was() {
+        let mut menu = super::real::menu();
+        assert!(!super::open_section(&mut menu, "system/нет-такого"));
+        assert_eq!(menu.depth(), 1, "остались на разделе, а не провалились");
+    }
 
     #[test]
     fn demo_tree_is_valid() {

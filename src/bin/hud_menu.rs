@@ -21,7 +21,7 @@
 //! кода между окном и `--snapshot` нет.
 //!
 //! Запуск:
-//!   hud-menu-rs [раздел]        — открыть меню, по возможности сразу на разделе
+//!   hud-menu-rs [раздел][/строка]        — открыть меню, по возможности сразу на разделе
 //!   hud-menu-rs --snapshot ...  — снимки без Wayland, см. `menu::snapshot`
 
 use std::os::fd::AsFd;
@@ -147,9 +147,11 @@ const PAGE: isize = view::MAX_ROWS as isize;
 const USAGE: &str = "\
 hud-menu-rs — меню HUDbar
 
-  hud-menu-rs [раздел]
+  hud-menu-rs [раздел][/строка]
       Открыть меню. Раздел: apps, panel, style, notifications, capture,
-      keybinds, system, about. Неизвестное имя открывает корень.
+      keybinds, system, power, about. Вложенный уровень — через слэш:
+      hud-menu-rs system/control откроет «Панель управления» сразу.
+      Неизвестное имя открывает корень.
   hud-menu-rs --snapshot <root|style|search|empty> <out.png> [--theme normal|pixel]
       Снимок состояния без Wayland.
   hud-menu-rs --all <каталог>
@@ -894,7 +896,7 @@ fn run(section: &str) -> Result<(), String> {
     }
     debug_log(&format!("pid {pid}, файл {}", pid_file.display()));
     // Идентификатор раздела проверяется здесь: неизвестный открывает корень.
-    let known = menu::section_title(section).is_some();
+    let known = menu::has_section(section);
     let result = event_loop(section, &pid_file);
     // pid-файл снимается на любом выходе, включая падение: иначе следующий
     // запуск увидит «живой» pid и не откроет меню.
