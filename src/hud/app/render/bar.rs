@@ -595,14 +595,18 @@ impl App {
         }
 
         if self.settings.dnd && sys.dnd {
-            let mut c = Cell::new("DND".to_string(), p.base);
+            // Акцент палитры, а не `error`: коралловая заливка была единственным
+            // пятном чужого оттенка в панели и выбивалась из оформления.
+            // Состояние по-прежнему читается мгновенно — плашка светлее
+            // остальных чипов, а подпись на ней тёмная.
+            let mut c = Cell::new("DND".to_string(), p.on_primary);
             c.pad_l = 0.0;
             c.pad_r = 0.0;
             right.push(Slot {
                 order: self.settings.order_index("dnd"),
                 group: Group {
                     cells: vec![c],
-                    chip: Some((3.0, 3.0, p.error)),
+                    chip: Some((3.0, 3.0, p.primary)),
                 },
             });
         }
