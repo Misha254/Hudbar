@@ -122,9 +122,6 @@ fn has_power_cycle() -> bool {
 fn has_dynalock() -> bool {
     has_script("dynalock.sh")
 }
-fn has_control() -> bool {
-    has_script("control.sh")
-}
 fn has_keybinds() -> bool {
     has("hud-keybinds-rs")
 }
@@ -670,78 +667,158 @@ fn system_section(lang: Language) -> Node {
         Language::Ru => ru,
         Language::En => en,
     };
-    Node::submenu(
-        settings_icons::SYSTEM,
-        title,
-        vec![
-            dnd_row(lang),
-            Node::dynamic(
-                settings_icons::SOUND,
-                t("Звук", "Audio"),
-                ProviderKey::AUDIO,
-            )
-            .with_id("system/audio")
-            .when(has_audio)
-            .search_as(&["audio", "sound", "звук", "volume", "громкость", "микрофон"]),
-            Node::dynamic(
-                settings_icons::NETWORK,
-                t("Wi-Fi", "Wi-Fi"),
-                ProviderKey::WIFI,
-            )
-            .with_id("system/wifi")
-            .when(has_nmcli)
-            .search_as(&["wifi", "вайфай", "сеть"]),
-            Node::dynamic(
-                settings_icons::BLUETOOTH,
-                t("Bluetooth", "Bluetooth"),
-                ProviderKey::BLUETOOTH,
-            )
-            .with_id("system/bluetooth")
-            .when(has_bluetoothctl)
-            .search_as(&["bluetooth", "блютуз", "bt"]),
-            Node::dynamic(
-                settings_icons::PANEL_MONITOR,
-                t("Дисплеи", "Displays"),
-                ProviderKey::OUTPUTS,
-            )
-            .with_id("system/displays")
-            .when(has_niri)
-            .search_as(&["displays", "дисплеи", "monitors", "мониторы", "screens"]),
-            Node::dynamic(
-                settings_icons::BATTERY,
-                t("Устройства", "Storage"),
-                ProviderKey::STORAGE,
-            )
-            .with_id("system/storage")
-            .when(has_udisksctl)
-            .search_as(&["storage", "диски", "накопители", "disks", "флешка"]),
-            Node::dynamic(settings_icons::NETWORK, t("VPN", "VPN"), ProviderKey::VPN)
-                .with_id("system/vpn")
-                .search_as(&["vpn", "прокси", "proxy", "mihomo"]),
-            Node::toggle(
-                settings_icons::DOT,
-                t("Кофе-мод", "Coffee mode"),
-                values::coffee,
-                values::set_coffee,
-            )
-            .search_as(&["coffee", "кофе", "caffeine"]),
-            Node::action(
-                settings_icons::BATTERY,
-                t("Режим питания", "Power profile"),
-                Action::Run("power-cycle.sh", &[]),
-            )
-            .when(has_power_cycle)
-            .search_as(&["power", "питание", "профиль", "battery"]),
-            Node::action(
-                settings_icons::CONTROLS,
-                t("Панель управления", "Control panel"),
-                Action::Spawn("control.sh", &[]),
-            )
-            .when(has_control)
-            .search_as(&["control", "управление"]),
-        ],
+    let mut children = vec![
+        dnd_row(lang),
+        Node::dynamic(
+            settings_icons::SOUND,
+            t("Звук", "Audio"),
+            ProviderKey::AUDIO,
+        )
+        .with_id("system/audio")
+        .when(has_audio)
+        .search_as(&["audio", "sound", "звук", "volume", "громкость", "микрофон"]),
+        Node::dynamic(
+            settings_icons::NETWORK,
+            t("Wi-Fi", "Wi-Fi"),
+            ProviderKey::WIFI,
+        )
+        .with_id("system/wifi")
+        .when(has_nmcli)
+        .search_as(&["wifi", "вайфай", "сеть"]),
+        Node::dynamic(
+            settings_icons::BLUETOOTH,
+            t("Bluetooth", "Bluetooth"),
+            ProviderKey::BLUETOOTH,
+        )
+        .with_id("system/bluetooth")
+        .when(has_bluetoothctl)
+        .search_as(&["bluetooth", "блютуз", "bt"]),
+        Node::dynamic(
+            settings_icons::PANEL_MONITOR,
+            t("Дисплеи", "Displays"),
+            ProviderKey::OUTPUTS,
+        )
+        .with_id("system/displays")
+        .when(has_niri)
+        .search_as(&["displays", "дисплеи", "monitors", "мониторы", "screens"]),
+        Node::dynamic(
+            settings_icons::BATTERY,
+            t("Устройства", "Storage"),
+            ProviderKey::STORAGE,
+        )
+        .with_id("system/storage")
+        .when(has_udisksctl)
+        .search_as(&["storage", "диски", "накопители", "disks", "флешка"]),
+        Node::dynamic(settings_icons::NETWORK, t("VPN", "VPN"), ProviderKey::VPN)
+            .with_id("system/vpn")
+            .search_as(&["vpn", "прокси", "proxy", "mihomo"]),
+        Node::toggle(
+            settings_icons::DOT,
+            t("Кофе-мод", "Coffee mode"),
+            values::coffee,
+            values::set_coffee,
+        )
+        .search_as(&["coffee", "кофе", "caffeine"]),
+        Node::action(
+            settings_icons::BATTERY,
+            t("Режим питания", "Power profile"),
+            Action::Run("power-cycle.sh", &[]),
+        )
+        .when(has_power_cycle)
+        .search_as(&["power", "питание", "профиль", "battery"]),
+    ];
+    // Панель управления дописывается отдельно: целей может не оказаться
+    // вовсе, и пустую строку в разделе показывать нечего.
+    children.extend(control_node(lang));
+    Node::submenu(settings_icons::SYSTEM, title, children).search_as(kw)
+}
+
+/// Быстрый доступ к конфигам: тот же список, что был в `control.sh` на rofi,
+/// но строкой меню. Отдельный скрипт и второй лаунчер не нужны — список и
+/// есть окно.
+fn control_node(lang: Language) -> Option<Node> {
+    // `when` умеет только `fn() -> bool`, а путь здесь со значением: строки с
+    // несуществующим каталогом просто не строятся.
+    let children: Vec<Node> = targets()
+        .into_iter()
+        .filter(|(_, _, path)| std::path::Path::new(path).exists())
+        .map(|(icon, title, path)| {
+            let id = format!(
+                "control/{}",
+                std::path::Path::new(&path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            );
+            Node::action(icon, title, open_in_editor(path.clone())).with_id(&id)
+        })
+        .collect();
+    // Ни одной цели — строка была бы мёртвой: заходить в пустое подменю
+    // нечего.
+    if children.is_empty() {
+        return None;
+    }
+    let (title, kw) = match lang {
+        Language::Ru => (
+            "Панель управления",
+            &["control", "управление", "конфиг", "конфиги"][..],
+        ),
+        Language::En => (
+            "Control panel",
+            &["control", "panel", "config", "configs"][..],
+        ),
+    };
+    Some(
+        Node::submenu(settings_icons::CONTROLS, title, children)
+            .with_id("system/control")
+            .search_as(kw),
     )
-    .search_as(kw)
+}
+
+/// Куда открывать: каталог или файл — без разницы, `nvim` разберётся сам.
+fn open_in_editor(path: String) -> Action {
+    // Путь приходит из `$HOME` и в дереве живёт `'static`: меню строится
+    // один раз на запуск окна, а процесс короткоживущий, так что утечка
+    // десятка строк здесь честнее, чем новый тип строки в `Action`.
+    Action::Spawn(
+        "kitty",
+        Box::leak(Box::new(["-e", "nvim", Box::leak(path.into_boxed_str())])),
+    )
+}
+
+/// Цели быстрого доступа. Порядок — по частоте правки: сначала композитор и
+/// его бинды, потом панель и терминал, потом остальное окружение.
+fn targets() -> Vec<(&'static str, &'static str, String)> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = |parts: &str| std::path::Path::new(&home).join(parts);
+    vec![
+        (settings_icons::SYSTEM, "niri", path(".config/niri")),
+        (
+            settings_icons::KEYBINDS,
+            "binds · niri/binds.kdl",
+            path(".config/niri/binds.kdl"),
+        ),
+        (settings_icons::PANEL, "waybar", path(".config/waybar")),
+        (settings_icons::TERMINAL, "kitty", path(".config/kitty")),
+        (
+            settings_icons::NOTIFICATIONS,
+            "dunst",
+            path(".config/dunst"),
+        ),
+        (
+            settings_icons::SEARCH,
+            "rofi",
+            path(".config/rofi/config.rasi"),
+        ),
+        (settings_icons::THEME, "matugen", path(".config/matugen")),
+        (settings_icons::FONT_ICON, "zsh", path(".config/zsh")),
+        (settings_icons::APPS, "nvim", path(".config/nvim")),
+        (settings_icons::OVERVIEW, "hudbar", path("code/hudbar")),
+        (settings_icons::FOLDER, "scripts", path(".local/bin")),
+    ]
+    .into_iter()
+    .map(|(icon, title, path)| (icon, title, path.to_string_lossy().into_owned()))
+    .collect()
 }
 
 /// Вопрос подтверждения необратимого действия: отдельный уровень с двумя
@@ -886,6 +963,61 @@ pub fn menu() -> Menu {
 mod tests {
     use super::super::state::{self, Outcome};
     use super::*;
+
+    /// Панель управления — подменю с целями, а не запуск второго лаунчера.
+    /// Проверяется на дереве: набор путей зависит от машины.
+    #[test]
+    fn control_panel_is_a_submenu_of_configs() {
+        let Some(control) = control_node(Language::Ru) else {
+            return; // на машине нет ни одного каталога конфигов
+        };
+        assert_eq!(control.title, "Панель управления");
+        let super::super::tree::NodeKind::Submenu(children) = &control.kind else {
+            panic!("ожидалось подменю, {:?}", control.kind);
+        };
+        assert!(!children.is_empty());
+        for child in children {
+            let super::super::tree::NodeKind::Action(Action::Spawn(program, args)) = &child.kind
+            else {
+                panic!("строка должна запускать редактор: {:?}", child.kind);
+            };
+            assert_eq!(*program, "kitty");
+            assert_eq!(
+                args,
+                &["-e", "nvim", args[2]],
+                "открываем nvim с путём из строки"
+            );
+            let path = args[2];
+            assert!(
+                std::path::Path::new(path).exists(),
+                "цели без пути на диске: {path}"
+            );
+            assert!(
+                child.identity().starts_with("control/"),
+                "своя личность у строки: {}",
+                child.identity()
+            );
+        }
+    }
+
+    /// Цели не должны повторяться: два пункта на один и тот же путь — это
+    /// шум, а не удобство.
+    #[test]
+    fn control_targets_are_unique_and_exist_on_this_machine() {
+        let mut paths: Vec<String> = targets().into_iter().map(|(_, _, path)| path).collect();
+        let count = paths.len();
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), count, "пути повторяются: {paths:?}");
+        assert!(
+            count >= 8,
+            "ожидался рабочий набор целей, а не {count}: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|path| path.contains("noctalia")),
+            "noctalia из списка ушёл: {paths:?}"
+        );
+    }
 
     #[test]
     fn real_tree_is_valid() {
