@@ -31,11 +31,33 @@ impl Native {
     fn perform(self, ru: bool) -> Result<(), String> {
         match self {
             Native::PowerProfileCycle => {
-                let profile = crate::power_profile::cycle()?;
-                let _ = Self::status(profile, ru);
+                let profile = crate::power_profile::cycle().map_err(|error| {
+                    let text = if ru {
+                        format!("Питание: сбой ({error})")
+                    } else {
+                        format!("Power: failed ({error})")
+                    };
+                    Self::notify(&text);
+                    error
+                })?;
+                // Уведомление шлёт сама операция, а не вызывающий: профиль
+                // переключают и строкой меню, и биндом через `--action`, и во
+                // втором случае показывать статус некуда — человек узнал бы о
+                // смене только из уведомления.
+                Self::notify(&Self::status(profile, ru));
                 Ok(())
             }
         }
+    }
+
+    /// Уведомление dunst о результате операции. Сбой тоже показываем: молча
+    /// переключившийся профиль хуже, чем явная ошибка.
+    fn notify(text: &str) {
+        let (summary, body) = match text.split_once(": ") {
+            Some((summary, body)) => (summary, body),
+            None => ("Power", text),
+        };
+        super::super::log::status("dunstify", &["-a", "Питание", summary, body]);
     }
 
     /// Что показать в статусе: новое значение операции, а не её имя.
