@@ -482,7 +482,14 @@ impl MenuApp {
             scale,
             pixel: self.pixel,
         };
-        let card = view::render_window(&mut window, &frame, highlight_row);
+        let card = view::render_window(
+            &mut window,
+            &frame,
+            view::RowsHighlight {
+                sliding: highlight_row,
+                hover: None,
+            },
+        );
         view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
         layer::fade(&mut pixmap, openness);
 

@@ -353,7 +353,7 @@ pub fn render(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
     view.scrim(surface.w, surface.h);
     // Снимок рисуется без скользящей полосы: она свойство живого окна, и
     // снимок обязан совпадать с прежним побитово.
-    paint(view, card, frame, None);
+    paint(view, card, frame, RowsHighlight::none());
     card
 }
 
@@ -362,21 +362,38 @@ pub fn render(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
 /// правило слоя. Прозрачность карточки задаёт вызывающий через
 /// `apply_card_alpha`.
 ///
-/// `highlight_row` — позиция подсветки в строках экрана. `None` рисует
-/// подсвеченную строку внутри `row()`, как всегда; `Some` рисует одну
-/// отдельную полосу, которая едет между строками.
-pub fn render_window(view: &mut MenuView<'_>, frame: &Frame, highlight_row: Option<f32>) -> Rect {
+/// Что подсвечивается в списке.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RowsHighlight {
+    /// Позиция полосы выбора в строках экрана. `None` — полоса не едет, и
+    /// выбранная строка подсвечивается сама внутри `row()`; `Some` рисует одну
+    /// отдельную полосу на весь список.
+    pub sliding: Option<f32>,
+    /// Строка под указателем мыши, индекс в `Frame::items`. Это только
+    /// подсветка: выбор остаётся клавиатурным, и полоса из `sliding` не
+    /// двигается.
+    pub hover: Option<usize>,
+}
+
+impl RowsHighlight {
+    /// Без полосы и без мыши: кадр рисуется как есть.
+    pub fn none() -> Self {
+        Self::default()
+    }
+}
+
+pub fn render_window(view: &mut MenuView<'_>, frame: &Frame, highlight: RowsHighlight) -> Rect {
     let search = search_mode(frame);
     let rows = rows_for(frame);
     let card = Rect::new(0.0, 0.0, CARD_W, card_height_for(rows, search));
     view.card(card);
-    paint(view, card, frame, highlight_row);
+    paint(view, card, frame, highlight);
     card
 }
 
 /// Содержимое карточки: шапка, строки, подвал. Общая часть для снимка и окна —
 /// расхождение только в фоне вокруг.
-fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame, highlight_row: Option<f32>) {
+fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame, highlight: RowsHighlight) {
     if let Some(secret) = frame.secret.as_ref() {
         secret_view(view, card, frame, secret);
         return;
@@ -385,7 +402,7 @@ fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame, highlight_row: Opti
     let rows = rows_shown(frame.items.len());
     let row_h = row_height(search);
     header(view, card, frame);
-    rows_view(view, card, frame, rows, row_h, highlight_row);
+    rows_view(view, card, frame, rows, row_h, highlight);
     footer(view, card, frame);
 }
 
@@ -781,7 +798,7 @@ fn rows_view(
     frame: &Frame,
     rows: usize,
     row_h: f32,
-    highlight_row: Option<f32>,
+    highlight: RowsHighlight,
 ) {
     let start = window_rows(frame, rows);
     let shown = start.len();
@@ -789,7 +806,7 @@ fn rows_view(
     let selected_row = selected_row(frame);
     // Полоса подсветки рисуется до строк, чтобы содержимое выбранной строки
     // лежало поверх неё, как и при отрисовке внутри `row()`.
-    if let Some(pos) = highlight_row
+    if let Some(pos) = highlight.sliding
         && shown > 0
     {
         let slot = pos.clamp(0.0, shown as f32 - 1.0);
@@ -816,7 +833,7 @@ fn rows_view(
         }
         // Насколько строка близка к едущей полосе: 1 — под полосой, 0 — мимо.
         // Без полосы близость равна обычному выбору, и цвета совпадают побитово.
-        let near = match highlight_row {
+        let near = match highlight.sliding {
             Some(pos) => (1.0 - (pos - index as f32).abs()).clamp(0.0, 1.0),
             None => usize::from(*position == selected_row) as f32,
         };
@@ -824,10 +841,13 @@ fn rows_view(
             view,
             rect,
             item,
-            *position == selected_row,
             frame.lang,
-            highlight_row.is_none(),
-            near,
+            RowState {
+                selected: *position == selected_row,
+                paint_selected: highlight.sliding.is_none(),
+                near,
+                hover: *position == highlight.hover.unwrap_or(usize::MAX),
+            },
         );
     }
     if frame.items.is_empty() {
@@ -887,27 +907,46 @@ fn highlight_band(view: &mut MenuView<'_>, rect: Rect) {
     );
 }
 
+/// Состояние строки для отрисовки: что выбрано, что под указателем и насколько
+/// строка близка к едущей полосе.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RowState {
+    /// Строка выбрана с клавиатуры.
+    pub selected: bool,
+    /// Фон выбранной строки рисуется здесь, а не отдельной полосой. `false`,
+    /// когда полоса едет и фон уже нарисован на весь список.
+    pub paint_selected: bool,
+    /// Насколько строка близка к едущей полосе: 1 — под полосой, 0 — мимо.
+    pub near: f32,
+    /// Строка под указателем мыши.
+    pub hover: bool,
+}
+
 /// Одна строка: иконка, название, значение справа и индикатор поведения.
 ///
-/// `paint_selected` снимает с строки её фон: когда подсветка едет отдельной
-/// полосой, фон здесь нарисовался бы дважды и стоял бы на месте.
-fn row(
-    view: &mut MenuView<'_>,
-    rect: Rect,
-    item: &Item,
-    selected: bool,
-    lang: Language,
-    paint_selected: bool,
-    near: f32,
-) {
-    if selected && paint_selected {
+/// `state.paint_selected` снимает с строки её фон: когда подсветка едет
+/// отдельной полосой, фон здесь нарисовался бы дважды и стоял бы на месте.
+fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: RowState) {
+    if state.selected && state.paint_selected {
         highlight_band(view, rect);
+    } else if state.hover {
+        // Подложка под указателем — та же заливка без акцентной полосы и без
+        // смены цвета текста: мышь показывает, где кликнёт, но не выбирает.
+        let inner = highlight_rect(rect);
+        fill_rect(
+            view.pixmap,
+            inner.x * SCALE,
+            inner.y * SCALE,
+            inner.w * SCALE,
+            inner.h * SCALE,
+            view.ui.hover_bg,
+        );
     }
     // Цвет текста и иконки смешивается с расстоянием до едущей полосы, а не
     // переключается сразу: строка, которую полоса сейчас проходит, проявляется
     // постепенно. При `near` ровно 0 или 1 смешивание даёт прежние цвета
     // побитово, поэтому кадр без анимации не меняется.
-    let near = near.clamp(0.0, 1.0);
+    let near = state.near.clamp(0.0, 1.0);
     let icon_color = blend(view.ui.muted, view.ui.accent, near);
     let text_color = blend(view.ui.text, view.ui.accent, near);
     let two_line = !item.single_line();
@@ -959,7 +998,7 @@ fn row(
         }
     }
     if let Some(level) = item.level {
-        meter(view, rect, label_rect, level, item.muted, selected);
+        meter(view, rect, label_rect, level, item.muted, state.selected);
     }
     indicator(view, rect, item, two_line, lang);
 }
@@ -1335,6 +1374,16 @@ mod tests {
 
     /// Карточка списка с произвольной подсветкой: та же отрисовка, что и окно.
     fn render_card(frame: &Frame, pixel: bool, highlight_row: Option<f32>) -> tiny_skia::Pixmap {
+        render_card_hover(frame, pixel, highlight_row, None)
+    }
+
+    /// То же с подсветкой строки под указателем.
+    fn render_card_hover(
+        frame: &Frame,
+        pixel: bool,
+        highlight_row: Option<f32>,
+        hover_row: Option<usize>,
+    ) -> tiny_skia::Pixmap {
         let card_h = card_height_for(frame.items.len(), search_mode(frame));
         let (ui, scale) = theme(pixel, palette::Palette::default());
         let mut pixmap = tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (card_h * SCALE) as u32)
@@ -1350,7 +1399,14 @@ mod tests {
             scale,
             pixel,
         };
-        render_window(&mut view, frame, highlight_row);
+        render_window(
+            &mut view,
+            frame,
+            RowsHighlight {
+                sliding: highlight_row,
+                hover: hover_row,
+            },
+        );
         pixmap
     }
 
@@ -1797,7 +1853,7 @@ mod tests {
             let mut pixmap = blank_buffer();
             let mut painter = TextPainter::new(&font_name(false));
             let mut icons = TextPainter::new(settings_icons::FONT);
-            let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+            let view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
             let inner = search_rect(header).w - (spacing::SM + ICON + spacing::SM) - spacing::SM;
             let width = view.painter.text_width(chrome.search, view.scale.caption);
             assert!(
@@ -1847,6 +1903,112 @@ mod tests {
             assert_eq!(area.y, HEADER_H, "поиск={search}: отступ от шапки");
             assert_eq!(area.w, CARD_W, "поиск={search}: во всю ширину");
         }
+    }
+
+    /// `hover_row = None` обязан дать побитово прежний кадр: иначе появление
+    /// подсветки мыши поменяло бы все эталонные снимки меню.
+    #[test]
+    fn no_hover_keeps_the_frame_byte_for_byte() {
+        for pixel in [false, true] {
+            let frame = frame_with(8, 3);
+            let plain = render_card(&frame, pixel, None);
+            let also_plain = render_card_hover(&frame, pixel, None, None);
+            assert_eq!(
+                plain.data(),
+                also_plain.data(),
+                "pixel={pixel}: без подсветки мыши кадр не должен меняться"
+            );
+        }
+    }
+
+    /// Подсветка мыши не трогает выбор и не двигает скользящую полосу.
+    #[test]
+    fn hover_paints_only_the_row_under_the_pointer() {
+        let frame = frame_with(8, 3);
+        let (ui, _) = theme(false, palette::Palette::default());
+        let plain = render_card_hover(&frame, false, None, None);
+        let hovered = render_card_hover(&frame, false, None, Some(1));
+
+        assert_ne!(
+            plain.data(),
+            hovered.data(),
+            "подсветка мыши обязана что-то рисовать"
+        );
+        // Строка под указателем и соседние.
+        assert_eq!(
+            pixel_in_row(&plain, &frame, 1.0),
+            ui.panel,
+            "строка 1 чистая"
+        );
+        assert_eq!(
+            pixel_in_row(&hovered, &frame, 1.0),
+            ui.hover_bg,
+            "строка под указателем подсвечена"
+        );
+        assert_eq!(
+            pixel_in_row(&hovered, &frame, 2.0),
+            ui.panel,
+            "соседняя строка не тронута"
+        );
+        // Выбор и его полоса на месте: клик мышью не выбирает.
+        assert_eq!(
+            pixel_in_row(&hovered, &frame, 3.0),
+            selected_background(ui),
+            "выбранная строка осталась выбранной"
+        );
+    }
+
+    /// Подложка под указателем непрозрачна в обеих темах: полупрозрачный край
+    /// в Pixel означал бы ровно тот полутон, которого в этой теме быть не должно.
+    #[test]
+    fn the_hover_wash_has_no_transparent_edge() {
+        for pixel in [false, true] {
+            assert_eq!(
+                palette_for(pixel).hover_bg.3,
+                255,
+                "pixel={pixel}: подсветка мыши должна быть плотной"
+            );
+        }
+    }
+
+    /// Подсветка мыши слабее выбранной строки: иначе мышь выглядела бы как
+    /// выбор, а это разные вещи.
+    #[test]
+    fn hover_is_fainter_than_the_selected_row() {
+        for pixel in [false, true] {
+            let ui = palette_for(pixel);
+            assert_ne!(ui.hover_bg, ui.selected_bg);
+            assert!(
+                (luminance(ui.selected_bg) - luminance(ui.panel)).abs()
+                    > (luminance(ui.hover_bg) - luminance(ui.panel)).abs(),
+                "pixel={pixel}: подсветка мыши должна быть слабее выбранной строки"
+            );
+        }
+    }
+
+    /// Полоса выбора едет по-прежнему, а подсветка мыши на неё не влияет: при
+    /// едущей полосе фон строки рисуется один на весь список.
+    #[test]
+    fn hover_does_not_move_the_sliding_band() {
+        let frame = frame_with(8, 3);
+        let moving = render_card_hover(&frame, false, Some(2.0), None);
+        let moving_hover = render_card_hover(&frame, false, Some(2.0), Some(5));
+
+        assert_eq!(
+            pixel_in_row(&moving, &frame, 2.0),
+            selected_background(theme(false, palette::Palette::default()).0),
+            "полоса осталась на своей строке"
+        );
+        assert_ne!(
+            moving.data(),
+            moving_hover.data(),
+            "подсветка мыши должна рисоваться и при едущей полосе"
+        );
+        assert_eq!(
+            pixel_in_row(&moving_hover, &frame, 2.0),
+            selected_background(theme(false, palette::Palette::default()).0),
+            "фон под полосой не должен перекрываться подсветкой мыши"
+        );
     }
 
     use super::super::state::Status;

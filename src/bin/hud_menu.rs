@@ -197,6 +197,11 @@ struct MenuApp {
     /// Остаток дробного скролла: тачпад присылает value120 меньше 120, и без
     /// накопления одно деление давало ноль строк.
     scroll_acc: f32,
+    /// Строка под указателем мыши: индекс в `Frame::items` или `None`.
+    ///
+    /// Живёт здесь, а не в `view`: тот ничего не помнит. На выбор не влияет —
+    /// мышь показывает, где кликнёт, но не выбирает.
+    hover_row: Option<usize>,
     /// Автоповтор удержанной стрелки: композитор повторов не шлёт.
     repeat: Repeat,
     exit: Arc<AtomicBool>,
@@ -430,6 +435,13 @@ impl MenuApp {
         }
     }
 
+    /// Строка под указателем. Тот же попадающий по геометрии расчёт, что и у
+    /// клика, но ничего не выбирает.
+    fn row_under_pointer(&self, x: f32, y: f32) -> Option<usize> {
+        let frame = self.menu.frame();
+        view::row_at(&frame, self.card(&frame), x, y)
+    }
+
     /// Разбирает клавишу и применяет команду. Вынесено, чтобы нажатие и
     /// повтор шли одним кодом.
     fn handle_key(&mut self, event: KeyEvent) {
@@ -508,7 +520,14 @@ impl MenuApp {
             scale,
             pixel: self.pixel,
         };
-        let card = view::render_window(&mut window, &frame, highlight_row);
+        let card = view::render_window(
+            &mut window,
+            &frame,
+            view::RowsHighlight {
+                sliding: highlight_row,
+                hover: self.hover_row,
+            },
+        );
         view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
         layer::fade(&mut pixmap, openness);
 
@@ -644,8 +663,18 @@ impl PointerHandler for MenuApp {
                 // Меню работает с клавиатуры, поэтому указатель только
                 // подсвечивает строку, но никогда её не выбирает: иначе
                 // случайное движение мыши сдвигало бы выбор.
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {}
-                PointerEventKind::Leave { .. } => {}
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    let index = self.row_under_pointer(position.0, position.1);
+                    if index != self.hover_row {
+                        self.hover_row = index;
+                        self.ctx.dirty = true;
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    if self.hover_row.take().is_some() {
+                        self.ctx.dirty = true;
+                    }
+                }
                 PointerEventKind::Press { button: 0x110, .. } => self.click(position.0, position.1),
                 PointerEventKind::Axis { vertical, .. } => {
                     let scroll = vertical;
@@ -1048,6 +1077,7 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
         palette: palette::load(),
         pixel,
         scroll_acc: 0.0,
+        hover_row: None,
         repeat: Repeat::default(),
         direct,
         exit: Arc::new(AtomicBool::new(false)),
