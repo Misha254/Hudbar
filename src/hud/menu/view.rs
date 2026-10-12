@@ -27,7 +27,7 @@
 use super::super::palette;
 use super::super::settings_icons;
 use super::super::settings_ui::Rect;
-use super::super::settings_view::{fill_rect, fill_round_rect, stroke_rect};
+use super::super::settings_view::{fill_disc_hard, fill_rect, fill_round_rect, stroke_rect};
 use super::super::text::{Align, SCALE, TextPainter};
 use super::super::ui_tokens::{
     TypeScale, UiPalette, mix, radii, radius, spacing, type_scale, ui_palette,
@@ -330,11 +330,20 @@ impl<'a> MenuView<'a> {
 
     /// Заливка кругом по центру прямоугольника. Радиус всегда половина
     /// стороны: круг — это форма миниатюры и кружка, а не скругление угла,
-    /// поэтому тема на него не влияет.
+    /// поэтому тема влияет не на форму, а только на край.
+    ///
+    /// В Pixel край ступенчатый: у круга со сглаживанием восемнадцать
+    /// уникальных цветов в элементе 16×16, а полутонов в этой теме быть не
+    /// должно. Форма остаётся кругом намеренно — квадрат выдавал бы
+    /// переключатель за чекбокс.
     fn disc(&mut self, rect: Rect, color: palette::Rgba) {
         let r = rect.w.min(rect.h) / 2.0;
         let cx = rect.x + rect.w / 2.0;
         let cy = rect.y + rect.h / 2.0;
+        if self.pixel {
+            fill_disc_hard(self.pixmap, cx * SCALE, cy * SCALE, r * SCALE, color);
+            return;
+        }
         fill_round_rect(
             self.pixmap,
             (cx - r) * SCALE,
@@ -2097,6 +2106,78 @@ mod tests {
         assert!(
             (top.h - bottom.h).abs() < 0.01,
             "высота не зависит от положения"
+        );
+    }
+
+    /// В Pixel у круга нет полутонов: тумблер 16×16 состоит ровно из двух ролей —
+    /// кольца и подложки внутри него. Со сглаживанием на его месте оказывалось
+    /// восемнадцать уникальных цветов.
+    #[test]
+    fn the_pixel_toggle_has_no_half_tones() {
+        let frame =
+            super::super::snapshot::subject_menu(super::super::snapshot::Subject::Search).frame();
+        let pixmap = render_card(&frame, true, None);
+        let data = pixmap.data();
+        let width = pixmap.width();
+
+        // Обходим окно правого индикатора первой строки поиска: там тумблеры.
+        let row_h = row_height(true);
+        let (cx, cy) = {
+            let dot = Rect::new(
+                CARD_W - PAD - TOGGLE_D,
+                HEADER_H + row_h / 2.0,
+                TOGGLE_D,
+                TOGGLE_D,
+            );
+            (dot.x * SCALE, dot.y * SCALE)
+        };
+        let side = (TOGGLE_D * SCALE) as i64;
+        let mut colors = std::collections::BTreeSet::new();
+        for y in (cy as i64)..(cy as i64 + side) {
+            for x in (cx as i64)..(cx as i64 + side) {
+                let at = (y as u32) * width + (x as u32);
+                colors.insert([
+                    data[at as usize * 4],
+                    data[at as usize * 4 + 1],
+                    data[at as usize * 4 + 2],
+                ]);
+            }
+        }
+        assert!(
+            colors.len() <= 3,
+            "тумблер в Pixel состоит из {} цветов вместо двух-трёх: {colors:?}",
+            colors.len()
+        );
+    }
+
+    /// Тот же тумблер в обычной теме остаётся сглаженным: ступенчатка нужна
+    /// только там, где полутонов быть не должно.
+    #[test]
+    fn the_normal_toggle_keeps_its_soft_edge() {
+        let frame =
+            super::super::snapshot::subject_menu(super::super::snapshot::Subject::Search).frame();
+        let pixmap = render_card(&frame, false, None);
+        let data = pixmap.data();
+        let width = pixmap.width();
+        let row_h = row_height(true);
+        let cx = (CARD_W - PAD - TOGGLE_D) * SCALE;
+        let cy = (HEADER_H + row_h / 2.0) * SCALE;
+        let side = (TOGGLE_D * SCALE) as i64;
+        let mut colors = std::collections::BTreeSet::new();
+        for y in (cy as i64)..(cy as i64 + side) {
+            for x in (cx as i64)..(cx as i64 + side) {
+                let at = (y as u32) * width + (x as u32);
+                colors.insert([
+                    data[at as usize * 4],
+                    data[at as usize * 4 + 1],
+                    data[at as usize * 4 + 2],
+                ]);
+            }
+        }
+        assert!(
+            colors.len() > 3,
+            "в обычной теме круг должен остаться сглаженным, а цветов {} ",
+            colors.len()
         );
     }
 

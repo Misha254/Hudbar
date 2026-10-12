@@ -109,6 +109,45 @@ pub fn fill_round_rect(
     }
 }
 
+/// Круг без сглаживания: окружность строится построчно, каждый ряд — целый
+/// отрезок.
+///
+/// `fill_round_rect` всегда рисует со сглаживанием, а в теме Pixel полутонов
+/// быть не должно: восемнадцать уникальных цветов в тумблере 16×16 означали
+/// ровно то, чего в этой теме быть не может. Форма остаётся кругом — квадрат
+/// выдавал бы переключатель за чекбокс, — но край идёт ступенькой.
+///
+/// Координаты и радиус — в пикселях буфера, как у `fill_rect`.
+pub fn fill_disc_hard(
+    pixmap: &mut tiny_skia::Pixmap,
+    cx: f32,
+    cy: f32,
+    r: f32,
+    color: palette::Rgba,
+) {
+    let width = pixmap.width() as i32;
+    let height = pixmap.height() as i32;
+    let cx = cx.round() as i32;
+    let cy = cy.round() as i32;
+    let radius = r.max(1.0);
+    for dy in -(radius as i32)..=(radius as i32) {
+        let y = cy + dy;
+        if y < 0 || y >= height {
+            continue;
+        }
+        let squared = radius * radius - (dy * dy) as f32;
+        if squared <= 0.0 {
+            continue;
+        }
+        let half = squared.sqrt().floor() as i32;
+        let x0 = (cx - half).clamp(0, width);
+        let x1 = (cx + half).clamp(0, width);
+        if x1 > x0 {
+            fill_rect(pixmap, x0 as f32, y as f32, (x1 - x0) as f32, 1.0, color);
+        }
+    }
+}
+
 pub fn stroke_rect(
     pixmap: &mut tiny_skia::Pixmap,
     x: f32,
