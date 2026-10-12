@@ -753,6 +753,16 @@ fn window_rows(frame: &Frame, rows: usize) -> Vec<(usize, &Item)> {
         .collect()
 }
 
+/// Прямоугольник, в котором стоит подпись пустого списка.
+///
+/// У пустого списка нарисованных строк нет, поэтому высота области равна нулю
+/// и подпись прижималась к шапке, оставляя под собой пустое поле во всю
+/// высоту минимума. Здесь высота берётся от `MIN_ROWS`: подпись стоит там же,
+/// где стояли бы строки.
+pub fn empty_notice_rect(list: Rect, row_h: f32) -> Rect {
+    Rect::new(list.x, list.y, list.w, rows_shown(0) as f32 * row_h)
+}
+
 /// Абсолютный индекс подсвеченной строки.
 ///
 /// `selected` — индекс во всём списке, а позиция в цикле отрисовки тоже
@@ -821,11 +831,14 @@ fn rows_view(
         );
     }
     if frame.items.is_empty() {
+        // Список пуст, поэтому у нарисованных строк нулевая высота: подпись по
+        // центру такой полосы прижималась к шапке, а под ней оставалось пустое
+        // поле во всю высоту минимума. Центрируем по всей области списка.
         view.text_clipped(
             strings::chrome(frame.lang).nothing,
             view.scale.label,
             view.ui.muted,
-            list,
+            empty_notice_rect(list, row_h),
             Align::Center,
         );
     }
@@ -1812,6 +1825,28 @@ mod tests {
             scale.section_title * 2.0 <= HEADER_H,
             "крошки не вылезают из шапки"
         );
+    }
+
+    /// Подпись пустого списка стоит по центру области, а не под шапкой: у
+    /// пустого списка нарисованных строк нет, и без этого прямоугольника она
+    /// прижималась к верхнему краю.
+    #[test]
+    fn the_empty_notice_is_centered_in_the_list_area() {
+        for search in [false, true] {
+            let row_h = row_height(search);
+            let area = empty_notice_rect(Rect::new(0.0, HEADER_H, CARD_W, 0.0), row_h);
+            assert!(
+                area.h > 0.0,
+                "поиск={search}: у подписи нулевая высота, она прижмётся к шапке"
+            );
+            assert_eq!(
+                area.h,
+                rows_shown(0) as f32 * row_h,
+                "поиск={search}: подпись по центру всего списка"
+            );
+            assert_eq!(area.y, HEADER_H, "поиск={search}: отступ от шапки");
+            assert_eq!(area.w, CARD_W, "поиск={search}: во всю ширину");
+        }
     }
 
     use super::super::state::Status;
