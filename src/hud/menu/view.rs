@@ -49,9 +49,6 @@ pub const CAPTION_GAP: f32 = 3.0;
 /// Отступ подсветки выбранной строки от края карточки. Равен толщине
 /// hairline: иначе заливка ложилась бы прямо на рамку и рвала её.
 pub const CARD_INSET: f32 = 1.0;
-/// Доля акцента в фоне выбранной строки. Малая: фон должен наметиться, а не
-/// стать второй подсветкой.
-pub const SELECTED_MIX: f32 = 0.14;
 /// Минимум строк в карточке. Ниже карточка прыгает при каждом нажатии.
 pub const MIN_ROWS: usize = 5;
 /// Максимум строк: дальше список уже нужно прокручивать.
@@ -165,7 +162,7 @@ pub fn layer_size(count: usize, search: bool) -> (u32, u32) {
 /// Фон выбранной строки: смесь поверхности с акцентом. Проверено на обеих
 /// темах — `luminance` результата выше, чем у самой карточки.
 pub fn selected_background(ui: UiPalette) -> palette::Rgba {
-    mix(ui.surface, ui.accent, SELECTED_MIX)
+    ui.selected_bg
 }
 
 /// Относительная яркость цвета: 0 — чёрный, 1 — белый. Нужна тесту «фон
@@ -1104,13 +1101,18 @@ fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool, l
             rect.h,
         );
         let band = if two_line {
+            // В двухстрочной строке значение встаёт по центру блока «название +
+            // путь», а не по центру самой строки.
             center_band(value, view.scale.label + view.scale.caption + CAPTION_GAP)
         } else {
-            center_band(value, view.scale.label * 2.0)
+            center_band(value, view.scale.caption * 2.0)
         };
+        // Значение - вторичная роль, поэтому кеглем подписи, а не названия: иначе
+        // «Обычная» и «Тема» читались одного размера, и глаз не выбирал, где
+        // название, а где его состояние.
         view.text_clipped(
             &item.value,
-            view.scale.label,
+            view.scale.caption,
             view.ui.muted,
             band,
             Align::End,

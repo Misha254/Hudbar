@@ -177,7 +177,16 @@ pub struct UiPalette {
     pub picker_thumb: palette::Rgba,
     /// Подложка строки под указателем мыши.
     pub hover_bg: palette::Rgba,
+    /// Фон выбранной строки.
+    pub selected_bg: palette::Rgba,
 }
+
+/// Доля акцента в фоне строки под указателем: вчетверо слабее выбранной.
+pub const HOVER_MIX: f32 = 0.07;
+
+/// Доля акцента в фоне выбранной строки. Малая: фон должен наметиться, а не
+/// стать второй подсветкой. Значение снято с макета — там оно 0.15–0.17.
+pub const SELECTED_MIX: f32 = 0.14;
 
 /// Производные цвета из семи базовых. Считается одинаково для обеих тем,
 /// поэтому Pixel получает те же роли из своих hex, а не из новых констант.
@@ -202,7 +211,8 @@ fn extend(base: UiPalette) -> UiPalette {
         // Подложка строки под указателем: та же смесь, что у выбранной строки,
         // но вчетверо слабее. Отдельная роль, чтобы её нельзя было спутать с
         // выделением выбором.
-        hover_bg: mix(base.panel, base.accent, 0.07),
+        hover_bg: mix(base.panel, base.accent, HOVER_MIX),
+        selected_bg: mix(base.panel, base.accent, SELECTED_MIX),
         ..base
     }
 }
@@ -229,6 +239,7 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             text_disabled: palette::Rgba(0, 0, 0, 0),
             picker_thumb: palette::Rgba(0, 0, 0, 0),
             hover_bg: palette::Rgba(0, 0, 0, 0),
+            selected_bg: palette::Rgba(0, 0, 0, 0),
         }
     } else {
         UiPalette {
@@ -241,7 +252,10 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             border: mix(p.base, p.primary, 0.65),
             accent: p.primary,
             text: p.text,
-            muted: p.text.with_a(0.58),
+            // 0.61 — минимальная альфа, при которой `muted` проходит 4.5:1 к
+            // карточке и к полю ввода на модельных палитрах всех десяти схем в
+            // обоих режимах. На 0.58 худший случай давал 4.09:1.
+            muted: p.text.with_a(0.61),
             surface: palette::Rgba(0, 0, 0, 0),
             surface_hover: palette::Rgba(0, 0, 0, 0),
             border_subtle: palette::Rgba(0, 0, 0, 0),
@@ -250,6 +264,7 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             text_disabled: palette::Rgba(0, 0, 0, 0),
             picker_thumb: palette::Rgba(0, 0, 0, 0),
             hover_bg: palette::Rgba(0, 0, 0, 0),
+            selected_bg: palette::Rgba(0, 0, 0, 0),
         }
     };
     extend(base)
@@ -259,6 +274,233 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
 mod tests {
     use super::super::settings_ui;
     use super::*;
+
+    /// Относительная яркость по WCAG 2.1.
+    fn relative_luminance(color: palette::Rgba) -> f32 {
+        let channel = |value: u8| {
+            let value = value as f32 / 255.0;
+            if value <= 0.040_45 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.0) + 0.7152 * channel(color.1) + 0.0722 * channel(color.2)
+    }
+
+    /// Композит полупрозрачного цвета над непрозрачным фоном: браузер считает
+    /// контраст именно так, а не по цвету с альфой.
+    fn flatten(front: palette::Rgba, back: palette::Rgba) -> palette::Rgba {
+        let alpha = front.3 as f32 / 255.0;
+        if alpha >= 1.0 {
+            return front;
+        }
+        palette::Rgba(
+            (front.0 as f32 * alpha + back.0 as f32 * (1.0 - alpha)) as u8,
+            (front.1 as f32 * alpha + back.1 as f32 * (1.0 - alpha)) as u8,
+            (front.2 as f32 * alpha + back.2 as f32 * (1.0 - alpha)) as u8,
+            255,
+        )
+    }
+
+    /// Контраст пары «что на чём нарисовано» по WCAG 2.1.
+    fn contrast(front: palette::Rgba, back: palette::Rgba) -> f32 {
+        let front = relative_luminance(flatten(front, back));
+        let back = relative_luminance(back);
+        let (high, low) = if front > back {
+            (front, back)
+        } else {
+            (back, front)
+        };
+        (high + 0.05) / (low + 0.05)
+    }
+
+    /// Модельные палитры схем matugen: тона Material 3 по семействам схем.
+    ///
+    /// Реальный вывод matugen на машине не хранится в репозитории, а генерировать
+    /// его здесь нельзя — команда переписывает `colors.css`. Поэтому палитры
+    /// собраны из публичных тонов M3: тёмная тема берёт акцент тона 80 и
+    /// поверхность тона 6–10, светлая — акцент тона 40 и поверхность тона 98.
+    /// Схемы различаются chroma и тоном акцента, а производные роли считаются
+    /// из них той же формулой, что и в живом окне.
+    const MODEL_SCHEMES: [&str; 10] = [
+        "tonal-spot",
+        "expressive",
+        "fidelity",
+        "fruit-salad",
+        "monochrome",
+        "neutral",
+        "rainbow",
+        "content",
+        "vibrant",
+        "smart",
+    ];
+
+    struct ModelPalette {
+        base: palette::Rgba,
+        text: palette::Rgba,
+        primary: palette::Rgba,
+        secondary: palette::Rgba,
+    }
+
+    /// Собрать палитру схемы: акцент и его chroma, поверхность и текст режима.
+    fn model(scheme: &str, light: bool) -> ModelPalette {
+        // Акцент схемы: (тон 80 или 40, chroma, поверхность).
+        let (accent, chroma, surface): ([u8; 3], f32, [u8; 3]) = match scheme {
+            "tonal-spot" => ([0x9d, 0xcb, 0xfb], 1.00, [0x10, 0x14, 0x18]),
+            "expressive" => ([0xb6, 0xc8, 0xff], 1.00, [0x12, 0x12, 0x16]),
+            "fidelity" => ([0xaf, 0xc6, 0xff], 0.95, [0x11, 0x13, 0x17]),
+            "fruit-salad" => ([0xf5, 0xc0, 0x6b], 1.00, [0x14, 0x12, 0x0e]),
+            "monochrome" => ([0xc8, 0xc9, 0xcc], 0.05, [0x11, 0x11, 0x12]),
+            "neutral" => ([0xbd, 0xc2, 0xc9], 0.15, [0x11, 0x12, 0x13]),
+            "rainbow" => ([0x8f, 0xd8, 0xc0], 1.00, [0x10, 0x16, 0x16]),
+            "content" => ([0xa9, 0xc7, 0xf0], 0.70, [0x10, 0x13, 0x17]),
+            "vibrant" => ([0xe3, 0xb6, 0xf2], 1.00, [0x14, 0x10, 0x18]),
+            "smart" => ([0xa8, 0xc7, 0xfa], 0.85, [0x10, 0x14, 0x18]),
+            other => unreachable!("схема {other} не описана"),
+        };
+        let (accent, surface): ([u8; 3], [u8; 3]) = if light {
+            ([0x00, 0x31, 0x52], [0xfa, 0xfa, 0xff])
+        } else {
+            (accent, surface)
+        };
+        let rgb = |value: [u8; 3]| palette::Rgba(value[0], value[1], value[2], 255);
+        let secondary = [
+            (surface[0] as f32 + (accent[0] as f32 - surface[0] as f32) * 0.22 * chroma) as u8,
+            (surface[1] as f32 + (accent[1] as f32 - surface[1] as f32) * 0.22 * chroma) as u8,
+            (surface[2] as f32 + (accent[2] as f32 - surface[2] as f32) * 0.22 * chroma) as u8,
+        ];
+        ModelPalette {
+            base: rgb(surface),
+            text: rgb(if light {
+                [0x1a, 0x1b, 0x20]
+            } else {
+                [0xe3, 0xe2, 0xe9]
+            }),
+            primary: rgb(accent),
+            secondary: rgb(secondary),
+        }
+    }
+
+    /// Пары «что на чём нарисовано», которые обязан читать человек.
+    ///
+    /// Пороги: 4.5:1 на мелкий текст, 3:1 на графику, иконки и маркеры. Список
+    /// один на обе темы и на все палитры — иначе проверка была бы списком
+    /// отдельных утверждений по каждой роли.
+    ///
+    /// Две строки в таблице не имеют порога, и это не пропуск:
+    ///
+    /// * **подложка hover** — намеренно слабая смесь (0.07 от акцента): её
+    ///   задаёт сам курсор, и она обязана быть слабее выбранной строки, иначе
+    ///   мышь выглядела бы как выбор. Отличие от карточки проверяет
+    ///   `derived_palette_colors_come_from_the_base_ones`.
+    /// * **дорожка полосы** — «пустая» часть одного графического элемента.
+    ///   WCAG 1.4.11 требует различия графики *целиком* с фоном, то есть
+    ///   заливки, и это отдельная строка таблицы. Требовать ещё 3:1 и от
+    ///   дорожки нельзя: заливка — это `muted`, а он дальше всех от карточки в
+    ///   худшей схеме (4.51:1), и на отрезке в 4.51:1 нельзя поставить точку
+    ///   в 3:1 от обоих концов — нужно минимум 9:1. Проверка дорожки на
+    ///   контраст поэтому идёт по заливке: «заливка к дорожке» ниже.
+    fn pairs(ui: &UiPalette) -> Vec<(&'static str, palette::Rgba, palette::Rgba, f32)> {
+        let selected = ui.selected_bg;
+        vec![
+            ("название строки", ui.text, ui.panel, 4.5),
+            ("иконка строки", ui.muted, ui.panel, 3.0),
+            ("выбранная строка: текст", ui.accent, selected, 4.5),
+            ("выбранная строка: иконка", ui.accent, selected, 3.0),
+            ("значение справа", ui.muted, ui.panel, 4.5),
+            ("подпись пути", ui.muted, ui.panel, 4.5),
+            ("подвал", ui.muted, ui.panel, 4.5),
+            ("заглушка поиска", ui.text_disabled, ui.idle_panel, 4.5),
+            ("запрос в поиске", ui.text, ui.idle_panel, 4.5),
+            ("подложка hover", ui.hover_bg, ui.panel, 0.0),
+            ("рамка поля поиска", ui.border_focus, ui.idle_panel, 3.0),
+            ("крошка: префикс", ui.muted, ui.panel, 4.5),
+            ("крошка: раздел", ui.accent, ui.panel, 4.5),
+            ("маркер выбранной строки", ui.accent, ui.panel, 3.0),
+            ("рамка карточки", ui.border, ui.panel, 3.0),
+            ("полоса: дорожка", ui.border_subtle, ui.panel, 0.0),
+            ("полоса: заливка к карточке", ui.muted, ui.panel, 3.0),
+            ("полоса: заливка к дорожке", ui.muted, ui.border_subtle, 3.0),
+            ("тумблер: кольцо", ui.muted, ui.panel, 3.0),
+            ("тумблер: заливка", ui.accent, ui.panel, 3.0),
+            ("миниатюра выбора", ui.picker_thumb, ui.panel, 3.0),
+        ]
+    }
+
+    /// Контраст ролей обычной темы на всех схемах в обоих режимах.
+    ///
+    /// Двадцать палитр — десять схем, тёмная и светлая. Медленный, но дешёвый:
+    /// считает яркость по разу на пару.
+    #[test]
+    fn every_pair_passes_its_wcag_threshold_on_all_schemes() {
+        let mut failures = Vec::new();
+        for light in [false, true] {
+            for scheme in MODEL_SCHEMES {
+                let model = model(scheme, light);
+                let ui = ui_palette(
+                    false,
+                    palette::Palette {
+                        base: model.base,
+                        text: model.text,
+                        primary: model.primary,
+                        secondary: model.secondary,
+                        on_primary: model.primary,
+                        error: model.text,
+                    },
+                );
+                for (name, front, back, need) in pairs(&ui) {
+                    let ratio = contrast(front, back);
+                    if ratio < need {
+                        failures.push(format!(
+                            "{name}: {ratio:.2}:1 при пороге {need} ({scheme}, {})",
+                            if light {
+                                "светлый"
+                            } else {
+                                "тёмный"
+                            }
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "пары ниже порога:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    /// Те же пары в теме Pixel: у неё свои hex, и правила общие.
+    #[test]
+    fn every_pair_passes_its_wcag_threshold_in_the_pixel_theme() {
+        let ui = ui_palette(true, palette::Palette::default());
+        let mut failures = Vec::new();
+        for (name, front, back, need) in pairs(&ui) {
+            let ratio = contrast(front, back);
+            if ratio < need {
+                failures.push(format!("{name}: {ratio:.2}:1 при пороге {need}"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "пары ниже порога в Pixel:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    /// Пороги не должны разъезжаться: они объявлены один раз и проверяются
+    /// таблицей, а не набором отдельных утверждений.
+    #[test]
+    fn the_thresholds_are_the_ones_the_audit_asked_for() {
+        assert_eq!(
+            pairs(&ui_palette(false, palette::Palette::default())).len(),
+            21
+        );
+        for (_, _, _, need) in pairs(&ui_palette(true, palette::Palette::default())) {
+            assert!(need == 0.0 || need == 3.0 || need == 4.5, "порог {need}");
+        }
+    }
 
     /// Токены обязаны совпадать с геометрией окна, иначе появится второй
     /// источник правды и раскладка разъедется.
