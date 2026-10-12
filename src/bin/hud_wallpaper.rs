@@ -66,6 +66,9 @@ mod palette;
 mod repeat;
 // Нужен state.rs ради текущей схемы, но само окно обоев схемы уже не рисует.
 #[allow(dead_code)]
+#[path = "../hud/anim.rs"]
+mod anim;
+#[allow(dead_code)]
 #[path = "../hud/schemes.rs"]
 mod schemes;
 #[allow(dead_code)]
@@ -141,6 +144,14 @@ struct WpApp {
     pixel: bool,
     lang: settings::Language,
     loader: Arc<Loader<FsSource>>,
+    /// Скользящая рамка выбранной ячейки: состояние живёт здесь, а `view`
+    /// получает готовую позицию.
+    cell_frame: wallpaper::frame::Frame,
+    /// Проявление миниатюр, пришедших после открытия окна.
+    thumb_fade: wallpaper::frame::Fade,
+    /// Карта появления вооружена после первого кадра: до него всё, что есть в
+    /// кэше, готово было к открытию и показывается сразу.
+    fade_armed: bool,
     scroll_acc: f32,
     exit: Arc<AtomicBool>,
 }
@@ -187,6 +198,9 @@ impl WpApp {
     fn sync_thumbs(&mut self, before: (String, String, usize, usize)) {
         if before != self.set_key() {
             self.loader.bump_generation();
+            // Новый набор — прежние пути в нём не встречаются: карта появления
+            // чистится, иначе она росла бы вместе с числом просмотренных папок.
+            self.thumb_fade.clear();
         }
         self.loader
             .request(&self.visible_paths(), &self.prefetch_paths());
@@ -199,6 +213,24 @@ impl WpApp {
         let outcome = wallpaper::input::apply(&mut self.state, input);
         self.sync_thumbs(before);
         self.finish(outcome);
+    }
+
+    /// Запомнить миниатюры, которые пришли уже после первого кадра: только они
+    /// проявляются. До первого кадра всё, что лежит в кэше, было готово к
+    /// открытию, и его показ уже покрыт проявлением окна.
+    fn mark_ready_thumbs(&mut self, now: std::time::Instant) {
+        if !self.fade_armed {
+            return;
+        }
+        let provider: &dyn wallpaper::thumb::Provider = &*self.loader;
+        let ready: Vec<PathBuf> = self
+            .visible_paths()
+            .into_iter()
+            .filter(|path| provider.get(path).is_some())
+            .collect();
+        for path in ready {
+            self.thumb_fade.begin(&path, now);
+        }
     }
 
     /// Исход действия: применить файл или закрыть окно.
@@ -264,6 +296,33 @@ impl WpApp {
 
     /// Рисует кадр карточкой от нуля и отдаёт буфер слою.
     fn draw(&mut self) {
+        // Один момент на кадр: проявление окна, ход рамки и проявление
+        // миниатюр читают его все, иначе значения разъедутся по instants.
+        let now = std::time::Instant::now();
+        let openness = self.ctx.openness_now(now, self.pixel);
+
+        // Ход рамки: цель — позиция выбранной ячейки, отсчитанная от верха
+        // окна сетки. При смене набора `Frame::update` встаёт на место сам.
+        self.cell_frame.update(
+            wallpaper::frame::set_of(
+                &self.state.current_folder,
+                &self.state.query,
+                self.state.filtered.len(),
+                self.state.grid.top_row(),
+            ),
+            wallpaper::frame::cell_position(
+                self.state.grid.selected(),
+                self.state.grid.cols,
+                self.state.grid.top_row(),
+            ),
+            now,
+            self.ctx.anim,
+        );
+        let highlight = self.cell_frame.pos(now, self.pixel);
+        let anim = self.ctx.anim;
+        let started = &self.thumb_fade;
+        let thumb_alpha = move |path: &std::path::Path| started.alpha(path, now, anim);
+
         if self.ctx.width == 0 || self.ctx.height == 0 {
             return;
         }
@@ -282,6 +341,8 @@ impl WpApp {
             ui: self.ui,
             lang: self.lang,
             provider,
+            highlight,
+            thumb_alpha: &thumb_alpha,
         };
         let mut canvas = wallpaper::view::Canvas::new(
             &mut pixmap,
@@ -292,6 +353,7 @@ impl WpApp {
         );
         wallpaper::view::draw_card(&mut canvas, &frame);
         wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
+        layer::fade(&mut pixmap, openness);
 
         let stride = (pw * 4) as i32;
         let Ok((buffer, canvas)) =
@@ -555,8 +617,15 @@ impl smithay_client_toolkit::shell::wlr_layer::LayerShellHandler for WpApp {
             self.ctx.width = WIDTH;
             self.ctx.height = HEIGHT;
         }
+        let was_configured = self.ctx.configured;
         self.ctx.configured = true;
         self.ctx.dirty = true;
+        // Проявление начинается на первом configure: раньше поверхность ещё не
+        // нарисована, и двигать нечего. Повторные configure не перезапускают
+        // его, иначе окно мерцало бы на каждом resize.
+        if !was_configured {
+            self.ctx.start_open(std::time::Instant::now());
+        }
     }
 }
 
@@ -726,6 +795,8 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
     let loaded = settings::load();
     let pixel = loaded.theme.as_deref() == Some("pixel");
     let lang = loaded.language;
+    let anim = anim::AnimSettings::new(loaded.animations, loaded.animation_speed);
+    let started = std::time::Instant::now();
     let palette = palette::load();
     let ui = ui_tokens::ui_palette(pixel, palette);
 
@@ -746,6 +817,8 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
             max_height: HEIGHT,
             scale: SCALE as u32,
         },
+        started,
+        anim,
     )?;
     debug_log(&format!(
         "слой {NAMESPACE}: set_size {WIDTH}x{HEIGHT} до commit"
@@ -768,6 +841,9 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
         pixel,
         lang,
         loader,
+        cell_frame: wallpaper::frame::Frame::new(started),
+        thumb_fade: wallpaper::frame::Fade::new(),
+        fade_armed: false,
         scroll_acc: 0.0,
         exit: Arc::new(AtomicBool::new(false)),
     };
@@ -788,14 +864,29 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
             break;
         }
         let _ = event_queue.dispatch_pending(&mut app);
+        // Один момент на итерацию: проявление считается по нему, иначе разные
+        // значения читались бы в разные instants и кадр дёргался бы.
+        let now = std::time::Instant::now();
         // Готовые миниатюры будят отрисовку: рабочие ставят флаг, цикл его
         // подбирает здесь же — отдельного пробуждения не надо, тик частый.
         if app.loader.take_dirty() {
+            app.ctx.dirty = true;
+            app.mark_ready_thumbs(now);
+        }
+        // Пока идёт проявление окна, ход рамки или проявление миниатюр, кадр
+        // нужен каждый тик.
+        if app.ctx.animating(now)
+            || app.cell_frame.animating(now)
+            || app.thumb_fade.animating(now, app.ctx.anim)
+        {
             app.ctx.dirty = true;
         }
         if app.ctx.configured && app.ctx.dirty {
             app.ctx.dirty = false;
             app.draw();
+            // После первого кадра всё, что есть в кэше, считается готовым к
+            // открытию: с этого момента новые миниатюры проявляются.
+            app.fade_armed = true;
         }
         // Повтор удержанной стрелки: композитор его не шлёт, крутим сами.
         while let Some(event) = app.repeat.poll() {
@@ -815,11 +906,19 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
             // Не держать ввод и готовые миниатюры в очереди дольше кадра.
             // С удержанной стрелкой ждать дольше интервала повтора нельзя,
             // иначе список пролистывался бы рывками.
-            let wait = app
-                .repeat
-                .wait_hint()
-                .map(|left| left.as_millis().clamp(1, 8) as u16)
-                .unwrap_or(8);
+            // Проявление идёт кадрами, а тик у этого окна и так частый (8 мс):
+            // во время проявления берём общий кадровый шаг 16 мс, дальше — как было.
+            let moving = app.ctx.animating(now)
+                || app.cell_frame.animating(now)
+                || app.thumb_fade.animating(now, app.ctx.anim);
+            let wait = if moving {
+                16u16
+            } else {
+                app.repeat
+                    .wait_hint()
+                    .map(|left| left.as_millis().clamp(1, 8) as u16)
+                    .unwrap_or(8)
+            };
             let _ = poll(&mut fds, wait);
             let readable = fds[0]
                 .revents()

@@ -14,7 +14,10 @@
 
 use super::super::data::oneshot;
 use super::action::Action;
-use super::settings::{Language, Module, OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS};
+use super::settings::{
+    ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, Language, Module, OSD_DURATION_MAX_MS,
+    OSD_DURATION_MIN_MS,
+};
 use super::settings_icons;
 use super::settings_ui;
 use super::state::Menu;
@@ -229,23 +232,6 @@ fn apps_section(lang: Language) -> Node {
         title,
         vec![
             Node::action(
-                settings_icons::YOUTUBE,
-                t("YouTube", "YouTube"),
-                // Режим приложения: окно без вкладок и панелей, сайт
-                // внутри. Отдельный профиль не нужен — окно и есть приложение.
-                Action::Spawn(
-                    "flatpak",
-                    &[
-                        "run",
-                        "app.zen_browser.zen",
-                        "--app",
-                        "https://www.youtube.com",
-                    ],
-                ),
-            )
-            .with_id("apps/youtube")
-            .search_as(&["youtube", "ютуб", "видео", "video"]),
-            Node::action(
                 settings_icons::APPS,
                 t("Zen", "Zen"),
                 Action::Spawn("flatpak", &["run", "app.zen_browser.zen"]),
@@ -374,6 +360,33 @@ fn panel_section(lang: Language) -> Node {
             values::set_osd,
         )
         .search_as(&["osd", "громкость", "volume"]),
+    );
+    // Анимации: панель читает файл на каждом тике и применяет сразу, окна
+    // берут настройки при старте — это сказано в подписи строки.
+    children.push(
+        Node::toggle(
+            settings_icons::APPEARANCE,
+            t("Анимации", "Animations"),
+            values::animations,
+            values::set_animations,
+        )
+        .search_as(&["animation", "animations", "анимации"]),
+    );
+    children.push(
+        Node::number(
+            settings_icons::STYLE,
+            t(
+                "Скорость анимаций (окна — при запуске)",
+                "Animation speed (windows on next start)",
+            ),
+            ANIMATION_SPEED_MIN,
+            ANIMATION_SPEED_MAX,
+            0.25,
+            "×",
+            values::animation_speed,
+            values::set_animation_speed,
+        )
+        .search_as(&["animation", "speed", "анимации", "скорость"]),
     );
     children.push(
         Node::number(

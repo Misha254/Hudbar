@@ -235,7 +235,7 @@ impl App {
         let Some(panel) = self.panel.clone() else {
             return;
         };
-        let t = self.popup_t.clamp(0.0, 1.0);
+        let t = self.popup_t();
         let content_h = self.panel_height() as f32 * k;
         let dy = -(1.0 - t) * content_h;
 
@@ -338,7 +338,7 @@ impl App {
                             PANEL_ROW,
                         );
                     }
-                    if self.popup_target > 0.5 && !is_hint(label) {
+                    if self.popup_target() > 0.5 && !is_hint(label) {
                         self.regions.push((
                             Hit::PanelRow(i),
                             Rect {
@@ -613,7 +613,7 @@ impl App {
             knob,
         );
 
-        if self.popup_target > 0.5 {
+        if self.popup_target() > 0.5 {
             self.regions.push((
                 Hit::PanelSlider,
                 Rect {
@@ -669,7 +669,7 @@ impl App {
                     PANEL_ROW,
                 );
             }
-            if self.popup_target > 0.5 && !is_hint(label) {
+            if self.popup_target() > 0.5 && !is_hint(label) {
                 self.regions.push((
                     Hit::PanelRow(i),
                     Rect {

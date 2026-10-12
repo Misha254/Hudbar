@@ -4,7 +4,7 @@ impl App {
     pub fn frame(&mut self) {
         self.regions.clear();
 
-        if self.panel.is_some() && self.popup_t <= 0.001 && self.popup_target <= 0.001 {
+        if self.panel.is_some() && self.popup_t() <= 0.001 && self.popup_target() <= 0.001 {
             self.destroy_popup();
         }
 
@@ -119,6 +119,9 @@ impl App {
         };
         self.render_panel(&mut pixmap);
 
+        // Альфа читается до создания буфера: буфер берёт `self` взаймы, и
+        // после этого `self` уже нельзя читать.
+        let a = self.popup_t();
         let stride = (pw * 4) as i32;
         let Ok((buffer, canvas)) =
             self.pool
@@ -126,7 +129,6 @@ impl App {
         else {
             return;
         };
-        let a = self.popup_t.clamp(0.0, 1.0);
         let (dst_chunks, _) = canvas.as_chunks_mut::<4>();
         let (src_chunks, _) = pixmap.data().as_chunks::<4>();
         for (dst, src) in dst_chunks.iter_mut().zip(src_chunks.iter()) {
@@ -279,7 +281,20 @@ impl App {
         if self.panel.is_none() {
             return;
         }
-        self.popup_target = 0.0;
+        let now = self.now;
+        if self.popup_t() <= 0.0 {
+            // Уже закрыта: незачем запускать движение, которого не видно, —
+            // оно только держало бы цикл на коротком тике.
+            self.shared.dirty.store(true, Ordering::Relaxed);
+            return;
+        }
+        // Закрытие всегда начинается от текущего положения: если панель ещё
+        // выезжает, она развернётся назад, а не прыгнёт.
+        let mut tween = self.popup_anim;
+        tween.retarget(now, 0.0);
+        tween.duration = self.anim.scaled(POPUP_CLOSE);
+        tween.easing = anim::ease_in_cubic;
+        self.popup_anim = tween;
         self.shared.dirty.store(true, Ordering::Relaxed);
     }
 
@@ -287,7 +302,7 @@ impl App {
         self.panel = None;
         self.popup = None;
         self.grab = None;
-        self.popup_t = 0.0;
+        self.popup_anim = anim::Tween::settled(0.0, self.now);
         self.regions.retain(|(h, _)| !matches!(h, Hit::PanelRow(_)));
         self.shared.dirty.store(true, Ordering::Relaxed);
     }
@@ -309,8 +324,13 @@ impl App {
             hover_toggle: false,
             view,
         });
-        self.popup_t = 0.0;
-        self.popup_target = 1.0;
+        self.popup_anim = anim::Tween::new(
+            0.0,
+            1.0,
+            self.now,
+            self.anim.scaled(POPUP_OPEN),
+            anim::ease_out_cubic,
+        );
         self.popup = None;
         self.grab = None;
         match kind {
@@ -410,7 +430,7 @@ impl App {
 
     pub fn toggle_panel(&mut self, kind: PanelKind, qh: &QueueHandle<Self>) {
         let is_open =
-            self.panel.as_ref().is_some_and(|p| p.kind == kind) && self.popup_target > 0.5;
+            self.panel.as_ref().is_some_and(|p| p.kind == kind) && self.popup_target() > 0.5;
         if is_open {
             self.close_panel();
         } else {

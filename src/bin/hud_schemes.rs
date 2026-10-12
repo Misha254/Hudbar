@@ -35,6 +35,9 @@ use wayland_client::{
 };
 
 #[allow(dead_code)]
+#[path = "../hud/anim.rs"]
+mod anim;
+#[allow(dead_code)]
 #[path = "../hud/bind_data.rs"]
 mod bind_data;
 #[allow(dead_code)]
@@ -192,6 +195,10 @@ impl Schemes {
 }
 
 struct SchemesApp {
+    /// Ход подсветки выбранной схемы: позиция в строках. Список схем не
+    /// меняется и не прокручивается, поэтому набора здесь нет — есть только
+    /// движение по выбранной строке.
+    sel_tween: anim::Tween,
     registry_state: RegistryState,
     output_state: OutputState,
     seat_state: SeatState,
@@ -211,7 +218,38 @@ struct SchemesApp {
     exit: Arc<AtomicBool>,
 }
 
+/// Длительность хода подсветки схемы. Та же, что у меню: 90 мс.
+const SEL_MOVE: std::time::Duration = std::time::Duration::from_millis(90);
+
 impl SchemesApp {
+    /// Подвинуть подсветку к текущей выбранной строке.
+    ///
+    /// Нулевая длительность при `from == to` обязательна: иначе твин без
+    /// движения числился бы идущим вечно и окно перерисовывалось бы вхолостую.
+    fn step_sel(&mut self, now: std::time::Instant) {
+        let mut tween = self.sel_tween;
+        tween.retarget(now, self.model.sel as f32);
+        if tween.from == tween.to {
+            tween.duration = std::time::Duration::ZERO;
+        } else {
+            tween.duration = self.ctx.anim.scaled(SEL_MOVE);
+            tween.easing = anim::ease_out_cubic;
+        }
+        self.sel_tween = tween;
+    }
+
+    /// Позиция подсветки для отрисовки: в Pixel-теме округляется до целой
+    /// строки, иначе кромка рамки размывается.
+    fn sel_row(&self, now: std::time::Instant) -> Option<f32> {
+        let value = self.sel_tween.value(now);
+        Some(if self.pixel { value.round() } else { value })
+    }
+
+    /// Идёт ли ход подсветки.
+    fn sel_moving(&self, now: std::time::Instant) -> bool {
+        !self.sel_tween.done(now)
+    }
+
     fn card() -> Rect {
         Rect::new(0.0, 0.0, CARD_W, height() as f32)
     }
@@ -251,6 +289,13 @@ impl SchemesApp {
         if !self.ctx.configured || !self.ctx.dirty {
             return;
         }
+        // Один момент на кадр: проявление окна и ход подсветки читают его все.
+        let now = std::time::Instant::now();
+        let openness = self.ctx.openness_now(now, self.pixel);
+        // Подсветка едет к выбранной строке. Список схем не меняется, поэтому
+        // snap здесь не нужен: единственная цель — номер выбранной строки.
+        self.step_sel(now);
+        let highlight = self.sel_row(now);
         self.ctx.dirty = false;
         let pw = (self.ctx.width as f32 * SCALE) as u32;
         let ph = (self.ctx.height as f32 * SCALE) as u32;
@@ -267,8 +312,16 @@ impl SchemesApp {
             self.pixel,
             self.ui,
         );
-        paint(&mut canvas, card, &self.model, self.pixel, self.lang);
+        paint(
+            &mut canvas,
+            card,
+            &self.model,
+            self.pixel,
+            self.lang,
+            highlight,
+        );
         wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
+        layer::fade(&mut pixmap, openness);
 
         let stride = (pw * 4) as i32;
         let Ok((buffer, canvas)) =
@@ -301,6 +354,7 @@ fn paint(
     model: &Schemes,
     pixel: bool,
     lang: Language,
+    highlight: Option<f32>,
 ) {
     let ts = ui_tokens::type_scale(pixel);
     let area = schemes::zone(card);
@@ -336,7 +390,7 @@ fn paint(
             canvas.ui.idle_panel
         };
         canvas.fill(line, ui_tokens::radii::SM, fill);
-        if selected {
+        if selected && highlight.is_none() {
             canvas.outline(line, canvas.ui.accent, 2.0);
         }
 
@@ -379,6 +433,16 @@ fn paint(
                 Rect::new(line.right() - schemes::ROW_PAD - 20.0, line.y, 20.0, line.h),
                 Align::End,
             );
+        }
+    }
+
+    // Едущая подсветка рисуется после списка: на ходу она стоит между строками,
+    // а не на одной из них, и лежит поверх их заливок.
+    if let Some(row) = highlight {
+        let clamped = row.clamp(0.0, SCHEMES.len().saturating_sub(1) as f32);
+        if let Some(line) = schemes::row(area, clamped.round() as usize) {
+            canvas.fill(line, ui_tokens::radii::SM, canvas.ui.panel);
+            canvas.outline(line, canvas.ui.accent, 2.0);
         }
     }
 
@@ -627,6 +691,7 @@ impl LayerShellHandler for SchemesApp {
         self.ctx.apply_configure(
             (configure.new_size.0, configure.new_size.1),
             (WIDTH, height()),
+            std::time::Instant::now(),
         );
     }
 }
@@ -683,6 +748,8 @@ fn run() -> Result<(), String> {
 
     let loaded = settings::load();
     let pixel = loaded.theme.as_deref() == Some("pixel");
+    let anim = anim::AnimSettings::new(loaded.animations, loaded.animation_speed);
+    let started = std::time::Instant::now();
     let palette = palette::load();
     let ui = ui_tokens::ui_palette(pixel, palette);
 
@@ -698,9 +765,12 @@ fn run() -> Result<(), String> {
             max_height: height(),
             scale: SCALE as u32,
         },
+        started,
+        anim,
     )?;
 
     let mut app = SchemesApp {
+        sel_tween: anim::Tween::settled(0.0, started),
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
@@ -728,6 +798,13 @@ fn run() -> Result<(), String> {
             break;
         }
         let _ = event_queue.dispatch_pending(&mut app);
+        // Один момент на итерацию: проявление считается по нему, иначе разные
+        // значения читались бы в разные instants и кадр дёргался бы.
+        let now = std::time::Instant::now();
+        // Пока идёт проявление или ход подсветки, кадр нужен каждый тик.
+        if app.ctx.animating(now) || app.sel_moving(now) {
+            app.ctx.dirty = true;
+        }
         app.draw();
         while let Some(event) = app.repeat.poll() {
             let action = app.handle_key(event);
@@ -739,7 +816,13 @@ fn run() -> Result<(), String> {
         }
         if let Some(guard) = event_queue.prepare_read() {
             // С удержанной стрелкой ждать дольше интервала повтора нельзя.
-            let idle = 200u16;
+            // Проявление и ход подсветки идут кадрами: ждать дольше 16 мс
+            // значило бы проявлять окно и гнать подсветку ступенями.
+            let idle = if app.ctx.animating(now) || app.sel_moving(now) {
+                16u16
+            } else {
+                200u16
+            };
             let wait = app
                 .repeat
                 .wait_hint()

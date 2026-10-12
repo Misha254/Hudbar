@@ -351,7 +351,9 @@ pub fn render(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
     let rows = rows_for(frame);
     let card = card_rect(surface.w, surface.h, rows, search);
     view.scrim(surface.w, surface.h);
-    paint(view, card, frame);
+    // Снимок рисуется без скользящей полосы: она свойство живого окна, и
+    // снимок обязан совпадать с прежним побитово.
+    paint(view, card, frame, None);
     card
 }
 
@@ -359,18 +361,22 @@ pub fn render(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
 /// под меню должны быть видны терминал и обои, размытие показывает
 /// правило слоя. Прозрачность карточки задаёт вызывающий через
 /// `apply_card_alpha`.
-pub fn render_window(view: &mut MenuView<'_>, frame: &Frame) -> Rect {
+///
+/// `highlight_row` — позиция подсветки в строках экрана. `None` рисует
+/// подсвеченную строку внутри `row()`, как всегда; `Some` рисует одну
+/// отдельную полосу, которая едет между строками.
+pub fn render_window(view: &mut MenuView<'_>, frame: &Frame, highlight_row: Option<f32>) -> Rect {
     let search = search_mode(frame);
     let rows = rows_for(frame);
     let card = Rect::new(0.0, 0.0, CARD_W, card_height_for(rows, search));
     view.card(card);
-    paint(view, card, frame);
+    paint(view, card, frame, highlight_row);
     card
 }
 
 /// Содержимое карточки: шапка, строки, подвал. Общая часть для снимка и окна —
 /// расхождение только в фоне вокруг.
-fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
+fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame, highlight_row: Option<f32>) {
     if let Some(secret) = frame.secret.as_ref() {
         secret_view(view, card, frame, secret);
         return;
@@ -379,7 +385,7 @@ fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
     let rows = rows_shown(frame.items.len());
     let row_h = row_height(search);
     header(view, card, frame);
-    rows_view(view, card, frame, rows, row_h);
+    rows_view(view, card, frame, rows, row_h, highlight_row);
     footer(view, card, frame);
 }
 
@@ -741,11 +747,29 @@ fn selected_row(frame: &Frame) -> usize {
 
 /// Список строк: выбранная подсвечена и отмечена полосой, между строками
 /// hairline.
-fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize, row_h: f32) {
+fn rows_view(
+    view: &mut MenuView<'_>,
+    card: Rect,
+    frame: &Frame,
+    rows: usize,
+    row_h: f32,
+    highlight_row: Option<f32>,
+) {
     let start = window_rows(frame, rows);
     let shown = start.len();
     let list = Rect::new(card.x, card.y + HEADER_H, card.w, shown as f32 * row_h);
     let selected_row = selected_row(frame);
+    // Полоса подсветки рисуется до строк, чтобы содержимое выбранной строки
+    // лежало поверх неё, как и при отрисовке внутри `row()`.
+    if let Some(pos) = highlight_row
+        && shown > 0
+    {
+        let slot = pos.clamp(0.0, shown as f32 - 1.0);
+        highlight_band(
+            view,
+            Rect::new(list.x, list.y + slot * row_h, list.w, row_h),
+        );
+    }
     for (index, (position, item)) in start.iter().enumerate() {
         let rect = Rect::new(list.x, list.y + index as f32 * row_h, list.w, row_h);
         // Разделитель рисуется над строкой, а не под ней: под последней
@@ -762,7 +786,21 @@ fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize, ro
                 view.ui.border_subtle,
             );
         }
-        row(view, rect, item, *position == selected_row, frame.lang);
+        // Насколько строка близка к едущей полосе: 1 — под полосой, 0 — мимо.
+        // Без полосы близость равна обычному выбору, и цвета совпадают побитово.
+        let near = match highlight_row {
+            Some(pos) => (1.0 - (pos - index as f32).abs()).clamp(0.0, 1.0),
+            None => usize::from(*position == selected_row) as f32,
+        };
+        row(
+            view,
+            rect,
+            item,
+            *position == selected_row,
+            frame.lang,
+            highlight_row.is_none(),
+            near,
+        );
     }
     if frame.items.is_empty() {
         view.text_clipped(
@@ -775,40 +813,72 @@ fn rows_view(view: &mut MenuView<'_>, card: Rect, frame: &Frame, rows: usize, ro
     }
 }
 
+/// Смешение цвета строки по близости к едущей полосе.
+///
+/// Отдельная функция, а не `ui_tokens::mix`: та выставляет альфу в 255, а цвета
+/// текста в меню полупрозрачны — на `t = 0` кадр бы посветлел. Здесь смешиваются
+/// все четыре канала, поэтому на концах получаются ровно исходные цвета.
+pub fn blend(a: palette::Rgba, b: palette::Rgba, t: f32) -> palette::Rgba {
+    let t = t.clamp(0.0, 1.0);
+    let channel = |from: u8, to: u8| (from as f32 + (to as f32 - from as f32) * t) as u8;
+    palette::Rgba(
+        channel(a.0, b.0),
+        channel(a.1, b.1),
+        channel(a.2, b.2),
+        channel(a.3, b.3),
+    )
+}
+
+/// Подсветка выбранной строки целиком: заливка и акцентная полоса слева.
+///
+/// Отдельная функция нужна для скользящей полосы: она рисуется одна на весь
+/// список, а не внутри строки, и должна совпадать с прежней побитово.
+fn highlight_band(view: &mut MenuView<'_>, rect: Rect) {
+    // Подсветка и полоса отступают от краёв карточки на CARD_INSET:
+    // заливка от самого края ложилась бы на hairline рамки.
+    let inner = highlight_rect(rect);
+    fill_rect(
+        view.pixmap,
+        inner.x * SCALE,
+        inner.y * SCALE,
+        inner.w * SCALE,
+        inner.h * SCALE,
+        selected_background(view.ui),
+    );
+    let marker = marker_rect(rect);
+    fill_rect(
+        view.pixmap,
+        marker.x * SCALE,
+        marker.y * SCALE,
+        marker.w * SCALE,
+        marker.h * SCALE,
+        view.ui.accent,
+    );
+}
+
 /// Одна строка: иконка, название, значение справа и индикатор поведения.
-fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, selected: bool, lang: Language) {
-    if selected {
-        // Подсветка и полоса отступают от краёв карточки на CARD_INSET:
-        // заливка от самого края ложилась бы на hairline рамки.
-        let inner = highlight_rect(rect);
-        fill_rect(
-            view.pixmap,
-            inner.x * SCALE,
-            inner.y * SCALE,
-            inner.w * SCALE,
-            inner.h * SCALE,
-            selected_background(view.ui),
-        );
-        let marker = marker_rect(rect);
-        fill_rect(
-            view.pixmap,
-            marker.x * SCALE,
-            marker.y * SCALE,
-            marker.w * SCALE,
-            marker.h * SCALE,
-            view.ui.accent,
-        );
+///
+/// `paint_selected` снимает с строки её фон: когда подсветка едет отдельной
+/// полосой, фон здесь нарисовался бы дважды и стоял бы на месте.
+fn row(
+    view: &mut MenuView<'_>,
+    rect: Rect,
+    item: &Item,
+    selected: bool,
+    lang: Language,
+    paint_selected: bool,
+    near: f32,
+) {
+    if selected && paint_selected {
+        highlight_band(view, rect);
     }
-    let icon_color = if selected {
-        view.ui.accent
-    } else {
-        view.ui.muted
-    };
-    let text_color = if selected {
-        view.ui.accent
-    } else {
-        view.ui.text
-    };
+    // Цвет текста и иконки смешивается с расстоянием до едущей полосы, а не
+    // переключается сразу: строка, которую полоса сейчас проходит, проявляется
+    // постепенно. При `near` ровно 0 или 1 смешивание даёт прежние цвета
+    // побитово, поэтому кадр без анимации не меняется.
+    let near = near.clamp(0.0, 1.0);
+    let icon_color = blend(view.ui.muted, view.ui.accent, near);
+    let text_color = blend(view.ui.text, view.ui.accent, near);
     let two_line = !item.single_line();
     let icon_x = rect.x + PAD;
     let label_x = icon_x + ICON + spacing::MD;
@@ -1178,8 +1248,248 @@ pub fn font_name(pixel: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::settings_icons;
+    use super::super::text::TextPainter;
     use super::super::{Action, Menu, Node};
     use super::*;
+
+    /// Карточка списка с произвольной подсветкой: та же отрисовка, что и окно.
+    fn render_card(frame: &Frame, pixel: bool, highlight_row: Option<f32>) -> tiny_skia::Pixmap {
+        let card_h = card_height_for(frame.items.len(), search_mode(frame));
+        let (ui, scale) = theme(pixel, palette::Palette::default());
+        let mut pixmap = tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (card_h * SCALE) as u32)
+            .expect("pixmap");
+        pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
+        let mut painter = TextPainter::new(&font_name(pixel));
+        let mut icons = TextPainter::new(settings_icons::FONT);
+        let mut view = MenuView {
+            pixmap: &mut pixmap,
+            painter: &mut painter,
+            icons: &mut icons,
+            ui,
+            scale,
+            pixel,
+        };
+        render_window(&mut view, frame, highlight_row);
+        pixmap
+    }
+
+    /// Цвет пикселя в середине строки `slot` списка, в стороне от текста:
+    /// слева от названия там нет ничего, кроме подложки и подсветки.
+    fn pixel_in_row(pixmap: &tiny_skia::Pixmap, frame: &Frame, slot: f32) -> palette::Rgba {
+        let row_h = row_height(search_mode(frame));
+        let y = (HEADER_H + slot * row_h + row_h / 2.0) * SCALE;
+        let x = (PAD + 2.0) * SCALE;
+        at_pixel(pixmap, x, y)
+    }
+
+    /// Пиксель кадры по логическим координатам. Буфер `Pixmap` хранит RGBA
+    /// сам, перестановка каналов живёт только при отправке в shm.
+    fn at_pixel(pixmap: &tiny_skia::Pixmap, x: f32, y: f32) -> palette::Rgba {
+        let data = pixmap.data();
+        let at = (y as u32) * pixmap.width() + (x as u32);
+        let px = &data[at as usize * 4..at as usize * 4 + 4];
+        palette::Rgba(px[0], px[1], px[2], px[3])
+    }
+
+    /// Список из `count` строк с выбором `selected`.
+    fn frame_with(count: usize, selected: usize) -> Frame {
+        let mut menu = Menu::new(rows(count));
+        menu.move_sel(selected as isize);
+        menu.frame()
+    }
+
+    /// Снимок и обычный кадр рисуют подсветку одинаково: путь `None` обязан
+    /// остаться побитово прежним, иначе поменяются эталонные картинки.
+    #[test]
+    fn no_highlight_row_keeps_the_row_itself_painted() {
+        let frame = frame_with(8, 3);
+        let plain = render_card(&frame, false, None);
+
+        let (ui, _) = theme(false, palette::Palette::default());
+        let want = selected_background(ui);
+        for slot in [0.0f32, 2.0, 3.0, 5.0] {
+            let got = pixel_in_row(&plain, &frame, slot);
+            let selected = (slot - 3.0).abs() < f32::EPSILON;
+            if selected {
+                assert_eq!(got, want, "выбранная строка должна быть подсвечена");
+            } else {
+                assert_ne!(got, want, "посторонняя строка {slot} не подсвечена");
+            }
+        }
+    }
+
+    /// Скользящая полоса рисуется на той позиции, которую ей дали, и не по
+    /// выбору. Границы полуоткрытые — верхняя включена, нижняя нет, поэтому
+    /// при `pos = 1.5` подсвечен ровно низ первой строки.
+    #[test]
+    fn a_highlight_row_draws_at_the_given_position() {
+        let frame = frame_with(8, 3);
+        let (ui, _) = theme(false, palette::Palette::default());
+        let want = selected_background(ui);
+        let lit =
+            |pixmap: &tiny_skia::Pixmap, slot: f32| pixel_in_row(pixmap, &frame, slot) == want;
+
+        let halfway = render_card(&frame, false, Some(1.5));
+        assert!(lit(&halfway, 1.0), "низ первой строки подсвечен");
+        assert!(!lit(&halfway, 2.0), "строка ниже чистая");
+        assert!(!lit(&halfway, 0.0), "строка выше не подсвечена");
+        assert!(
+            !lit(&halfway, 3.0),
+            "на месте прежнего выбора фона быть не должно"
+        );
+
+        let settled = render_card(&frame, false, Some(1.0));
+        assert!(lit(&settled, 1.0), "на целой строке полоса встаёт на неё");
+        assert!(!lit(&settled, 2.0), "соседняя строка не подсвечена");
+    }
+
+    /// Смешение цвета строки по близости к полосе: на концах даёт прежние цвета,
+    /// в середине — промежуточный.
+    #[test]
+    fn the_row_color_follows_the_band_proximity() {
+        let (ui, _) = theme(false, palette::Palette::default());
+
+        assert_eq!(
+            mix(ui.text, ui.accent, 0.0),
+            ui.text,
+            "вне полосы — обычный"
+        );
+        assert_eq!(
+            mix(ui.text, ui.accent, 1.0),
+            ui.accent,
+            "под полосой — выбранный"
+        );
+
+        let half = blend(ui.text, ui.accent, 0.5);
+        let distance = |a: palette::Rgba, b: palette::Rgba| {
+            (0..3)
+                .map(|i| (a.0 + i) as i32 - (b.0 + i) as i32)
+                .map(i32::abs)
+                .sum::<i32>()
+        };
+        assert!(
+            distance(half, ui.text) > 0 && distance(half, ui.accent) > 0,
+            "середина должна отличаться от обоих концов"
+        );
+        assert_eq!(
+            distance(blend(ui.text, ui.accent, 0.5), half),
+            0,
+            "половина пути считается одинаково"
+        );
+    }
+
+    /// Без едущей полосы близость равна обычному выбору, поэтому кадр
+    /// побитово прежний: смешение на концах совпадает с исходными цветами.
+    #[test]
+    fn without_a_band_the_proximity_is_plain_selection() {
+        let (ui, _) = theme(false, palette::Palette::default());
+        let near = |selected: bool| usize::from(selected) as f32;
+
+        assert_eq!(blend(ui.text, ui.accent, near(true)), ui.accent);
+        assert_eq!(blend(ui.muted, ui.accent, near(true)), ui.accent);
+        assert_eq!(blend(ui.text, ui.accent, near(false)), ui.text);
+        assert_eq!(blend(ui.muted, ui.accent, near(false)), ui.muted);
+    }
+
+    #[test]
+    fn blending_keeps_the_alpha_of_both_ends() {
+        // Цвет иконки невыбранной строки полупрозрачен: смешение, затирающее
+        // альфу в 255, посветлило бы все такие иконки.
+        let (ui, _) = theme(false, palette::Palette::default());
+        assert_ne!(
+            ui.muted.3, 255,
+            "тест бессмысленен, если цвет иконки непрозрачен"
+        );
+        assert_eq!(blend(ui.muted, ui.accent, 0.0).3, ui.muted.3);
+        assert_eq!(blend(ui.muted, ui.accent, 1.0).3, ui.accent.3);
+        let middle = (ui.muted.3 as f32 + (ui.accent.3 - ui.muted.3) as f32 * 0.5) as u8;
+        assert_eq!(blend(ui.muted, ui.accent, 0.5).3, middle);
+        assert_eq!(blend(ui.text, ui.accent, 0.0), ui.text);
+        assert_eq!(blend(ui.text, ui.accent, 1.0), ui.accent);
+    }
+
+    /// Расстояние до полосы: своя строка под полосой, соседние — нет.
+    #[test]
+    fn only_the_row_under_the_band_lights_up() {
+        let close = |pos: f32, index: usize| (1.0 - (pos - index as f32).abs()).clamp(0.0, 1.0);
+
+        assert!((close(2.0, 2) - 1.0).abs() < 1e-6);
+        assert_eq!(close(2.0, 1), 0.0);
+        assert_eq!(close(2.0, 3), 0.0);
+        assert!((close(2.5, 2) - 0.5).abs() < 1e-6);
+        assert!((close(2.5, 3) - 0.5).abs() < 1e-6);
+    }
+
+    /// Полоса не рисуется на месте старой строки, пока едет новая.
+    #[test]
+    fn the_sliding_band_leaves_the_previous_row() {
+        let frame = frame_with(8, 3);
+        let (ui, _) = theme(false, palette::Palette::default());
+        let want = selected_background(ui);
+
+        let moving = render_card(&frame, false, Some(1.0));
+
+        assert_eq!(pixel_in_row(&moving, &frame, 1.0), want);
+        assert_ne!(
+            pixel_in_row(&moving, &frame, 3.0),
+            want,
+            "на прежней выбранной строке фона быть не должно"
+        );
+    }
+
+    /// Акцентная полоса слева едет вместе с подсветкой.
+    #[test]
+    fn the_marker_travels_with_the_band() {
+        let frame = frame_with(8, 3);
+        let (ui, _) = theme(false, palette::Palette::default());
+        let want = ui.accent;
+        let moving = render_card(&frame, false, Some(2.0));
+
+        let row_h = row_height(search_mode(&frame));
+        let y = HEADER_H + 2.0 * row_h + row_h / 2.0;
+        let x = CARD_INSET + 1.0;
+
+        assert_eq!(
+            at_pixel(&moving, x * SCALE, y * SCALE),
+            want,
+            "акцентная полоса должна стоять на едущей строке"
+        );
+    }
+
+    /// Пустой список не должен получать висящую подсветку.
+    #[test]
+    fn an_empty_list_gets_no_floating_band() {
+        let menu = Menu::new(Vec::new());
+        let frame = menu.frame();
+        let empty = render_card(&frame, false, Some(0.0));
+        let plain = render_card(&frame, false, None);
+
+        assert_eq!(
+            empty.data(),
+            plain.data(),
+            "над пустым списком подсветка рисоваться не должна"
+        );
+    }
+
+    /// Обе темы рисуются без паники, скользящая подсветка в том числе.
+    #[test]
+    fn both_themes_render_a_sliding_band() {
+        let frame = frame_with(8, 3);
+        for pixel in [false, true] {
+            let moving = render_card(&frame, pixel, Some(2.5));
+            assert!(
+                moving.width() > 0 && moving.height() > 0,
+                "тема pixel={pixel}: кадр пуст"
+            );
+            let plain = render_card(&frame, pixel, None);
+            assert_ne!(
+                moving.data(),
+                plain.data(),
+                "тема pixel={pixel}: скользящая полоса ни на что не повлияла"
+            );
+        }
+    }
 
     /// Список из десяти строк, выбор девятой: прокрутка ещё не нужна, и
     /// подсветка обязана совпадать с выбором.

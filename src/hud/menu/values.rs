@@ -106,6 +106,42 @@ pub fn set_control_button(on: bool) {
     }
 }
 
+/// Анимации включены. Панель подхватывает файл сразу, окна — при следующем
+/// запуске: они читают настройки один раз на старте.
+pub fn animations() -> bool {
+    settings::load().animations
+}
+
+/// Включение и выключение анимаций.
+pub fn set_animations(on: bool) {
+    if let Err(error) = config_io::apply_patch(&Patch::Animations {
+        enabled: Some(on),
+        speed: None,
+    }) {
+        log::warn(format!("анимации не переключились: {error}"));
+    }
+}
+
+/// Множитель длительности анимаций: 2.0 — вдвое быстрее.
+pub fn animation_speed() -> f32 {
+    settings::load().animation_speed
+}
+
+/// Запись скорости анимаций. Значение зажато к границам из `settings.rs`.
+pub fn set_animation_speed(value: f32) {
+    let speed = settings::clamp_f(
+        value as f64,
+        settings::ANIMATION_SPEED_MIN,
+        settings::ANIMATION_SPEED_MAX,
+    );
+    if let Err(error) = config_io::apply_patch(&Patch::Animations {
+        enabled: None,
+        speed: Some(speed),
+    }) {
+        log::warn(format!("скорость анимаций не записалась: {error}"));
+    }
+}
+
 /// Своё окно громкости/микрофона вместо уведомления dunst.
 pub fn osd() -> bool {
     settings::load().osd

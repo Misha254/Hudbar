@@ -14,6 +14,10 @@ pub const LINE_HEIGHT_MAX: u32 = 28;
 pub const OSD_DURATION_MIN_MS: u32 = 600;
 pub const OSD_DURATION_MAX_MS: u32 = 4000;
 pub const OSD_DURATION_DEFAULT_MS: u32 = 1600;
+/// Границы скорости анимаций: 0.5 — вдвое медленнее, 2.0 — вдвое быстрее.
+pub const ANIMATION_SPEED_MIN: f32 = 0.5;
+pub const ANIMATION_SPEED_MAX: f32 = 2.0;
+pub const ANIMATION_SPEED_DEFAULT: f32 = 1.0;
 /// Адрес external controller Mihomo по умолчанию.
 pub const VPN_CONTROLLER_DEFAULT: &str = "127.0.0.1:9090";
 /// Границы таймаута обращения к контроллеру.
@@ -30,6 +34,15 @@ pub const MODULE_KEYS: [&str; 10] = [
 
 pub fn clamp(value: i64, min: u32, max: u32) -> u32 {
     value.clamp(min as i64, max as i64) as u32
+}
+
+/// То же для дробных значений: границы анимаций заданы как `f32`, а в JSON
+/// число может прийти и строкой, и `null`, и `NaN`.
+pub fn clamp_f(value: f64, min: f32, max: f32) -> f32 {
+    if value.is_nan() {
+        return min;
+    }
+    (value as f32).clamp(min, max)
 }
 
 pub fn default_module_order() -> Vec<String> {
@@ -228,6 +241,11 @@ pub struct Settings {
     pub osd: bool,
     /// Сколько миллисекунд висит окно OSD.
     pub osd_duration_ms: u32,
+    /// Анимации включены. Выключенные анимации — это нулевые длительности,
+    /// то есть значения сразу на своих местах.
+    pub animations: bool,
+    /// Множитель длительности анимаций: 2.0 — вдвое быстрее.
+    pub animation_speed: f32,
     /// Адрес external controller Mihomo для VPN-окна.
     pub vpn_controller: String,
     /// Таймаут обращения к контроллеру.
@@ -326,6 +344,8 @@ impl Default for Settings {
             // Включается пользователем в Control Center.
             osd: false,
             osd_duration_ms: OSD_DURATION_DEFAULT_MS,
+            animations: true,
+            animation_speed: ANIMATION_SPEED_DEFAULT,
             vpn_controller: VPN_CONTROLLER_DEFAULT.to_string(),
             vpn_timeout_ms: VPN_TIMEOUT_DEFAULT_MS,
         }
@@ -406,6 +426,13 @@ fn parse_into(settings: &mut Settings, content: &str) {
     // По умолчанию кнопка есть: выключать её нужно явно.
     settings.control_button = get_bool(object, "control_button", true);
 
+    // Анимации включаются по умолчанию: без них значения в панели появляются
+    // рывком, но выключать их нужно явно — как и кнопку шестерёнки.
+    settings.animations = get_bool(object, "animations", settings.animations);
+    if let Some(speed) = object.get("animation_speed").and_then(Value::as_f64) {
+        settings.animation_speed = clamp_f(speed, ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX);
+    }
+
     if let Some(notes) = value.get("notifications").and_then(Value::as_object) {
         if let Some(size) = notes.get("font_size").and_then(Value::as_u64) {
             settings.font_size = clamp(size as i64, FONT_SIZE_MIN, FONT_SIZE_MAX);
@@ -448,9 +475,9 @@ fn parse_into(settings: &mut Settings, content: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        FONT_SIZE_MAX, Language, MODULE_KEYS, Module, NotificationPosition,
-        OSD_DURATION_DEFAULT_MS, OSD_DURATION_MAX_MS, Settings, Zone, default_module_order,
-        normalize_module_order, parse_into,
+        ANIMATION_SPEED_DEFAULT, ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, FONT_SIZE_MAX, Language,
+        MODULE_KEYS, Module, NotificationPosition, OSD_DURATION_DEFAULT_MS, OSD_DURATION_MAX_MS,
+        Settings, Zone, clamp_f, default_module_order, normalize_module_order, parse_into,
     };
 
     #[test]
@@ -700,5 +727,65 @@ mod tests {
         assert_eq!(settings.font_size(), 13);
         assert_eq!(settings.line_height(), 15);
         assert_eq!(settings.position, NotificationPosition::TopRight);
+    }
+
+    #[test]
+    fn animations_are_on_by_default() {
+        let mut settings = Settings::default();
+        parse_into(&mut settings, r#"{"hudbar":{"height":27}}"#);
+
+        assert!(
+            settings.animations,
+            "старый файл без полей: анимации включены"
+        );
+        assert_eq!(settings.animation_speed, ANIMATION_SPEED_DEFAULT);
+    }
+
+    #[test]
+    fn animations_can_be_switched_off_explicitly() {
+        let mut settings = Settings::default();
+        parse_into(&mut settings, r#"{"hudbar":{"animations":false}}"#);
+
+        assert!(!settings.animations);
+    }
+
+    #[test]
+    fn clamps_an_out_of_range_animation_speed() {
+        let mut settings = Settings::default();
+        parse_into(&mut settings, r#"{"hudbar":{"animation_speed":9.0}}"#);
+
+        assert_eq!(settings.animation_speed, ANIMATION_SPEED_MAX);
+
+        let mut slow = Settings::default();
+        parse_into(&mut slow, r#"{"hudbar":{"animation_speed":0.01}}"#);
+
+        assert_eq!(slow.animation_speed, ANIMATION_SPEED_MIN);
+    }
+
+    #[test]
+    fn a_broken_animation_speed_falls_back_to_the_default() {
+        let mut settings = Settings::default();
+        parse_into(
+            &mut settings,
+            r#"{"hudbar":{"animation_speed":"fast","height":27}}"#,
+        );
+
+        assert_eq!(
+            settings.animation_speed, ANIMATION_SPEED_DEFAULT,
+            "строка вместо числа — значение по умолчанию"
+        );
+    }
+
+    #[test]
+    fn clamp_f_rejects_nan() {
+        assert_eq!(
+            clamp_f(f64::NAN, ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX),
+            ANIMATION_SPEED_MIN
+        );
+        assert_eq!(clamp_f(1.5, ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX), 1.5);
+        assert_eq!(
+            clamp_f(100.0, ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX),
+            ANIMATION_SPEED_MAX
+        );
     }
 }

@@ -86,6 +86,9 @@ pub mod data {
     pub use super::oneshot_data as oneshot;
 }
 #[allow(dead_code)]
+#[path = "../hud/anim.rs"]
+mod anim;
+#[allow(dead_code)]
 #[path = "../hud/layer.rs"]
 mod layer;
 #[path = "../hud/log.rs"]
@@ -181,6 +184,9 @@ struct MenuApp {
     painter: TextPainter,
     icons: TextPainter,
     menu: Menu,
+    /// Скользящая подсветка выбранной строки: позиция в строках экрана.
+    /// Состояние живёт здесь, а не в `view`: `view` ничего не помнит.
+    highlight: menu::highlight::Highlight,
     palette: palette::Palette,
     /// Пиксельная ли тема сейчас: от неё зависят шрифт и скругления.
     /// Берётся из `settings.json` при старте и после каждой смены темы.
@@ -428,6 +434,10 @@ impl MenuApp {
 
     /// Рисует кадр и отдаёт буфер слою.
     fn draw(&mut self) {
+        // Степень проявления окна на текущий момент. Считается один раз на
+        // кадр и уходит в общий множитель альфы.
+        let now = std::time::Instant::now();
+        let openness = self.ctx.openness_now(now, self.pixel);
         let frame_now = self.menu.frame();
         debug_log(&format!(
             "слоев: {} строк: {} выбрано: {} top: {} первая: {:?}",
@@ -437,6 +447,15 @@ impl MenuApp {
             frame_now.top,
             frame_now.items.first().map(|item| item.title.as_str())
         ));
+        // Подсветка выбранной строки. `update` идёт до чтения позиции: он
+        // может запустить ход, и тогда читать надо уже новую.
+        self.highlight.update(
+            menu::highlight::level_of(self.menu.depth(), &frame_now.query, frame_now.items.len()),
+            menu::highlight::position(frame_now.selected, frame_now.top),
+            now,
+            self.ctx.anim,
+        );
+        let highlight_row = self.highlight.row(now, self.pixel);
         // Первый кадр рисуется сразу после нашего `set_size`: ждать configure
         // нельзя, иначе меню мигнёт пустым прямо после открытия.
         if self.ctx.width == 0 || self.ctx.height == 0 {
@@ -463,8 +482,9 @@ impl MenuApp {
             scale,
             pixel: self.pixel,
         };
-        let card = view::render_window(&mut window, &frame);
+        let card = view::render_window(&mut window, &frame, highlight_row);
         view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
+        layer::fade(&mut pixmap, openness);
 
         let stride = (pw * 4) as i32;
         let Ok((buffer, canvas)) =
@@ -750,8 +770,15 @@ impl smithay_client_toolkit::shell::wlr_layer::LayerShellHandler for MenuApp {
             self.ctx.width = width;
             self.ctx.height = height;
         }
+        let was_configured = self.ctx.configured;
         self.ctx.configured = true;
         self.ctx.dirty = true;
+        // Проявление начинается на первом configure: раньше поверхность ещё не
+        // нарисована, и двигать нечего. Повторные configure не перезапускают
+        // его, иначе окно мерцало бы на каждом resize.
+        if !was_configured {
+            self.ctx.start_open(std::time::Instant::now());
+        }
     }
 }
 
@@ -867,6 +894,11 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
     // тема — из `settings.json`.
     let lang = settings::load().language;
     let pixel = settings::load().theme.as_deref() == Some("pixel");
+    let anim = anim::AnimSettings::new(
+        settings::load().animations,
+        settings::load().animation_speed,
+    );
+    let started = std::time::Instant::now();
     let mut menu = menu::state::Menu::new(vpn_root(lang));
     menu.set_lang(lang);
     // Сразу в раздел VPN: отдельного списка разделов в этом окне нет.
@@ -890,6 +922,8 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
             max_height: MAX_H,
             scale: SCALE as u32,
         },
+        started,
+        anim,
     )?;
     debug_log(&format!(
         "слой {NAMESPACE}: set_size {start_w}x{start_h} до commit"
@@ -908,6 +942,7 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
         painter: TextPainter::new(&view::font_name(pixel)),
         icons: TextPainter::new(settings_icons::FONT),
         menu,
+        highlight: menu::highlight::Highlight::new(started),
         palette: palette::load(),
         pixel,
         scroll_acc: 0.0,
@@ -933,6 +968,9 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
             break;
         }
         let _ = event_queue.dispatch_pending(&mut app);
+        // Один момент на итерацию: проявление считается по нему, иначе разные
+        // значения читались бы в разные instants и кадр дёргался бы.
+        let now = std::time::Instant::now();
         // Команды и дозапросы providers из модели уезжают в worker-ы, готовые
         // результаты возвращаются в слоты. UI-поток ничего не ждёт.
         for job in app.menu.take_pending_commands() {
@@ -1024,6 +1062,12 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
             app.jobs
                 .push(spawn_provider_job(key, generation, app.menu.lang()));
         }
+        // Пока идёт проявление или ход подсветки, кадр нужен каждый тик: иначе
+        // окно проявлялось бы ступенями по чужим событиям ввода, а подсветка
+        // доезжала бы только к следующему нажатию.
+        if app.ctx.animating(now) || app.highlight.animating(now) {
+            app.ctx.dirty = true;
+        }
         // Рисовать можно только после первого configure: буфер, приложенный
         // раньше ack, композитор рвёт протоколом. Размер слоя при этом уже
         // задан `set_size` до первого commit — это другое требование.
@@ -1047,7 +1091,14 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
         // фоновые задачи (providers/команды), тик короче — результат worker-а
         // подхватывается быстро, без ожидания ввода.
         if let Some(guard) = event_queue.prepare_read() {
-            let idle = if app.jobs.is_empty() { 100u16 } else { 16u16 };
+            // Проявление и ход подсветки идут кадрами: ждать дольше 16 мс
+            // значило бы проявлять окно и гнать подсветку ступенями.
+            let moving = app.ctx.animating(now) || app.highlight.animating(now);
+            let idle = if !moving && app.jobs.is_empty() {
+                100u16
+            } else {
+                16u16
+            };
             // С удержанной стрелкой ждать дольше интервала повтора нельзя.
             let wait = app
                 .repeat

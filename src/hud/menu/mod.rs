@@ -20,6 +20,9 @@ pub mod bluetooth;
 pub mod displays;
 #[allow(dead_code)]
 pub mod exec;
+/// Скользящая подсветка строки: состояние хода, без отрисовки.
+#[allow(dead_code)]
+pub mod highlight;
 #[allow(dead_code)]
 pub mod input;
 #[allow(dead_code)]

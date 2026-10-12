@@ -13,7 +13,7 @@ use super::settings_icons;
 use super::settings_ui::Rect;
 use super::settings_view::{fill_round_rect, stroke_rect};
 use super::text::{Align, SCALE, TextPainter};
-use super::ui_tokens::{TypeScale, UiPalette, radii, radius, spacing};
+use super::ui_tokens::{self, TypeScale, UiPalette, radii, radius, spacing};
 
 /// Состояние виджета. Виджет не знает, откуда оно пришло: фокус от клавиатуры,
 /// наведение от мыши, выделение из настроек.
@@ -204,10 +204,26 @@ pub fn card(ctx: &mut Ctx<'_>, rect: Rect, title: Option<&str>) {
     }
 }
 
+/// Положение ручки тумблера для заданного прогресса хода: 0 — выключено,
+/// 1 — включено, между — едущая ручка. Вынесено отдельно, чтобы состояние
+/// перехода проверялось тестом без рисования.
+pub fn knob_offset(track: Rect, knob: f32, progress: f32) -> f32 {
+    let t = progress.clamp(0.0, 1.0);
+    track.x + 2.0 + (track.w - knob - 4.0) * t
+}
+
 /// Тумблер: трек 36x20, ручка 16. Включён — трек акцентный и ручка тёмная,
 /// выключен — трек приподнятый, ручка приглушена. Это видно с одного взгляда,
 /// в отличие от пустой дорожки.
-pub fn toggle(ctx: &mut Ctx<'_>, rect: Rect, state: WidgetState) {
+///
+/// `progress` — ход ручки от 0 к 1. На концах он равен `on` и рисуется ровно
+/// как раньше: смешивание с `t = 0` и `t = 1` даёт исходные цвета.
+pub fn toggle(ctx: &mut Ctx<'_>, rect: Rect, state: WidgetState, progress: f32) {
+    let t = if state.on {
+        progress.clamp(0.0, 1.0)
+    } else {
+        (1.0 - progress).clamp(0.0, 1.0)
+    };
     let track_w = 36.0;
     let track_h = 20.0;
     let knob = 16.0;
@@ -220,31 +236,17 @@ pub fn toggle(ctx: &mut Ctx<'_>, rect: Rect, state: WidgetState) {
     ctx.fill(
         track,
         radii::LG,
-        if state.on {
-            ctx.palette.accent
-        } else {
-            ctx.palette.surface_hover
-        },
+        ui_tokens::mix(ctx.palette.surface_hover, ctx.palette.accent, t),
     );
-    if state.on {
-        ctx.outline(track, ctx.palette.accent);
-    } else {
-        ctx.outline(track, ctx.palette.border_subtle);
-    }
-    let knob_x = if state.on {
-        track.right() - knob - 2.0
-    } else {
-        track.x + 2.0
-    };
-    let knob_rect = Rect::new(knob_x, track.y + 2.0, knob, knob);
+    ctx.outline(
+        track,
+        ui_tokens::mix(ctx.palette.border_subtle, ctx.palette.accent, t),
+    );
+    let knob_rect = Rect::new(knob_offset(track, knob, t), track.y + 2.0, knob, knob);
     ctx.fill(
         knob_rect,
         radii::LG,
-        if state.on {
-            ctx.palette.base
-        } else {
-            ctx.palette.muted
-        },
+        ui_tokens::mix(ctx.palette.muted, ctx.palette.base, t),
     );
     if state.focus_ring() {
         ctx.focus(track, ctx.palette.border_focus);
@@ -506,6 +508,42 @@ pub fn icon(ctx: &mut Ctx<'_>, rect: Rect, glyph: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// Трек 36x20 и ручка 16 — как в `toggle()`.
+    fn track() -> Rect {
+        Rect::new(0.0, 0.0, 36.0, 20.0)
+    }
+
+    #[test]
+    fn the_knob_sits_at_the_ends_at_the_ends_of_the_run() {
+        let track = track();
+        assert!((knob_offset(track, 16.0, 0.0) - (track.x + 2.0)).abs() < 1e-6);
+        assert!((knob_offset(track, 16.0, 1.0) - (track.right() - 16.0 - 2.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_knob_travels_between_the_two_ends() {
+        let track = track();
+        let left = knob_offset(track, 16.0, 0.0);
+        let right = knob_offset(track, 16.0, 1.0);
+        let half = knob_offset(track, 16.0, 0.5);
+
+        assert!(half > left && half < right, "середина между концами");
+        assert!(
+            ((half - left) - (right - half)).abs() < 1e-6,
+            "ход симметричен"
+        );
+    }
+
+    #[test]
+    fn the_knob_progress_is_clamped() {
+        let track = track();
+        assert_eq!(
+            knob_offset(track, 16.0, -1.0),
+            knob_offset(track, 16.0, 0.0)
+        );
+        assert_eq!(knob_offset(track, 16.0, 4.0), knob_offset(track, 16.0, 1.0));
+    }
+
     use super::super::palette;
     use super::super::ui_tokens::{type_scale, ui_palette};
     use super::*;
@@ -550,7 +588,9 @@ mod tests {
                     pixel,
                 };
                 card(&mut ctx, rect(), Some("Заголовок"));
-                toggle(&mut ctx, rect(), state);
+                // Снапшот рисуется на концах хода: `progress = on` даёт
+                // прежний кадр побитово.
+                toggle(&mut ctx, rect(), state, if state.on { 1.0 } else { 0.0 });
                 button(&mut ctx, rect(), "Кнопка", ButtonKind::Secondary, state);
                 button(&mut ctx, rect(), "Кнопка", ButtonKind::Primary, state);
                 icon_button(&mut ctx, rect(), settings_icons::UP, state);

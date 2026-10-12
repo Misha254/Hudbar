@@ -147,7 +147,9 @@ impl Live {
 }
 
 /// Что делает пункт.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Eq` не выводится: внутри `Patch` есть дробная скорость анимаций, а `f32`
+/// не реализует `Eq`. Ничего в проекте не требует сравнения через `Eq`.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     /// Точечная запись в `settings.json`.
     Patch(Patch),

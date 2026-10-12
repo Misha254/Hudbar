@@ -149,7 +149,9 @@ pub fn merge(config: &Config, base: Option<&Value>) -> Value {
 /// перед записью файл перечитывается с диска, и на него накладывается только
 /// то, что изменил пользователь. Чужие ключи и секции остаются на месте, а
 /// кэш окна не может переписать файл целиком.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Eq` здесь не выводится: у варианта анимаций дробная скорость, а `f32` не
+/// реализует `Eq`. Ничего не требует сравнения через `Eq`.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Patch {
     /// `hudbar.<module>` — видимость модуля.
     ModuleVisible {
@@ -173,6 +175,11 @@ pub enum Patch {
         enabled: Option<bool>,
         duration_ms: Option<u32>,
     },
+    /// `hudbar.animations` и `hudbar.animation_speed`.
+    Animations {
+        enabled: Option<bool>,
+        speed: Option<f32>,
+    },
 }
 
 impl Patch {
@@ -194,6 +201,7 @@ impl Patch {
             Patch::Theme(theme) => format!("тема: {}", theme.key()),
             Patch::Notifications { .. } => "уведомления".to_string(),
             Patch::Osd { .. } => "OSD".to_string(),
+            Patch::Animations { .. } => "Анимации".to_string(),
         }
     }
 
@@ -305,6 +313,25 @@ impl Patch {
                     let value = Value::from(*duration);
                     if osd.get("duration_ms") != Some(&value) {
                         osd.insert("duration_ms".to_string(), value);
+                        changed = true;
+                    }
+                }
+                changed
+            }
+            Patch::Animations { enabled, speed } => {
+                let mut changed = false;
+                let bar = section(root, "hudbar");
+                if let Some(on) = enabled {
+                    let value = Value::Bool(*on);
+                    if bar.get("animations") != Some(&value) {
+                        bar.insert("animations".to_string(), value);
+                        changed = true;
+                    }
+                }
+                if let Some(speed) = speed {
+                    let value = Value::from(*speed);
+                    if bar.get("animation_speed") != Some(&value) {
+                        bar.insert("animation_speed".to_string(), value);
                         changed = true;
                     }
                 }

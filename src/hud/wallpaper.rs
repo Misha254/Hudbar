@@ -16,6 +16,9 @@ use std::process::Command;
 // одноимённой папке — поэтому пути указываем явно.
 #[path = "wallpaper/cache.rs"]
 pub mod cache;
+/// Скользящая рамка ячейки и появление миниатюр: состояние, без отрисовки.
+#[path = "wallpaper/frame.rs"]
+pub mod frame;
 #[path = "wallpaper/grid.rs"]
 pub mod grid;
 #[path = "wallpaper/imginfo.rs"]

@@ -100,6 +100,23 @@ pub fn ram_icon() -> Option<&'static crate::hud::tray::TrayIcon> {
         .as_ref()
 }
 
+/// Длительности анимаций панели. Основание, до которого применяется скорость
+/// из `settings.json`; при выключенных анимациях `AnimSettings::scaled`
+/// возвращает ноль и значения встают на место сразу.
+pub const HOVER_DURATION: std::time::Duration = std::time::Duration::from_millis(120);
+pub const POPUP_OPEN: std::time::Duration = std::time::Duration::from_millis(180);
+/// Закрытие короче открытия: уходящую панель человек не ждёт.
+pub const POPUP_CLOSE: std::time::Duration = std::time::Duration::from_millis(120);
+/// Появление карточки OSD и её возврат.
+pub const OSD_OPEN: std::time::Duration = std::time::Duration::from_millis(140);
+pub const OSD_CLOSE: std::time::Duration = std::time::Duration::from_millis(110);
+/// Догоняющая анимация полосы уровня: она короче появления, чтобы полоса
+/// поспевала за числом, а не тянулась за ним.
+pub const OSD_FILL: std::time::Duration = std::time::Duration::from_millis(90);
+/// Ступени прозрачности анимаций в Pixel-теме живут в общей основе анимаций:
+/// подсветка чипов, карточка OSD и открытие окон квантуются одинаково.
+pub use crate::hud::anim::PIXEL_ANIM_STEPS;
+
 pub const PANEL_W: f32 = 340.0;
 pub const PANEL_W_WIDE: f32 = 400.0;
 pub const PANEL_W_CLOCK: f32 = 236.0;
@@ -269,7 +286,9 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// `Eq + Hash` нужны для `AnimSet<Hit>`: подсветки чипов анимируются независимо
+/// друг для друга и адресуются ключом.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hit {
     WifiChip,
     BtChip,
@@ -357,9 +376,22 @@ pub struct Osd {
     pub snapshot: crate::hud::osd::OsdSnapshot,
 }
 
-pub const OSD_H: f32 = 76.0;
+/// На сколько карточка уезжает при появлении и возвращается при закрытии.
+pub const OSD_SLIDE_PX: f32 = 10.0;
+/// Отступ окна от низа панели. Не менялся.
+pub const OSD_MARGIN_GAP: i32 = 8;
+/// Положение карточки от верхнего края экрана: прежний margin плюс прежняя
+/// половина запаса поверхности `(76 - 64) / 2`. Запас под выезд добавлен вниз,
+/// поэтому число осталось прежним и карточка в открытом состоянии стоит
+/// пиксель в пиксель.
+pub const OSD_CARD_SCREEN_OFFSET: i32 = OSD_MARGIN_GAP + 6;
+/// Положение карточки от верхнего края поверхности в открытом состоянии:
+/// прежние 6 плюс ход выезда, иначе уезжающая карточка обрезалась бы краем.
+pub const OSD_CARD_TOP: f32 = 6.0 + OSD_SLIDE_PX;
 pub const OSD_CARD_W: f32 = 300.0;
 pub const OSD_CARD_H: f32 = 64.0;
+/// Высота поверхности: карточка у открытого края, а сверху запас на выезд.
+pub const OSD_H: f32 = OSD_CARD_TOP + OSD_CARD_H;
 pub const OSD_PAD: f32 = 12.0;
 pub const OSD_BAR_H: f32 = 8.0;
 /// Высота строки текста в карточке: нулевая в cosmic-text означает падение,

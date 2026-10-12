@@ -152,7 +152,7 @@ pub fn render_menu_card(menu: &Menu, pixel: bool) -> tiny_skia::Pixmap {
         scale,
         pixel,
     };
-    let card = view::render_window(&mut window, &frame);
+    let card = view::render_window(&mut window, &frame, None);
     view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
     pixmap
 }

@@ -1235,6 +1235,9 @@ pub trait DrawExt: View {
                         },
                         rect,
                         state,
+                        // Хода у этого окна нет: прогресс равен состоянию,
+                        // и кадр совпадает с прежним побитово.
+                        if state.on { 1.0 } else { 0.0 },
                     );
                 }
                 Row::ZoneLabel {

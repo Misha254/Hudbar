@@ -70,7 +70,7 @@ impl CalendarView for App {
             dy,
             CLOCK_TITLE_H,
         );
-        if self.popup_target > 0.5 {
+        if self.popup_target() > 0.5 {
             self.regions.push((Hit::CalPrev, prev));
             self.regions.push((Hit::CalToday, title));
             self.regions.push((Hit::CalNext, next));

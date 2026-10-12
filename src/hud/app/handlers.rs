@@ -158,9 +158,7 @@ impl PointerHandler for App {
                             self.shared.dirty.store(true, Ordering::Relaxed);
                         }
                     } else if on_bar {
-                        if self.bar_hover.take().is_some() {
-                            self.shared.dirty.store(true, Ordering::Relaxed);
-                        }
+                        self.clear_bar_hover();
                         self.destroy_tooltip();
                     }
                 }

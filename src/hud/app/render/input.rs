@@ -15,20 +15,36 @@ impl App {
             other => other,
         };
         if hit != self.bar_hover {
-            self.bar_hover = hit;
+            // Старый чип гаснет, новый разгорается: два независимых движения,
+            // поэтому быстрый переход указателя не обрывает затухание старого.
+            let previous = std::mem::replace(&mut self.bar_hover, hit);
+            if let Some(previous) = previous {
+                self.hover_anim.set_target(previous, 0.0, self.now);
+            }
             if let Some(h) = hit {
-                self.hover_anim = Some((h, 0.0));
+                self.hover_anim.set_target(h, 1.0, self.now);
             }
             self.sync_tooltip(qh);
             self.shared.dirty.store(true, Ordering::Relaxed);
         }
     }
 
-    pub fn hover_alpha(&self, h: Hit) -> f32 {
-        match self.hover_anim {
-            Some((ah, t)) if ah == h => t,
-            _ => 0.0,
+    /// Курсор ушёл с бара: текущий чип гаснет, остальные не трогаются.
+    pub fn clear_bar_hover(&mut self) {
+        if let Some(hit) = self.bar_hover.take() {
+            self.hover_anim.set_target(hit, 0.0, self.now);
+            self.shared.dirty.store(true, Ordering::Relaxed);
         }
+    }
+
+    /// Прозрачность подсветки чипа. В Pixel-теме значение округляется до
+    /// ступеней: полупрозрачной рамки в пиксельной графике быть не должно.
+    pub fn hover_alpha(&self, h: Hit) -> f32 {
+        let value = self.hover_anim.value(&h);
+        if self.pixel_mode() {
+            return crate::hud::anim::quantize(value, PIXEL_ANIM_STEPS);
+        }
+        value
     }
 
     pub fn on_bar_click(&mut self, x: f32, y: f32, qh: &QueueHandle<Self>) {
@@ -151,7 +167,7 @@ impl App {
             .as_ref()
             .map(|p| p.size.1 as f32)
             .unwrap_or_else(|| self.panel_height() as f32);
-        panel_slide_offset(self.popup_t, height)
+        panel_slide_offset(self.popup_t(), height)
     }
 
     /// `y` здесь уже в координатах содержимого панели, а не поверхности.

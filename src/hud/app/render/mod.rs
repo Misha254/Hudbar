@@ -21,6 +21,7 @@ use wayland_client::{
     protocol::{wl_keyboard, wl_pointer, wl_shm},
 };
 
+use crate::hud::anim;
 use crate::hud::data;
 use crate::hud::palette;
 use crate::hud::settings;
@@ -70,15 +71,56 @@ pub struct App {
     pub keyboard: Option<wl_keyboard::WlKeyboard>,
     pub regions: Vec<(Hit, Rect)>,
     pub bar_hover: Option<Hit>,
-    pub hover_anim: Option<(Hit, f32)>,
+    /// Подсветки чипов: у каждого своя цель 0 или 1 и своё движение.
+    pub hover_anim: anim::AnimSet<Hit>,
     pub panel: Option<Panel>,
     pub popup: Option<Popup>,
     pub grab: Option<Grab>,
     pub tooltip: Option<Tooltip>,
     pub osd: Option<Osd>,
     pub osd_detector: crate::hud::osd::OsdDetector,
-    pub popup_t: f32,
-    pub popup_target: f32,
-    pub last_tick: std::time::Instant,
+    /// Проявление карточки OSD: 0 — закрыта, 1 — открыта.
+    pub osd_anim: anim::Tween,
+    /// Заполнение полосы уровня OSD, доля 0..1.
+    pub osd_fill: anim::Tween,
+    /// Выезд панели: 0 — закрыта, 1 — открыта. Отдельная цель
+    /// `popup_target` ушла внутрь твина, но читается прежним способом.
+    pub popup_anim: anim::Tween,
+    /// Момент, на котором считаются все анимации. Обновляется главным циклом;
+    /// внутри модуля анимаций `Instant::now()` не вызывается.
+    pub now: std::time::Instant,
+    /// Настройки анимаций из `settings.json`.
+    pub anim: anim::AnimSettings,
     pub mods: Modifiers,
+}
+
+impl App {
+    /// Степень открытия панели: 0 — закрыта, 1 — открыта.
+    pub fn popup_t(&self) -> f32 {
+        self.popup_anim.value(self.now)
+    }
+
+    /// Куда панель идёт: 0 — закрываться, 1 — открыта. Значение нужно
+    /// отрисовке, чтобы не показывать элементы управления ещё не открывшейся
+    /// панели.
+    pub fn popup_target(&self) -> f32 {
+        self.popup_anim.to
+    }
+
+    /// Продвинуть анимации на текущий момент. `true`, если что-то ещё
+    /// двигается: значит, кадр нужен и ждать события дольше нельзя.
+    pub fn tick_animations(&mut self) -> bool {
+        let now = self.now;
+        self.hover_anim.tick(now);
+        self.animating()
+    }
+
+    /// Есть ли незаконченные движения. Пока они идут, цикл событий не должен
+    /// засыпать надолго — иначе анимация идёт рывками.
+    pub fn animating(&self) -> bool {
+        self.hover_anim.active()
+            || !self.popup_anim.done(self.now)
+            || !self.osd_anim.done(self.now)
+            || !self.osd_fill.done(self.now)
+    }
 }

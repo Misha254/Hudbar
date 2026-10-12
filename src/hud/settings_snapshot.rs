@@ -404,6 +404,8 @@ pub fn render_gallery(pixel: bool) -> tiny_skia::Pixmap {
             &mut ctx,
             Rect::new(rect.right() - 36.0, rect.y + 4.0, 36.0, 20.0),
             state,
+            // Снапшот рисуется на концах хода, кадр побитово прежний.
+            if state.on { 1.0 } else { 0.0 },
         );
     }
     // IconButton: стрелки перестановки в трёх состояниях.

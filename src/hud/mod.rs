@@ -8,6 +8,9 @@ pub mod binds_layout;
 pub mod config;
 #[allow(dead_code)]
 pub mod config_io;
+// Общая основа анимаций: кривые, твин, набор значений по ключу. Панель
+// берёт отсюда и подсветку чипов, и выезд попапа.
+pub mod anim;
 pub mod data;
 // Точечная замена font/line_height/origin в dunst; подключит окно.
 #[allow(dead_code)]

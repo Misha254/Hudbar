@@ -164,6 +164,12 @@ impl Config {
             position: self.position,
             osd: self.osd,
             osd_duration_ms: self.osd_duration_ms,
+            // Анимации в окне настроек пока не выведены, поэтому в модель они не
+            // попадают и берутся значениями по умолчанию — как `vpn_*` ниже.
+            // Файл при этом не теряет правки: `config_io` дописывает в него
+            // только изменённые поля.
+            animations: super::settings::Settings::default().animations,
+            animation_speed: super::settings::ANIMATION_SPEED_DEFAULT,
             vpn_controller: super::settings::VPN_CONTROLLER_DEFAULT.to_string(),
             vpn_timeout_ms: super::settings::VPN_TIMEOUT_DEFAULT_MS,
         }

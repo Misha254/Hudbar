@@ -52,6 +52,11 @@ fn create_panel(
 fn main() {
     let hud_settings = hud::settings::load();
     let mut settings_stamp = hud::settings::modified();
+    // Один момент на весь App: анимации считаются от него, а не от собственных
+    // вызовов `Instant::now()` — иначе разные значения читались бы в разные
+    // микро instants и кадр дёргался бы.
+    let started = std::time::Instant::now();
+    let anim = hud::anim::AnimSettings::new(hud_settings.animations, hud_settings.animation_speed);
     let conn = Connection::connect_to_env().expect("wayland connection");
     let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
     let qh = event_queue.handle();
@@ -98,16 +103,18 @@ fn main() {
         keyboard: None,
         regions: Vec::new(),
         bar_hover: None,
-        hover_anim: None,
+        hover_anim: hud::anim::AnimSet::new(started, HOVER_DURATION, anim),
         panel: None,
         popup: None,
         grab: None,
         tooltip: None,
         osd: None,
         osd_detector: hud::osd::OsdDetector::new(),
-        popup_t: 0.0,
-        popup_target: 0.0,
-        last_tick: std::time::Instant::now(),
+        osd_anim: hud::anim::Tween::settled(0.0, started),
+        osd_fill: hud::anim::Tween::settled(0.0, started),
+        popup_anim: hud::anim::Tween::settled(0.0, started),
+        now: started,
+        anim,
         mods: Modifiers::default(),
     };
 
@@ -122,6 +129,12 @@ fn main() {
                 app.layer.commit();
             }
             app.settings = new_settings;
+            // Настройки анимаций применяются сразу: выключение должно убрать
+            // движение, а не оставить текущий твин идти до конца.
+            app.anim =
+                hud::anim::AnimSettings::new(app.settings.animations, app.settings.animation_speed);
+            app.hover_anim.set_settings(app.anim);
+            app.popup_anim.duration = app.anim.scaled(app.popup_anim.duration);
             settings_stamp = current_settings_stamp;
             app.shared.dirty.store(true, Ordering::Relaxed);
         }
@@ -149,35 +162,14 @@ fn main() {
 
         let _ = event_queue.flush();
 
-        let dt = {
-            let t = std::time::Instant::now();
-            let dt = t.duration_since(app.last_tick).as_secs_f32();
-            app.last_tick = t;
-            dt
-        };
-        if (app.popup_t - app.popup_target).abs() > 0.001 {
-            let dir = (app.popup_target - app.popup_t).signum();
-            app.popup_t = (app.popup_t + dir * dt / 0.16).clamp(0.0, 1.0);
-            if (app.popup_target - app.popup_t).abs() < 0.02 {
-                app.popup_t = app.popup_target;
-            }
+        // Момент для всего кадра: анимации и отрисовка читают одно время.
+        app.now = std::time::Instant::now();
+        // Анимации сами решают, что изменилось: пока хоть одно значение движется,
+        // кадр нужен, иначе движение встало бы на паузе до следующего события.
+        // Это же значение уходит в таймаут ожидания события ниже.
+        let animating = app.tick_animations();
+        if animating {
             app.shared.dirty.store(true, Ordering::Relaxed);
-        }
-        if let Some((hit, t)) = app.hover_anim {
-            let target = if app.bar_hover == Some(hit) { 1.0 } else { 0.0 };
-            let speed = dt / 0.12;
-            let nt = if target > t {
-                (t + speed).min(target)
-            } else {
-                (t - speed).max(target)
-            };
-            if (nt - t).abs() > 0.0001 {
-                app.hover_anim = Some((hit, nt));
-                app.shared.dirty.store(true, Ordering::Relaxed);
-            }
-            if nt <= 0.0 && target == 0.0 {
-                app.hover_anim = None;
-            }
         }
         // OSD сверяется каждый тик: окно живёт по своему сроку и не связано с
         // обновлениями панели, поэтому пока оно живо, ждать приходится недолго.
@@ -187,10 +179,6 @@ fn main() {
             app.shared.dirty.store(true, Ordering::Relaxed);
         }
 
-        let animating = (app.popup_t - app.popup_target).abs() > 0.001
-            || app.hover_anim.is_some_and(|(h, t)| {
-                (t - if app.bar_hover == Some(h) { 1.0 } else { 0.0 }).abs() > 0.001
-            });
         // Окно OSD не анимируется, поэтому ему хватает редкого тика: 50 мс
         // добавляет задержку скрытия, которой на глаз не видно.
         let timeout = if animating {

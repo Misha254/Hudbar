@@ -5,6 +5,8 @@
 //! квадратные. Миниатюры пока заглушки: настоящие пиксели подставит W3 через
 //! загрузчик кэша превью.
 
+use std::path::Path;
+
 use super::super::palette;
 use super::super::settings::Language;
 use super::super::settings_icons;
@@ -114,6 +116,12 @@ pub struct Frame<'p> {
     pub ui: UiPalette,
     pub lang: Language,
     pub provider: &'p dyn thumb::Provider,
+    /// Экранная позиция едущей рамки в ячейках: `(колонка, ряд)`. `None` —
+    /// рамку рисует сама выбранная ячейка, как всегда.
+    pub highlight: Option<(f32, f32)>,
+    /// Проявление миниатюры: `path → альфа`. Ячейки, которых в карте нет,
+    /// рисуются сразу.
+    pub thumb_alpha: &'p dyn Fn(&Path) -> f32,
 }
 
 /// Кадр целиком: подложка, карточка, зоны, содержимое и подвал.
@@ -157,6 +165,8 @@ pub fn render_with(
         ui,
         lang,
         provider,
+        highlight: None,
+        thumb_alpha: &|_| 1.0,
     };
     draw_card(&mut canvas, &frame);
     pixmap
@@ -190,6 +200,8 @@ pub fn render_window(
         ui,
         lang,
         provider,
+        highlight: None,
+        thumb_alpha: &|_| 1.0,
     };
     draw_card(&mut canvas, &frame);
     apply_alpha(&mut pixmap, card, CARD_ALPHA);
@@ -208,7 +220,7 @@ pub fn draw_card(canvas: &mut Canvas<'_, '_>, frame: &Frame<'_>) {
     header(canvas, frame.state, frame.card, zones, ts, frame.lang);
     zone_frames(canvas, frame.state, zones);
     folders(canvas, frame.state, zones, ts);
-    grid(canvas, frame.state, zones, ts, frame.lang, frame.provider);
+    grid(canvas, frame, zones, ts);
     footer(canvas, frame.state, frame.card, ts, frame.lang);
 }
 
@@ -486,14 +498,10 @@ fn folders(canvas: &mut Canvas<'_, '_>, state: &State, zones: Zones, ts: ui_toke
 }
 
 /// Пункт 7 и 8: сетка миниатюр, выделение и подписи.
-fn grid(
-    canvas: &mut Canvas<'_, '_>,
-    state: &State,
-    zones: Zones,
-    ts: ui_tokens::TypeScale,
-    lang: Language,
-    provider: &dyn thumb::Provider,
-) {
+fn grid(canvas: &mut Canvas<'_, '_>, frame: &Frame<'_>, zones: Zones, ts: ui_tokens::TypeScale) {
+    let state = frame.state;
+    let lang = frame.lang;
+    let provider = frame.provider;
     if state.filtered.is_empty() {
         let inner = Rect::new(
             zones.grid.x + layout::ZONE_INSET,
@@ -523,8 +531,9 @@ fn grid(
             let selected = state.zone == Zone::Grid && index == state.grid.sel;
 
             let image = provider.get(path);
+            let alpha = (frame.thumb_alpha)(path).clamp(0.0, 1.0);
             match image.as_ref() {
-                Some(image) => blit_thumb(canvas, thumb, image),
+                Some(image) => blit_thumb(canvas, thumb, image, alpha),
                 None => placeholder(canvas, index, thumb, false),
             }
 
@@ -540,15 +549,15 @@ fn grid(
                 );
             }
 
-            if selected {
-                let tick = layout::tick(thumb);
-                canvas.fill(tick, layout::CLEAR_BTN / 2.0, canvas.ui.border_focus);
-                canvas.glyph(settings_icons::CHECK, ts.caption, canvas.ui.text, tick);
+            // Помеченная ячейка при `highlight = Some` рамку и галочку не
+            // рисует: они едут вместе с рамкой и рисуются по её позиции.
+            if selected && frame.highlight.is_none() {
+                cell_marker(canvas, thumb);
             }
             // Рамка: у выбранной — акцентная и толще; hover — обычной, но
             // заметнее заглушечной hairline.
             if image.is_some() {
-                let (color, width) = if selected {
+                let (color, width) = if selected && frame.highlight.is_none() {
                     (canvas.ui.border_focus, layout::ZONE_BORDER)
                 } else if state.hover == Hover::Cell(index) {
                     (canvas.ui.border, layout::HAIRLINE)
@@ -560,15 +569,48 @@ fn grid(
             caption(canvas, state, path, thumb, ts);
         }
     }
+
+    // Рамка с галочкой едет одной парой и рисуется поверх сетки: при ходе
+    // она находится между двумя ячейками, а не на одной из них.
+    if let Some((col, row)) = frame.highlight.filter(|_| state.zone == Zone::Grid) {
+        let pitch = layout::THUMB_H + layout::LABEL_H + layout::ROW_GAP;
+        let inner = zones.grid.w - layout::ZONE_INSET * 2.0;
+        let cell_w =
+            (inner - layout::CELL_GAP * (layout::GRID_COLS - 1) as f32) / layout::GRID_COLS as f32;
+        let rect = Rect::new(
+            zones.grid.x + layout::ZONE_INSET + col * (cell_w + layout::CELL_GAP),
+            zones.grid.y + layout::ZONE_INSET + row * pitch,
+            cell_w,
+            layout::THUMB_H,
+        );
+        canvas.outline(rect, canvas.ui.border_focus, layout::ZONE_BORDER);
+        cell_marker(canvas, rect);
+    }
+}
+
+/// Галочка выбранной ячейки: круг и знак внутри.
+fn cell_marker(canvas: &mut Canvas<'_, '_>, thumb: Rect) {
+    let tick = layout::tick(thumb);
+    canvas.fill(tick, layout::CLEAR_BTN / 2.0, canvas.ui.border_focus);
+    canvas.glyph(
+        settings_icons::CHECK,
+        ui_tokens::type_scale(canvas.pixel).caption,
+        canvas.ui.text,
+        tick,
+    );
 }
 
 /// Блитит миниатюру в плитку с масштабированием ближайшим соседом: исходник
 /// уже ужатая, кадр — дешёвый. Пиксели непрозрачные, поэтому прямая запись
 /// вместо `draw_pixmap` — и без новых зависимостей.
-fn blit_thumb(canvas: &mut Canvas<'_, '_>, rect: Rect, thumb: &thumb::Thumb) {
+fn blit_thumb(canvas: &mut Canvas<'_, '_>, rect: Rect, thumb: &thumb::Thumb, alpha: f32) {
     if thumb.w == 0 || thumb.h == 0 || thumb.rgba.len() < (thumb.w * thumb.h * 4) as usize {
         return;
     }
+    if alpha <= 0.0 {
+        return;
+    }
+    let fade = (alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
     let x0 = (rect.x * SCALE).round() as i32;
     let y0 = (rect.y * SCALE).round() as i32;
     let dw = (rect.w * SCALE).round() as i32;
@@ -593,11 +635,15 @@ fn blit_thumb(canvas: &mut Canvas<'_, '_>, rect: Rect, thumb: &thumb::Thumb) {
             let src = ((src_y * thumb.w + src_x) * 4) as usize;
             let dst = (py * stride + px) as usize;
             if let Some(pixel) = canvas.pixmap.pixels_mut().get_mut(dst) {
+                // Пиксели источника непрозрачные, поэтому проявление — это
+                // ровно умножение альфы. При `alpha == 1.0` путь побитово
+                // прежний: множитель равен 255, деление даёт исходное число.
+                let a = ((thumb.rgba[src + 3] as u32) * fade / 255) as u8;
                 *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
                     thumb.rgba[src],
                     thumb.rgba[src + 1],
                     thumb.rgba[src + 2],
-                    thumb.rgba[src + 3],
+                    a,
                 )
                 .unwrap_or(*pixel);
             }
@@ -742,6 +788,150 @@ fn rgb(r: u8, g: u8, b: u8) -> palette::Rgba {
 mod tests {
     use super::super::super::settings::Language;
     use super::*;
+
+    /// Провайдер с миниатюрой для любого пути. Нужен не для красоты: рамка
+    /// ячейки рисуется только когда миниатюра есть, и на заглушках её не было
+    /// бы вовсе — тест проверял бы пустоту.
+    struct Solid;
+
+    impl thumb::Provider for Solid {
+        fn get(&self, _path: &std::path::Path) -> Option<thumb::Thumb> {
+            Some(thumb::Thumb::solid(16, 16, [40, 80, 160, 255]))
+        }
+    }
+
+    /// Карточка в заданном месте: та же отрисовка, что и у окна.
+    fn render_card(state: &State, pixel: bool, highlight: Option<(f32, f32)>) -> tiny_skia::Pixmap {
+        let ui = ui_tokens::ui_palette(pixel, palette::Palette::default());
+        let mut pixmap = tiny_skia::Pixmap::new(
+            (layout::CARD_W * SCALE) as u32,
+            (layout::CARD_H * SCALE) as u32,
+        )
+        .expect("pixmap");
+        pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        let mut text = TextPainter::new(&settings_view::font_name(pixel));
+        let mut icons = TextPainter::new(settings_icons::FONT);
+        let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, pixel, ui);
+        let frame = Frame {
+            state,
+            card: Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H),
+            pixel,
+            ui,
+            lang: Language::Ru,
+            provider: &Solid,
+            highlight,
+            thumb_alpha: &|_| 1.0,
+        };
+        draw_card(&mut canvas, &frame);
+        pixmap
+    }
+
+    /// Состояние с нужной зоной и выбором. Сетка заполняется заглушками:
+    /// провайдер `thumb::Empty` на диск не ходит, поэтому итоговое число
+    /// ячеек значения не имеет — проверяется только место рамки.
+    fn demo_state(zone: Zone, sel: usize) -> State {
+        let mut state = State::open();
+        state.zone = zone;
+        state.filtered = (0..16)
+            .map(|i| std::path::PathBuf::from(format!("/w/{i}.png")))
+            .collect();
+        state.grid = super::super::grid::Grid::new(layout::GRID_COLS, layout::GRID_ROWS, 16);
+        while state.grid.selected() < sel {
+            state.grid.move_dir(super::super::grid::Dir::Right);
+        }
+        state
+    }
+
+    /// Цвет пикселя карточки по логическим координатам.
+    fn at(pixmap: &tiny_skia::Pixmap, x: f32, y: f32) -> palette::Rgba {
+        let data = pixmap.data();
+        let at = (y as u32) * pixmap.width() + (x as u32);
+        let px = &data[at as usize * 4..at as usize * 4 + 4];
+        palette::Rgba(px[0], px[1], px[2], px[3])
+    }
+
+    /// Точка на левой рамке плитки, в середине её высоты. Образец сдвинут внутрь
+    /// на половину толщины: сам край принадлежит заглушке, а рамка лежит
+    /// первыми пикселями внутрь прямоугольника.
+    fn frame_pixel(pixmap: &tiny_skia::Pixmap, cell: Rect) -> palette::Rgba {
+        at(
+            pixmap,
+            (cell.x + layout::ZONE_BORDER / 2.0) * SCALE,
+            (cell.y + cell.h / 2.0) * SCALE,
+        )
+    }
+
+    /// `None` — прежний путь: выбранную ячейку отмечает она сама. Сравнение
+    /// идёт по соседним ячейкам одного кадра, а не с цветом палитры: рамка
+    /// полупрозрачная и ложится поверх заглушки.
+    #[test]
+    fn no_highlight_keeps_the_cell_itself_drawn() {
+        let state = demo_state(Zone::Grid, 5);
+        let plain = render_card(&state, false, None);
+        let z = layout::zones(Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H));
+
+        let selected = layout::cell(z, 1, 1).unwrap();
+        let neighbour = layout::cell(z, 1, 0).unwrap();
+
+        assert_ne!(
+            frame_pixel(&plain, selected),
+            frame_pixel(&plain, neighbour),
+            "выбранная ячейка должна отличаться от соседней"
+        );
+    }
+
+    /// При `Some` рамку рисует сетка, а не ячейка: на прежнем месте её нет, а
+    /// на новом — есть. Сверяются одни и те же точки двух кадров.
+    #[test]
+    fn the_sliding_frame_leaves_the_cell_behind() {
+        let state = demo_state(Zone::Grid, 5);
+        let plain = render_card(&state, false, None);
+        let moving = render_card(&state, false, Some((2.0, 1.0)));
+        let z = layout::zones(Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H));
+
+        let old = layout::cell(z, 1, 1).unwrap();
+        let new = layout::cell(z, 1, 2).unwrap();
+
+        assert_ne!(
+            frame_pixel(&moving, old),
+            frame_pixel(&plain, old),
+            "на прежней ячейке рамки быть не должно"
+        );
+        assert_ne!(
+            frame_pixel(&moving, new),
+            frame_pixel(&plain, new),
+            "рамка должна появиться на новой ячейке"
+        );
+    }
+
+    /// Обе темы рисуются с едущей рамкой без паники и меняют кадр.
+    #[test]
+    fn both_themes_render_a_sliding_frame() {
+        let state = demo_state(Zone::Grid, 2);
+        for pixel in [false, true] {
+            let plain = render_card(&state, pixel, None);
+            let moving = render_card(&state, pixel, Some((3.5, 0.5)));
+            assert_ne!(
+                moving.data(),
+                plain.data(),
+                "тема pixel={pixel}: едущая рамка ни на что не повлияла"
+            );
+        }
+    }
+
+    /// Фокус в колонке папок: сетка не выбрана, едущей рамки на ней нет.
+    #[test]
+    fn the_frame_is_drawn_only_in_the_grid_zone() {
+        let state = demo_state(Zone::Folders, 0);
+        let plain = render_card(&state, false, None);
+        let moving = render_card(&state, false, Some((1.0, 1.0)));
+
+        assert_eq!(
+            moving.data(),
+            plain.data(),
+            "вне сетки едущей рамки быть не должно"
+        );
+    }
 
     /// Пункт 5: глифы лупы и крестика есть в шрифте иконок, иначе будет «тофу».
     #[test]
