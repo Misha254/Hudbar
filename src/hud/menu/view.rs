@@ -1015,12 +1015,14 @@ fn meter(
     );
     let filled = meter_fill(track_rect, level);
     if filled > 0.5 {
-        let color = if muted {
-            view.ui.muted
-        } else if selected {
+        // Заливка и на невыбранной строке берёт `muted`, а не `border`:
+        // `border` — это линия рамки, и на 1.96:1 к карточке заливка читалась
+        // как «звука нет» вместо «уровень такой». Мутит звук — цвет тот же,
+        // состояние говорит подпись, чтобы уровень не терялся вместе с цветом.
+        let color = if muted || selected {
             view.ui.accent
         } else {
-            view.ui.border
+            view.ui.muted
         };
         fill_round_rect(
             view.pixmap,
@@ -1046,7 +1048,10 @@ fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool, l
         if item.value == strings::chrome(lang).on {
             view.disc(dot, view.ui.accent);
         } else {
-            ring(view, dot, mix(view.ui.base, view.ui.border, 0.6));
+            // Кольцо выключенного тумблера — тоже носитель состояния, а не
+            // отделка, и обязано отделяться от карточки. Смесь
+            // `mix(base, border, 0.6)` давала 1.32–1.59:1.
+            ring(view, dot, view.ui.muted);
         }
         return;
     }
@@ -1058,7 +1063,7 @@ fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool, l
             Rect::new(right - CHEVRON_W - THUMB_D, rect.y, THUMB_D, rect.h),
             THUMB_D,
         );
-        view.disc(thumb, mix(view.ui.accent, view.ui.base, 0.45));
+        view.disc(thumb, view.ui.picker_thumb);
         stroke_rect(
             view.pixmap,
             thumb.x * SCALE,

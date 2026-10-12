@@ -171,20 +171,38 @@ pub struct UiPalette {
     pub border_focus: palette::Rgba,
     /// Приглушённый акцент: фон значка, неакцентная метка.
     pub accent_dim: palette::Rgba,
-    /// Текст недоступного контрола.
+    /// Текст недоступного контрола и заглушка ввода.
     pub text_disabled: palette::Rgba,
+    /// Заглушка миниатюры выбора: круг до появления настоящей картинки.
+    pub picker_thumb: palette::Rgba,
+    /// Подложка строки под указателем мыши.
+    pub hover_bg: palette::Rgba,
 }
 
 /// Производные цвета из семи базовых. Считается одинаково для обеих тем,
 /// поэтому Pixel получает те же роли из своих hex, а не из новых констант.
+///
+/// Каждый коэффициент и каждая альфа подобраны так, чтобы роль проходила
+/// контраст WCAG на модельных палитрах схем matugen: текст — 4.5:1, графика,
+/// иконки и маркеры — 3:1. Проверка живёт в тестах этого файла.
 fn extend(base: UiPalette) -> UiPalette {
     UiPalette {
         surface: base.panel,
         surface_hover: mix(base.base, base.panel, 0.45),
         border_subtle: mix(base.base, base.border, 0.55),
-        border_focus: base.accent.with_a(0.55),
+        border_focus: base.accent.with_a(0.75),
         accent_dim: base.accent.with_a(0.45),
-        text_disabled: base.muted.with_a(0.6),
+        // Заглушка приглушается смещением к фону поля, а не прозрачностью:
+        // `with_a` поверх `muted` давал альфу 0.37 и контраст 3.08:1, то
+        // есть ровно столько, сколько нужно, чтобы ничего не читалось.
+        text_disabled: mix(base.idle_panel, base.text, 0.70),
+        // Заглушка миниатюры выбора. Смещение к `base` на 0.45 давало 2.58:1
+        // на светлых схемах — круг сливался с карточкой.
+        picker_thumb: mix(base.accent, base.base, 0.35),
+        // Подложка строки под указателем: та же смесь, что у выбранной строки,
+        // но вчетверо слабее. Отдельная роль, чтобы её нельзя было спутать с
+        // выделением выбором.
+        hover_bg: mix(base.panel, base.accent, 0.07),
         ..base
     }
 }
@@ -196,7 +214,10 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             base: palette::Rgba(0x0b, 0x10, 0x20, 255).with_a(BG_ALPHA),
             panel: palette::Rgba(0x11, 0x1b, 0x31, 255).with_a(BG_ALPHA),
             idle_panel: palette::Rgba(0x0e, 0x17, 0x2b, 255).with_a(BG_ALPHA),
-            border: palette::Rgba(0x31, 0x5b, 0x9b, 255),
+            // Рамка карточки — единственное, что отделяет карточку от
+            // размытого фона, а не украшение. Старые 0x315b9b давали 2.53:1
+            // к своей же карточке; 0x4d6aa5 даёт 3.20:1 и остаётся холодным.
+            border: palette::Rgba(0x4d, 0x6a, 0xa5, 255),
             accent: palette::Rgba(0x79, 0xa7, 0xff, 255),
             text: palette::Rgba(0xe8, 0xea, 0xff, 255),
             muted: palette::Rgba(0x8d, 0x9a, 0xbd, 255),
@@ -206,13 +227,18 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             border_focus: palette::Rgba(0, 0, 0, 0),
             accent_dim: palette::Rgba(0, 0, 0, 0),
             text_disabled: palette::Rgba(0, 0, 0, 0),
+            picker_thumb: palette::Rgba(0, 0, 0, 0),
+            hover_bg: palette::Rgba(0, 0, 0, 0),
         }
     } else {
         UiPalette {
             base: p.base.with_a(BG_ALPHA),
             panel: mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA),
             idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
-            border: mix(p.base, p.primary, 0.35),
+            // Рамка карточки — не украшение, а граница слоя: у слоя ровно размер
+            // карточки, тени нет, и отделяет её только эта линия. На 0.35
+            // к акценту она давала 1.74–2.38:1, то есть не отделяла.
+            border: mix(p.base, p.primary, 0.65),
             accent: p.primary,
             text: p.text,
             muted: p.text.with_a(0.58),
@@ -222,6 +248,8 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             border_focus: palette::Rgba(0, 0, 0, 0),
             accent_dim: palette::Rgba(0, 0, 0, 0),
             text_disabled: palette::Rgba(0, 0, 0, 0),
+            picker_thumb: palette::Rgba(0, 0, 0, 0),
+            hover_bg: palette::Rgba(0, 0, 0, 0),
         }
     };
     extend(base)
@@ -319,10 +347,16 @@ mod tests {
             );
             assert_eq!(p.accent_dim.0, p.accent.0);
             assert!(p.accent_dim.3 < p.accent.3, "accent_dim приглушён по альфе");
-            assert_eq!(p.text_disabled.0, p.muted.0);
-            assert!(
-                p.text_disabled.3 < p.muted.3,
-                "text_disabled приглушён по альфе"
+            // Заглушка приглушена смещением к фону поля, а не прозрачностью:
+            // `with_a` поверх `muted` давал альфу 0.37 и контраст 3.08:1.
+            assert_eq!(p.text_disabled.3, 255, "заглушка непрозрачна");
+            assert_ne!(p.text_disabled, p.text, "заглушка не совпадает с текстом");
+            assert_ne!(p.text_disabled, p.muted, "заглушка не совпадает с muted");
+            assert_ne!(p.picker_thumb, p.panel, "миниатюра отделяется от карточки");
+            assert_ne!(p.hover_bg, p.panel, "подложка hover отделяется от карточки");
+            assert_ne!(
+                p.hover_bg, p.surface,
+                "hover отличается от выбранной строки"
             );
             // Окно непрозрачное: базовые цвета обязаны быть плотными.
             assert_eq!(p.base.3, 255);
