@@ -568,6 +568,29 @@ fn ring(view: &mut MenuView<'_>, rect: Rect, color: palette::Rgba) {
     );
 }
 
+/// Прямоугольник крошек в шапке. Ширина фиксирована и от языка не зависит:
+/// ровно столько, сколько остаётся после поля поиска и полей, поэтому длинная
+/// надпись может только обрезаться многоточием, но не вытеснить поле.
+pub fn crumbs_rect(header: Rect) -> Rect {
+    Rect::new(
+        header.x + PAD,
+        header.y,
+        header.w - PAD * 2.0 - SEARCH_W - spacing::MD,
+        HEADER_H,
+    )
+}
+
+/// Прямоугольник поля поиска: прижат к правому краю шапки, по центру по
+/// вертикали.
+pub fn search_rect(header: Rect) -> Rect {
+    Rect::new(
+        header.right() - PAD - SEARCH_W,
+        header.y + (HEADER_H - SEARCH_H) / 2.0,
+        SEARCH_W,
+        SEARCH_H,
+    )
+}
+
 /// Крошки «HUD › Стиль» слева и поле поиска справа. Поле не мигает: рамка в
 /// фокусе всегда видна, потому что меню работает только с клавиатуры.
 fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
@@ -587,32 +610,31 @@ fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
         } else {
             format!("{prefix}{} ", strings::CRUMBS_SEPARATOR.trim_end())
         };
-        let crumbs = Rect::new(
-            header_rect.x + PAD,
-            header_rect.y,
-            header_rect.w - PAD * 2.0 - SEARCH_W - spacing::MD,
-            HEADER_H,
-        );
+        let crumbs = crumbs_rect(header_rect);
+        // Крошки — структурная метка «где я сейчас», поэтому ролью заголовка
+        // секции: кеглем строки списка шапка от строки не отличалась ничем,
+        // кроме цвета, а цвет при недоступной палитре не различить.
+        let title = view.scale.section_title;
         if prefix_text.is_empty() {
             view.text_clipped(
                 &last,
-                view.scale.label,
+                title,
                 view.ui.text,
-                center_band(crumbs, view.scale.label * 2.0),
+                center_band(crumbs, title * 2.0),
                 Align::Start,
             );
         } else {
             view.text_clipped(
                 &prefix_text,
-                view.scale.label,
+                title,
                 view.ui.muted,
-                center_band(crumbs, view.scale.label * 2.0),
+                center_band(crumbs, title * 2.0),
                 Align::Start,
             );
-            let width = view.painter.text_width(&prefix_text, view.scale.label);
+            let width = view.painter.text_width(&prefix_text, title);
             view.text_clipped(
                 &last,
-                view.scale.label,
+                title,
                 view.ui.accent,
                 center_band(
                     Rect::new(
@@ -621,7 +643,7 @@ fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
                         (crumbs.w - width).max(0.0),
                         crumbs.h,
                     ),
-                    view.scale.label * 2.0,
+                    title * 2.0,
                 ),
                 Align::Start,
             );
@@ -632,12 +654,7 @@ fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
 
 /// Поле поиска: лупа, набранный текст с курсором и крестик очистки.
 fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
-    let rect = Rect::new(
-        header_rect.right() - PAD - SEARCH_W,
-        header_rect.y + (HEADER_H - SEARCH_H) / 2.0,
-        SEARCH_W,
-        SEARCH_H,
-    );
+    let rect = search_rect(header_rect);
     fill_round_rect(
         view.pixmap,
         rect.x * SCALE,
@@ -1733,6 +1750,68 @@ mod tests {
             .iter()
             .map(|title| Node::action("", title, Action::Back))
             .collect()
+    }
+
+    /// Поле поиска не вытесняется ни на одном языке и ни при какой длине
+    /// крошек: его левый край считается только от правого края шапки.
+    #[test]
+    fn the_search_field_keeps_its_place_next_to_any_crumbs() {
+        let header = Rect::new(0.0, 0.0, CARD_W, HEADER_H);
+        let field = search_rect(header);
+        let crumbs = crumbs_rect(header);
+
+        assert_eq!(
+            field.x,
+            CARD_W - PAD - SEARCH_W,
+            "поле прижато к правому краю"
+        );
+        assert_eq!(field.right(), CARD_W - PAD);
+        assert!(crumbs.w > 0.0, "под крошки есть место: {}", crumbs.w);
+        assert!(
+            crumbs.right() <= field.x - spacing::MD,
+            "крошки и поле не наезжают: {} против {}",
+            crumbs.right(),
+            field.x
+        );
+        // Сумма обязана сойтись с шириной карточки, иначе где-то остаётся дыра.
+        assert_eq!(
+            PAD + crumbs.w + spacing::MD + SEARCH_W + PAD,
+            CARD_W,
+            "шапка собрана без остатка"
+        );
+        for lang in [Language::Ru, Language::En] {
+            let chrome = strings::chrome(lang);
+            let mut pixmap = blank_buffer();
+            let mut painter = TextPainter::new(&font_name(false));
+            let mut icons = TextPainter::new(settings_icons::FONT);
+            let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+            let inner = search_rect(header).w - (spacing::SM + ICON + spacing::SM) - spacing::SM;
+            let width = view.painter.text_width(chrome.search, view.scale.caption);
+            assert!(
+                width <= inner,
+                "{lang:?}: заглушка «{}» шире поля на {}",
+                chrome.search,
+                width - inner
+            );
+        }
+    }
+
+    /// Кегль крошек крупнее кегля строки списка: иначе шапка и список
+    /// неразличимы по весу.
+    #[test]
+    fn crumbs_are_larger_than_a_row_title() {
+        let scale = type_scale(false);
+        let pixel = type_scale(true);
+        assert!(scale.section_title > scale.label, "обычная тема");
+        assert!(pixel.section_title > pixel.label, "Pixel");
+        // Заголовок окна остаётся крупнее крошек: это уровнем выше.
+        assert!(scale.page_title > scale.section_title);
+        assert!(pixel.page_title > pixel.section_title);
+        // И вписывается в шапку.
+        assert!(
+            scale.section_title * 2.0 <= HEADER_H,
+            "крошки не вылезают из шапки"
+        );
     }
 
     use super::super::state::Status;
