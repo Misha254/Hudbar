@@ -87,6 +87,9 @@ pub const VOLUME_VALUE_W: f32 = 92.0;
 pub const METER_H: f32 = 6.0;
 /// Ширина зоны шеврона.
 pub const CHEVRON_W: f32 = 16.0;
+/// Диаметр точки статуса в подвале. Точка сообщает, что сообщение именно об
+/// изменении, а не о позиции в списке.
+pub const STATUS_DOT: f32 = 8.0;
 /// Плотность затемнения вокруг карточки.
 pub const SCRIM: f32 = 0.72;
 /// Прозрачность фона карточки в живом окне. Слой размывают правилом niri, и
@@ -517,9 +520,10 @@ fn secret_footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
         } else {
             view.ui.accent
         };
-        let right = Rect::new(rect.right() - PAD - 200.0, rect.y, 200.0, rect.h);
+        let right_zone = right_zone_width(view, frame.lang);
+        let right = Rect::new(rect.right() - PAD - right_zone, rect.y, right_zone, rect.h);
         view.disc(
-            center_band(Rect::new(right.x, rect.y, 8.0, rect.h), 8.0),
+            center_band(Rect::new(right.x, rect.y, STATUS_DOT, rect.h), STATUS_DOT),
             color,
         );
         let label = if status.is_failed() {
@@ -532,7 +536,7 @@ fn secret_footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
             view.scale.caption,
             view.ui.muted,
             center_band(
-                Rect::new(right.x + 8.0 + spacing::XS, rect.y, right.w, rect.h),
+                Rect::new(right.x + STATUS_DOT + spacing::XS, rect.y, right.w, rect.h),
                 view.scale.caption * 2.0,
             ),
             Align::End,
@@ -1122,11 +1126,14 @@ fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
         view.ui.border_subtle,
     );
     let band = center_band(rect, view.scale.caption * 2.0);
-    let counter_w = 96.0;
+    // Правая зона резервируется по содержимому, а не константой: подсказки не
+    // должны прыгать в момент, когда вместо счётчика появляется статус.
+    let right_zone = right_zone_width(view, frame.lang);
     // Между подсказками и правой частью — обязательный зазор XL. Если полные
-    // подсказки не влезают, берутся короткие, а не наезжают на счётчик.
+    // подсказки не влезают, берутся средние, потом одни клавиши — но не наезд
+    // на счётчик.
     let hints_left = rect.x + PAD;
-    let right_edge = rect.right() - PAD - counter_w;
+    let right_edge = rect.right() - PAD - right_zone;
     let (hints, mut x) = layout_hints(view, hints_left, right_edge - spacing::XL, frame.lang);
     for hint in hints {
         let width = view.painter.text_width(hint, view.scale.caption);
@@ -1139,7 +1146,7 @@ fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
         );
         x += width + spacing::LG;
     }
-    let right = Rect::new(right_edge, rect.y, counter_w, rect.h);
+    let right = Rect::new(right_edge, rect.y, right_zone, rect.h);
     match frame.status.as_ref() {
         Some(status) => {
             // В режиме статуса счётчика нет: точка сообщает, что сообщение
@@ -1150,7 +1157,7 @@ fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
                 view.ui.accent
             };
             view.disc(
-                center_band(Rect::new(right.x, rect.y, 8.0, rect.h), 8.0),
+                center_band(Rect::new(right.x, rect.y, STATUS_DOT, rect.h), STATUS_DOT),
                 color,
             );
             let label = if status.is_failed() {
@@ -1164,9 +1171,9 @@ fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
                 view.ui.muted,
                 center_band(
                     Rect::new(
-                        right.x + 8.0 + spacing::XS,
+                        right.x + STATUS_DOT + spacing::XS,
                         rect.y,
-                        right.w - 8.0 - spacing::XS,
+                        right.w - STATUS_DOT - spacing::XS,
                         rect.h,
                     ),
                     view.scale.caption * 2.0,
@@ -1206,29 +1213,65 @@ fn hints_width(view: &mut MenuView<'_>, hints: &[&str]) -> f32 {
     total
 }
 
+/// Самая широкая строка счётчика. Список длиннее сотни строк в меню не
+/// бывает, но резерв обязан быть отвязан от того, что показано сейчас, иначе
+/// подсказки прыгали бы в момент появления статуса.
+const COUNTER_SAMPLES: [&str; 2] = ["0/0", "100/100"];
+
+/// Резерв правой зоны подвала.
+///
+/// Берётся максимум из двух вещей: самая широкая строка счётчика и самый
+/// широкий статус на языке окна вместе с точкой. Считается всегда, независимо
+/// от того, что нарисовано сейчас: иначе левая часть подвала сдвигалась бы
+/// в момент, когда вместо счётчика появляется статус, и обратно.
+pub fn right_zone_width(view: &mut MenuView<'_>, lang: Language) -> f32 {
+    let chrome = strings::chrome(lang);
+    let size = view.scale.caption;
+    let counter = COUNTER_SAMPLES
+        .iter()
+        .map(|text| view.painter.text_width(text, size))
+        .fold(0.0_f32, f32::max);
+    let status = [chrome.applied, chrome.failed]
+        .iter()
+        .map(|text| view.painter.text_width(text, size))
+        .fold(0.0_f32, f32::max);
+    let status_block = STATUS_DOT + spacing::XS + status;
+    counter.max(status_block)
+}
+
 /// Раскладка подсказок подвала: возвращает набор строк и их левую границу.
-/// Полные подписи не влезают в русском Pixel-шрифте, поэтому для них есть
-/// короткие варианты: «ESC» вместо «ESC ЗАКРЫТЬ».
-fn layout_hints<'a>(
+///
+/// Уровней три, и берётся первый влезший: полные подписи, средние (ключ и
+/// короткое слово) и наконец одни клавиши. Порядок не зависит от того, есть
+/// ли сейчас статус, — ширину правой зоны считает `right_zone_width`.
+pub fn layout_hints<'a>(
     view: &mut MenuView<'_>,
     left: f32,
     limit: f32,
     lang: Language,
 ) -> (Vec<&'a str>, f32) {
     let chrome = strings::chrome(lang);
-    let full = [chrome.select, chrome.open, chrome.back, chrome.close];
-    let short = [
-        chrome.select_short,
-        chrome.open_short,
-        chrome.back_short,
-        chrome.close_short,
+    let levels: [[&str; 4]; 3] = [
+        [chrome.select, chrome.open, chrome.back, chrome.close],
+        [
+            chrome.select_medium,
+            chrome.open_medium,
+            chrome.back_medium,
+            chrome.close_medium,
+        ],
+        [
+            chrome.select_short,
+            chrome.open_short,
+            chrome.back_short,
+            chrome.close_short,
+        ],
     ];
-    let width = hints_width(view, &full);
-    if left + width <= limit {
-        (full.to_vec(), left)
-    } else {
-        (short.to_vec(), left)
+    for level in levels {
+        if left + hints_width(view, &level) <= limit {
+            return (level.to_vec(), left);
+        }
     }
+    (levels[2].to_vec(), left)
 }
 
 /// Палитра и шкала по теме: тот же расчёт, что у окна настроек, чтобы меню и
@@ -1686,6 +1729,137 @@ mod tests {
     }
 
     use super::super::state::Status;
+
+    /// Карточка для измерений: тот же `MenuView`, что и при отрисовке.
+    fn measuring_view<'a>(
+        pixmap: &'a mut tiny_skia::Pixmap,
+        painter: &'a mut TextPainter,
+        icons: &'a mut TextPainter,
+        pixel: bool,
+    ) -> MenuView<'a> {
+        let (ui, scale) = theme(pixel, palette::Palette::default());
+        MenuView {
+            pixmap,
+            painter,
+            icons,
+            ui,
+            scale,
+            pixel,
+        }
+    }
+
+    fn blank_buffer() -> tiny_skia::Pixmap {
+        let mut pixmap =
+            tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (card_height(5) * SCALE) as u32)
+                .expect("pixmap");
+        pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
+        pixmap
+    }
+
+    /// Правый резерв не зависит от того, нарисован статус или счётчик: иначе
+    /// левая часть подвала прыгала бы в момент появления сообщения.
+    #[test]
+    fn the_footer_reserve_does_not_depend_on_what_is_shown() {
+        for lang in [Language::Ru, Language::En] {
+            let mut pixmap = blank_buffer();
+            let mut painter = TextPainter::new(&font_name(false));
+            let mut icons = TextPainter::new(settings_icons::FONT);
+            let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+
+            let reserve = right_zone_width(&mut view, lang);
+            let chrome = strings::chrome(lang);
+            let counter = super::COUNTER_SAMPLES
+                .iter()
+                .map(|text| view.painter.text_width(text, view.scale.caption))
+                .fold(0.0_f32, f32::max);
+            let status = STATUS_DOT
+                + spacing::XS
+                + view.painter.text_width(chrome.applied, view.scale.caption);
+            assert!(
+                reserve >= counter - 0.01 && reserve >= status - 0.01,
+                "резерв {reserve} уже самого широкого: счётчик {counter}, статус {status}"
+            );
+            assert_eq!(
+                reserve,
+                right_zone_width(&mut view, lang),
+                "резерв обязан считаться одинаково при любом содержимом"
+            );
+        }
+    }
+
+    /// Три уровня подсказок: берётся первый влезший, и выбор детерминирован.
+    #[test]
+    fn hints_step_down_through_three_levels() {
+        for lang in [Language::Ru, Language::En] {
+            let chrome = strings::chrome(lang);
+            let levels: [[&str; 4]; 3] = [
+                [chrome.select, chrome.open, chrome.back, chrome.close],
+                [
+                    chrome.select_medium,
+                    chrome.open_medium,
+                    chrome.back_medium,
+                    chrome.close_medium,
+                ],
+                [
+                    chrome.select_short,
+                    chrome.open_short,
+                    chrome.back_short,
+                    chrome.close_short,
+                ],
+            ];
+            let mut pixmap = blank_buffer();
+            let mut painter = TextPainter::new(&font_name(false));
+            let mut icons = TextPainter::new(settings_icons::FONT);
+            let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+            let reserve = right_zone_width(&mut view, lang);
+            let left = PAD;
+            let limit = CARD_W - PAD - reserve - spacing::XL;
+
+            // Узкий предел берёт последний уровень, широкий — первый влезший.
+            let (wide, _) = layout_hints(&mut view, left, limit, lang);
+            let (narrow, _) = layout_hints(&mut view, left, 0.0, lang);
+            assert_eq!(
+                narrow, levels[2],
+                "{lang:?}: в тесном пределе остаются одни клавиши"
+            );
+            let index = levels
+                .iter()
+                .position(|level| *level == wide.as_slice())
+                .expect("выбран один из трёх уровней");
+            assert!(
+                left + hints_width(&mut view, &levels[index]) <= limit,
+                "{lang:?}: выбран уровень, который не влезает"
+            );
+            for higher in &levels[..index] {
+                assert!(
+                    left + hints_width(&mut view, higher) > limit,
+                    "{lang:?}: уровень выше выбранного тоже влезает — выбор не максимальный"
+                );
+            }
+        }
+    }
+
+    /// Ширина уровней обязана убывать: иначе лестница бессмысленна.
+    #[test]
+    fn hint_levels_get_narrower() {
+        for lang in [Language::Ru, Language::En] {
+            let mut pixmap = blank_buffer();
+            let mut painter = TextPainter::new(&font_name(false));
+            let mut icons = TextPainter::new(settings_icons::FONT);
+            let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+            let widths: Vec<f32> = (0..3)
+                .map(|level| {
+                    let (_, width) =
+                        layout_hints(&mut view, 0.0, if level == 0 { 1000.0 } else { 0.0 }, lang);
+                    width
+                })
+                .collect();
+            assert!(
+                widths[0] >= widths[1],
+                "{lang:?}: средний уровень не уже полного"
+            );
+        }
+    }
 
     fn palette_for(pixel: bool) -> UiPalette {
         theme(pixel, palette::Palette::default()).0

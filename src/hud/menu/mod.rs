@@ -97,6 +97,13 @@ pub mod strings {
     pub const HINT_OPEN_SHORT: &str = "ENTER";
     pub const HINT_BACK_SHORT: &str = "←";
     pub const HINT_CLOSE_SHORT: &str = "ESC";
+    /// Средние подсказки: между полными и одними клавишами. Полные не влезают
+    /// в карточку 440 px по ширине, а одни клавиши не говорят, что клавиша
+    /// делает, поэтому слово остаётся — обрезанным до корня.
+    pub const HINT_SELECT_MEDIUM: &str = "↑↓ ВЫБОР";
+    pub const HINT_OPEN_MEDIUM: &str = "ENTER ОТКР.";
+    pub const HINT_BACK_MEDIUM: &str = "← НАЗАД";
+    pub const HINT_CLOSE_MEDIUM: &str = "ESC ЗАКР.";
     /// Статус после действия.
     pub const STATUS_APPLIED: &str = "ПРИМЕНЕНО";
     pub const STATUS_FAILED: &str = "ОШИБКА";
@@ -114,6 +121,11 @@ pub mod strings {
         pub open_short: &'static str,
         pub back_short: &'static str,
         pub close_short: &'static str,
+        /// Средний уровень: ключ и короткое слово.
+        pub select_medium: &'static str,
+        pub open_medium: &'static str,
+        pub back_medium: &'static str,
+        pub close_medium: &'static str,
         pub applied: &'static str,
         pub failed: &'static str,
         /// Подпись включённого тумблера: «вкл» или «on».
@@ -144,6 +156,10 @@ pub mod strings {
                 open_short: HINT_OPEN_SHORT,
                 back_short: HINT_BACK_SHORT,
                 close_short: HINT_CLOSE_SHORT,
+                select_medium: HINT_SELECT_MEDIUM,
+                open_medium: HINT_OPEN_MEDIUM,
+                back_medium: HINT_BACK_MEDIUM,
+                close_medium: HINT_CLOSE_MEDIUM,
                 applied: STATUS_APPLIED,
                 failed: STATUS_FAILED,
                 on: "вкл",
@@ -164,6 +180,10 @@ pub mod strings {
                 open_short: "ENTER",
                 back_short: "←",
                 close_short: "ESC",
+                select_medium: "↑↓ SEL",
+                open_medium: "ENTER OPEN",
+                back_medium: "← BACK",
+                close_medium: "ESC CLOSE",
                 applied: "APPLIED",
                 failed: "FAILED",
                 on: "on",
