@@ -84,6 +84,10 @@ pub const VOLUME_VALUE_W: f32 = 92.0;
 pub const METER_H: f32 = 6.0;
 /// Ширина зоны шеврона.
 pub const CHEVRON_W: f32 = 16.0;
+/// Ширина полосы прокрутки у правого края списка.
+pub const SCROLLBAR_W: f32 = 2.0;
+/// Отступ полосы прокрутки от края карточки.
+pub const SCROLLBAR_INSET: f32 = PAD / 2.0;
 /// Диаметр точки статуса в подвале. Точка сообщает, что сообщение именно об
 /// изменении, а не о позиции в списке.
 pub const STATUS_DOT: f32 = 8.0;
@@ -780,6 +784,33 @@ pub fn empty_notice_rect(list: Rect, row_h: f32) -> Rect {
     Rect::new(list.x, list.y, list.w, rows_shown(0) as f32 * row_h)
 }
 
+/// Полоса прокрутки у правого края списка.
+///
+/// Показывается только когда список длиннее окна: до этого и подвал со
+/// счётчиком `n/m` отвечают за это, и лишняя полоса была бы третьим
+/// индикатором одного и того же. Высота и положение пропорциональны видимому
+/// окну, полоса не анимируется — список и так едет под пальцем.
+pub fn scrollbar_rect(list: Rect, total: usize, top: usize) -> Option<Rect> {
+    let shown = total.min(MAX_ROWS);
+    if total <= MAX_ROWS || shown == 0 {
+        return None;
+    }
+    let height = list.h;
+    let thumb_h = (height * shown as f32 / total as f32).max(SCROLLBAR_W * 2.0);
+    let travel = height - thumb_h;
+    let offset = if total > shown {
+        travel * (top as f32 / (total - shown) as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    Some(Rect::new(
+        list.right() - SCROLLBAR_INSET - SCROLLBAR_W,
+        list.y + offset,
+        SCROLLBAR_W,
+        thumb_h,
+    ))
+}
+
 /// Абсолютный индекс подсвеченной строки.
 ///
 /// `selected` — индекс во всём списке, а позиция в цикле отрисовки тоже
@@ -848,6 +879,18 @@ fn rows_view(
                 near,
                 hover: *position == highlight.hover.unwrap_or(usize::MAX),
             },
+        );
+    }
+    // Полоса прокрутки рисуется после строк: заливка выбранной строки идёт
+    // от `CARD_INSET` до правого края и накрыла бы её иначе.
+    if let Some(track) = scrollbar_rect(list, frame.total, frame.top) {
+        fill_rect(
+            view.pixmap,
+            track.x * SCALE,
+            track.y * SCALE,
+            track.w * SCALE,
+            track.h * SCALE,
+            view.ui.muted,
         );
     }
     if frame.items.is_empty() {
@@ -2008,6 +2051,52 @@ mod tests {
             pixel_in_row(&moving_hover, &frame, 2.0),
             selected_background(theme(false, palette::Palette::default()).0),
             "фон под полосой не должен перекрываться подсветкой мыши"
+        );
+    }
+
+    /// Индикатор длинного списка: появляется только когда список длиннее окна,
+    /// а его высота и положение отражают, где окно находится внутри списка.
+    #[test]
+    fn the_scrollbar_only_shows_on_a_long_list() {
+        let list = Rect::new(0.0, HEADER_H, CARD_W, MAX_ROWS as f32 * ROW_H);
+        assert_eq!(
+            scrollbar_rect(list, MAX_ROWS, 0),
+            None,
+            "список ровно в окно: полоса не нужна"
+        );
+        assert_eq!(
+            scrollbar_rect(list, MAX_ROWS - 1, 0),
+            None,
+            "короткий список: полоса не нужна"
+        );
+        assert_eq!(scrollbar_rect(list, 0, 0), None, "пустой список");
+
+        let bar = scrollbar_rect(list, 50, 0).expect("длинный список");
+        assert_eq!(bar.w, SCROLLBAR_W, "полоса тонкая");
+        assert!(bar.h < list.h, "полоса короче окна");
+        assert!(bar.h >= SCROLLBAR_W * 2.0, "и не тоньше двух пикселей");
+        assert!(bar.x >= list.x + list.w - PAD, "полоса внутри поля");
+        assert!(bar.right() <= list.right(), "полоса не выходит за список");
+    }
+
+    #[test]
+    fn the_scrollbar_moves_with_the_window() {
+        let list = Rect::new(0.0, HEADER_H, CARD_W, MAX_ROWS as f32 * ROW_H);
+        let top = scrollbar_rect(list, 50, 0).expect("длинный список");
+        let middle = scrollbar_rect(list, 50, 20).expect("длинный список");
+        let bottom = scrollbar_rect(list, 50, 40).expect("длинный список");
+
+        assert!(top.y < middle.y, "полоса идёт вниз вместе со списком");
+        assert!(middle.y < bottom.y, "и доезжает до низа");
+        assert!(
+            bottom.bottom() <= list.bottom() + 0.01,
+            "у низа списка полоса не вылезает: {} против {}",
+            bottom.bottom(),
+            list.bottom()
+        );
+        assert!(
+            (top.h - bottom.h).abs() < 0.01,
+            "высота не зависит от положения"
         );
     }
 
