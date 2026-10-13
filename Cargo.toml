@@ -39,12 +39,22 @@ path = "src/bin/hud_yazibinds.rs"
 name = "hud-vpn-rs"
 path = "src/bin/hud_vpn.rs"
 
+[[bin]]
+name = "hud-apps-rs"
+path = "src/bin/hud_apps.rs"
+
 [dependencies]
 chrono = "0.4.45"
 cosmic-text = "0.19.0"
 dbus = "0.9.12"
 nix = { version = "0.31.3", features = ["poll", "fs", "signal", "user"] }
 png = "0.18.1"
+# Иконки приложений в темах (Adwaita, Papirus, Bibata) — это в основном SVG, а
+# PNG в hicolor лежит штук двадцать. resvg нужен, чтобы лаунчер показывал
+# настоящие иконки. Фичи с текстом и шрифтами выключены намеренно: иконки —
+# это пути, а fontdb с rustybuzz в проекте не нужны; `svgz` оставлен, потому
+# что в hicolor лежат сжатые .svgz (ark, kwin, darkly-settings).
+resvg = { version = "0.48.1", default-features = false, features = ["svgz"] }
 # preserve_order держит порядок ключей settings.json: без него serde_json
 # сортирует объект по алфавиту и каждая запись переставляет файл целиком.
 serde_json = { version = "1.0.151", features = ["preserve_order"] }

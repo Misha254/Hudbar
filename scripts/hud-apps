@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Запуск окна приложений. Переключением занимается сам бинарник: повторный
+# вызов находит живой pid-файл, посылает SIGTERM и выходит. Отдельный поиск окна
+# здесь не нужен и невозможен: слой не виден в `niri msg windows`.
+set -euo pipefail
+
+bin="${HUDBAR_BIN_DIR:-$HOME/.local/bin}/hud-apps-rs"
+
+if [[ ! -x "$bin" ]]; then
+    echo "лаунчер приложений не установлен: нет $bin" >&2
+    exit 1
+fi
+
+exec setsid -f "$bin" "$@"

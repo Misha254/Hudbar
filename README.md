@@ -48,6 +48,15 @@ pkill -x hudbar; hudbar &
 `src/bin/sni_test.rs` — отдельный бинарник, не часть панели. Это стенд для отладки протокола
 StatusNotifierItem: поднимает фейковый элемент трея, чтобы проверять `tray.rs`.
 
+`src/bin/hud_apps.rs` — лаунчер приложений на `Super+D`, замена прежнего
+`rofi -show hudapps` с `hud-drun.sh`: тот же список из desktop-файлов и те же
+закреплённые, но окно рисуется тем же кодом, что панель и меню, и не требует X11.
+Иконки — SVG через `resvg` и PNG, с кэшем и фоновой загрузкой; первый кадр рисуется
+сразу, с заглушками. Закреплённые лежат в `~/.config/hudbar/apps-pinned` и один раз
+переносятся из `~/.config/rofi/pinned`. Снимки без композитора:
+`hud-apps-rs --snapshot <default|search|empty|pinned> out.png`. Логика окна —
+в `src/hud/apps/`.
+
 `src/bin/hud_keybinds.rs` и `src/bin/hud_yazibinds.rs` — нативные окна биндов niri (KP_8)
 и yazi (KP_9), замена прежних Rofi-скриптов. Общая логика парсинга — в
 `src/hud/bind_data.rs`. Канонические toggle-обёртки находятся в `scripts/` и устанавливаются в

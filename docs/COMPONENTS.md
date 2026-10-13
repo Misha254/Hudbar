@@ -6,6 +6,7 @@ The repository has one canonical entrypoint for each HUD feature. Files currentl
 | Component | Canonical entrypoint | Implementation | Role |
 | --- | --- | --- | --- |
 | Top bar | `hudbar` | Rust binary | Wayland layer-shell bar and panels |
+| App launcher | `hud-apps` | shell wrapper + `hud-apps-rs` | Native launcher on `Super+D`, replaces the rofi apps menu |
 | niri binds | `hud-keybinds` | shell wrapper + `hud-keybinds-rs` | Native keybind viewer |
 | yazi binds | `hud-yazibinds` | shell wrapper + `hud-yazibinds-rs` | Native yazi keybind viewer |
 | Settings backend | `hud-setting` | Python CLI | Persist settings and restart affected services |
@@ -28,6 +29,11 @@ stays, because the menu, wallpaper, VPN and schemes windows are built on it. The
 The Wi-Fi, audio and Bluetooth stages it had covered are complete and live in the menu instead.
 
 ## Deprecated active routes
+
+`hud-drun.sh` is the previous Rofi implementation of the app launcher. The `hudapps`
+mode it served is gone: `hud-apps` reads the same desktop files and the same pinned
+list, and moves it to `~/.config/hudbar/apps-pinned` on first run. The script stays
+on disk so an existing setup can be rolled back manually.
 
 `keybind.sh` and `yazibind.sh` are the previous Rofi implementations. They are no longer used by
 the canonical niri keybinds; they remain on disk so an existing setup can be rolled back manually.

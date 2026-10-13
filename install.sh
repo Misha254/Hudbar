@@ -83,11 +83,11 @@ install_default_file() {
 log "building release binaries"
 run cargo build --release --bins --manifest-path "$ROOT_DIR/Cargo.toml"
 
-for binary in hudbar hud-menu-rs hud-keybinds-rs hud-yazibinds-rs hud-vpn-rs; do
+for binary in hudbar hud-menu-rs hud-apps-rs hud-keybinds-rs hud-yazibinds-rs hud-vpn-rs; do
     install_file "$ROOT_DIR/target/release/$binary" "$PREFIX/bin/$binary" 0755
 done
 
-for script in hud-menu hud-keybinds hud-yazibinds hud-vpn hud-setting hud-theme; do
+for script in hud-menu hud-apps hud-keybinds hud-yazibinds hud-vpn hud-setting hud-theme; do
     install_file "$ROOT_DIR/scripts/$script" "$PREFIX/bin/$script" 0755
 done
 install_file "$ROOT_DIR/scripts/hud-migrate-settings" "$PREFIX/bin/hud-migrate-settings" 0755
