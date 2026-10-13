@@ -179,6 +179,10 @@ pub struct UiPalette {
     pub hover_bg: palette::Rgba,
     /// Фон выбранной строки.
     pub selected_bg: palette::Rgba,
+    /// Плитка на месте иконки, которой нет. Отдельная роль: у неё свой порог
+    /// (3:1 — это графика) и своя альфа. Приглушённый текст на карточке даёт
+    /// 4.5:1 и на строке читался бы как значок, которого не существует.
+    pub placeholder: palette::Rgba,
 }
 
 /// Доля акцента в фоне строки под указателем: вчетверо слабее выбранной.
@@ -187,6 +191,13 @@ pub const HOVER_MIX: f32 = 0.07;
 /// Доля акцента в фоне выбранной строки. Малая: фон должен наметиться, а не
 /// стать второй подсветкой. Значение снято с макета — там оно 0.15–0.17.
 pub const SELECTED_MIX: f32 = 0.14;
+
+/// Альфа плитки-заглушки на месте отсутствующей иконки.
+///
+/// Ровно столько, сколько нужно, чтобы плитка проходила 3:1 к карточке как
+/// графика: мельче — и её не видно вовсе, крупнее — и она читается как значок,
+/// которого нет. Проверка на всех модельных схемах живёт в тестах этого файла.
+pub const PLACEHOLDER_ALPHA: f32 = 0.52;
 
 /// Производные цвета из семи базовых. Считается одинаково для обеих тем,
 /// поэтому Pixel получает те же роли из своих hex, а не из новых констант.
@@ -213,6 +224,7 @@ fn extend(base: UiPalette) -> UiPalette {
         // выделением выбором.
         hover_bg: mix(base.panel, base.accent, HOVER_MIX),
         selected_bg: mix(base.panel, base.accent, SELECTED_MIX),
+        placeholder: base.text.with_a(PLACEHOLDER_ALPHA),
         ..base
     }
 }
@@ -240,6 +252,9 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             picker_thumb: palette::Rgba(0, 0, 0, 0),
             hover_bg: palette::Rgba(0, 0, 0, 0),
             selected_bg: palette::Rgba(0, 0, 0, 0),
+            // В Pixel заглушка идёт ступенями и без полутонов, но альфа та же,
+            // что и в обычной теме: проверка контраста одна на обе темы.
+            placeholder: palette::Rgba(0xe8, 0xea, 0xff, 255).with_a(PLACEHOLDER_ALPHA),
         }
     } else {
         UiPalette {
@@ -267,55 +282,60 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             picker_thumb: palette::Rgba(0, 0, 0, 0),
             hover_bg: palette::Rgba(0, 0, 0, 0),
             selected_bg: palette::Rgba(0, 0, 0, 0),
+            placeholder: palette::Rgba(0, 0, 0, 0),
         }
     };
     extend(base)
 }
+/// Относительная яркость по WCAG 2.1.
+fn relative_luminance(color: palette::Rgba) -> f32 {
+    let channel = |value: u8| {
+        let value = value as f32 / 255.0;
+        if value <= 0.039_28 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.0) + 0.7152 * channel(color.1) + 0.0722 * channel(color.2)
+}
+
+/// Полупрозрачный цвет на фоне: то, что глаз видит, а не то, что записано в
+/// палитре.
+fn flatten(front: palette::Rgba, back: palette::Rgba) -> palette::Rgba {
+    let alpha = front.3 as f32 / 255.0;
+    palette::Rgba(
+        (front.0 as f32 * alpha + back.0 as f32 * (1.0 - alpha)) as u8,
+        (front.1 as f32 * alpha + back.1 as f32 * (1.0 - alpha)) as u8,
+        (front.2 as f32 * alpha + back.2 as f32 * (1.0 - alpha)) as u8,
+        255,
+    )
+}
+
+/// Контраст пары «что на чём нарисовано» по WCAG 2.1.
+///
+/// Функция публичная, потому что контраст считают не только тесты палитры: окну
+/// лаунчера нужно проверить, что заглушка и подвал держат свои пороги на тех же
+/// модельных схемах, а дублировать формулу WCAG в компоненте нельзя — через
+/// год формулы разъедутся, и проверка станет проверкой копии.
+pub fn contrast(front: palette::Rgba, back: palette::Rgba) -> f32 {
+    let front = relative_luminance(flatten(front, back));
+    let back = relative_luminance(back);
+    let (high, low) = if front > back {
+        (front, back)
+    } else {
+        (back, front)
+    };
+    (high + 0.05) / (low + 0.05)
+}
+
+/// Запас поверх порога: вторая роль, на которую смотрит тест.
+const MUTED_MARGIN: f32 = 4.8;
 
 #[cfg(test)]
 mod tests {
     use super::super::settings_ui;
     use super::*;
-
-    /// Относительная яркость по WCAG 2.1.
-    fn relative_luminance(color: palette::Rgba) -> f32 {
-        let channel = |value: u8| {
-            let value = value as f32 / 255.0;
-            if value <= 0.040_45 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * channel(color.0) + 0.7152 * channel(color.1) + 0.0722 * channel(color.2)
-    }
-
-    /// Композит полупрозрачного цвета над непрозрачным фоном: браузер считает
-    /// контраст именно так, а не по цвету с альфой.
-    fn flatten(front: palette::Rgba, back: palette::Rgba) -> palette::Rgba {
-        let alpha = front.3 as f32 / 255.0;
-        if alpha >= 1.0 {
-            return front;
-        }
-        palette::Rgba(
-            (front.0 as f32 * alpha + back.0 as f32 * (1.0 - alpha)) as u8,
-            (front.1 as f32 * alpha + back.1 as f32 * (1.0 - alpha)) as u8,
-            (front.2 as f32 * alpha + back.2 as f32 * (1.0 - alpha)) as u8,
-            255,
-        )
-    }
-
-    /// Контраст пары «что на чём нарисовано» по WCAG 2.1.
-    fn contrast(front: palette::Rgba, back: palette::Rgba) -> f32 {
-        let front = relative_luminance(flatten(front, back));
-        let back = relative_luminance(back);
-        let (high, low) = if front > back {
-            (front, back)
-        } else {
-            (back, front)
-        };
-        (high + 0.05) / (low + 0.05)
-    }
 
     /// Модельные палитры схем matugen: тона Material 3 по семействам схем.
     ///
@@ -343,6 +363,20 @@ mod tests {
         text: palette::Rgba,
         primary: palette::Rgba,
         secondary: palette::Rgba,
+    }
+
+    /// Палитра схемы в виде, из которого делается `UiPalette`. Отдельная
+    /// функция: новые проверки ролей не должны копировать сборку.
+    fn model_palette(scheme: &str, light: bool) -> palette::Palette {
+        let model = model(scheme, light);
+        palette::Palette {
+            base: model.base,
+            text: model.text,
+            primary: model.primary,
+            secondary: model.secondary,
+            on_primary: palette::Rgba(0, 0, 0, 255),
+            error: palette::Rgba(255, 0, 0, 255),
+        }
     }
 
     /// Собрать палитру схемы: акцент и его chroma, поверхность и текст режима.
@@ -427,6 +461,7 @@ mod tests {
             ("тумблер: кольцо", ui.muted, ui.panel, 3.0),
             ("тумблер: заливка", ui.accent, ui.panel, 3.0),
             ("миниатюра выбора", ui.picker_thumb, ui.panel, 3.0),
+            ("заглушка иконки", ui.placeholder, ui.panel, 3.0),
         ]
     }
 
@@ -491,9 +526,6 @@ mod tests {
         );
     }
 
-    /// Запас поверх порога: вторая роль, на которую смотрит тест.
-    const MUTED_MARGIN: f32 = 4.8;
-
     /// `muted` держит запас над порогом мелкого текста.
     ///
     /// WCAG требует 4.5:1, но `muted` — роль с самым большим числом
@@ -538,11 +570,55 @@ mod tests {
     fn the_thresholds_are_the_ones_the_audit_asked_for() {
         assert_eq!(
             pairs(&ui_palette(false, palette::Palette::default())).len(),
-            21
+            22
         );
         for (_, _, _, need) in pairs(&ui_palette(true, palette::Palette::default())) {
             assert!(need == 0.0 || need == 3.0 || need == 4.5, "порог {need}");
         }
+    }
+
+    /// Заглушка на месте отсутствующей иконки — графика, поэтому порог у неё
+    /// 3:1, а не 4.5:1 как у текста. Проверяется отдельно и с запасом: плитка,
+    /// до которой не дотягивается глаз, не сообщает ни о чём, а та, что
+    /// проходит 4.5:1, читается как значок, которого нет.
+    #[test]
+    fn the_placeholder_tile_passes_the_graphic_threshold_on_every_scheme() {
+        let mut worst = f32::INFINITY;
+        for light in [false, true] {
+            for scheme in MODEL_SCHEMES {
+                let ui = ui_palette(false, model_palette(scheme, light));
+                let ratio = contrast(ui.placeholder, ui.panel);
+                worst = worst.min(ratio);
+                assert!(
+                    ratio >= 3.0,
+                    "заглушка {scheme} {}: {ratio}",
+                    if light {
+                        "светлая"
+                    } else {
+                        "тёмная"
+                    }
+                );
+            }
+        }
+        assert!(
+            worst >= 3.0,
+            "худшая пара схем должна держать порог, а не средняя: {worst}"
+        );
+    }
+
+    /// Подсказки подвала рисуются `muted` на карточке — это тот же порог, что у
+    /// остального мелкого текста, и проверяется той же строкой таблицы.
+    #[test]
+    fn the_footer_hints_use_the_text_role_that_passes_four_and_a_half() {
+        let mut worst = f32::INFINITY;
+        for light in [false, true] {
+            for scheme in MODEL_SCHEMES {
+                let ui = ui_palette(false, model_palette(scheme, light));
+                worst = worst.min(contrast(ui.muted, ui.panel));
+            }
+        }
+        assert!(worst >= 4.5, "подвальные подсказки и счётчик: {worst}");
+        assert!(worst >= MUTED_MARGIN, "и с запасом, как `muted`: {worst}");
     }
 
     /// Токены обязаны совпадать с геометрией окна, иначе появится второй

@@ -51,6 +51,10 @@ pub struct Model {
     page: usize,
     /// Строка в подвале: результат закрепления или ошибка запуска.
     status: Option<String>,
+    /// Параллельно `rows`: строка лежит в секции «Закреплённые». Булавка в
+    /// этой секции не рисуется — там она у всех строк, и второй раз она
+    /// ничего не сообщает.
+    in_pinned: Vec<bool>,
     lang: Language,
 }
 
@@ -70,6 +74,7 @@ impl Model {
             top: 0,
             page: page.max(1),
             status: None,
+            in_pinned: Vec::new(),
             lang,
         };
         model.rebuild();
@@ -88,6 +93,7 @@ impl Model {
             top: 0,
             page: page.max(1),
             status: None,
+            in_pinned: Vec::new(),
             lang,
         };
         model.rebuild();
@@ -185,8 +191,58 @@ impl Model {
     /// ждёт, а не на позиции, которая случайно сохранилась.
     pub fn rebuild(&mut self) {
         self.rows = self.build_rows();
+        self.in_pinned = self.mark_pinned_section(&self.rows);
         self.selected = self.first_app_row();
         self.top = 0;
+    }
+
+    /// Помечает строки секции «Закреплённые». Заголовок секции помечается
+    /// вместе с ними: он принадлежит той же секции, и по нему видно, где
+    /// секция кончилась.
+    fn mark_pinned_section(&self, rows: &[Row]) -> Vec<bool> {
+        let pinned_title = match self.lang {
+            Language::Ru => "Закреплённые",
+            Language::En => "Pinned",
+        };
+        let mut inside = false;
+        let mut marks = Vec::with_capacity(rows.len());
+        for row in rows {
+            match row {
+                Row::Section(title) => inside = title == pinned_title,
+                Row::App(_) => {}
+            }
+            marks.push(inside);
+        }
+        marks
+    }
+
+    /// Лежит ли строка в секции «Закреплённые».
+    pub fn in_pinned_section(&self, row: usize) -> bool {
+        self.in_pinned.get(row).copied().unwrap_or(false)
+    }
+
+    /// Сколько в списке приложений: заголовки секций в счёт не идут, и счётчик
+    /// подвала должен считать именно их.
+    pub fn app_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| matches!(row, Row::App(_)))
+            .count()
+    }
+
+    /// Позиция строки среди приложений, начиная с единицы. `None` — строка не
+    /// приложение: у заголовка секции позиции нет.
+    pub fn app_position(&self, row: usize) -> Option<usize> {
+        let before = self
+            .rows
+            .iter()
+            .take(row)
+            .filter(|item| matches!(item, Row::App(_)))
+            .count();
+        match self.rows.get(row) {
+            Some(Row::App(_)) => Some(before + 1),
+            _ => None,
+        }
     }
 
     fn build_rows(&self) -> Vec<Row> {
@@ -237,7 +293,7 @@ impl Model {
     }
 
     /// Первая строка приложения в построенном списке.
-    fn first_app_row(&self) -> usize {
+    pub fn first_app_row(&self) -> usize {
         self.rows
             .iter()
             .position(|row| matches!(row, Row::App(_)))
@@ -634,6 +690,76 @@ mod tests {
         assert_eq!(moved.selected(), beta);
         assert!(moved.is_pinned("b"));
         assert_eq!(moved.pinned(), ["b".to_string()]);
+    }
+
+    /// Счётчик подвала считает приложения, а не строки: заголовки секций в
+    /// счёт не идут ни в позицию, ни в итог.
+    #[test]
+    fn the_app_count_ignores_section_headers() {
+        let model = model(
+            &[("a", "Alpha"), ("b", "Beta"), ("c", "Gamma")],
+            &["a", "b"],
+            10,
+        );
+        // Две секции: заголовок, два закреплённых, заголовок, одно прочее.
+        assert_eq!(model.total(), 5);
+        assert_eq!(model.app_count(), 3);
+        assert_eq!(model.app_position(0), None, "заголовок позиции не имеет");
+        assert_eq!(model.app_position(1), Some(1));
+        assert_eq!(model.app_position(2), Some(2));
+        assert_eq!(model.app_position(3), None, "заголовок позиции не имеет");
+        assert_eq!(model.app_position(4), Some(3));
+        assert_eq!(model.app_position(99), None);
+    }
+
+    /// При поиске секций нет, и позиция совпадает с номером строки.
+    #[test]
+    fn a_filtered_list_positions_by_apps_only() {
+        let mut model = model(&[("a", "Alpha"), ("b", "Beta")], &["b"], 10);
+        model.type_char('l');
+        assert_eq!(model.total(), 1);
+        assert_eq!(model.app_count(), 1);
+        assert_eq!(model.app_position(0), Some(1));
+    }
+
+    /// Секция «Закреплённые» помечается по строкам, а не по индексу: её
+    /// содержимое меняется при закреплении, а заголовок — нет.
+    #[test]
+    fn the_pinned_section_is_marked_row_by_row() {
+        let model = model(&[("a", "Alpha"), ("b", "Beta")], &["a"], 10);
+        let marks: Vec<bool> = (0..model.total())
+            .map(|row| model.in_pinned_section(row))
+            .collect();
+        // Строки: заголовок «Закреплённые», Alpha, заголовок «Все приложения»,
+        // Beta. Помечены заголовок первой секции и её содержимое.
+        assert_eq!(
+            marks,
+            vec![true, true, false, false],
+            "заголовок и содержимое секции помечены, вторая секция — нет"
+        );
+        assert!(
+            !model.in_pinned_section(99),
+            "за пределами списка секций нет"
+        );
+    }
+
+    /// Название секции из языка: помечение не должно зависеть от того, как
+    /// строка называется в списке.
+    #[test]
+    fn the_pinned_section_is_found_in_both_languages() {
+        for lang in [Language::Ru, Language::En] {
+            let model = Model::from_apps(
+                vec![app("a", "Alpha"), app("b", "Beta")],
+                vec!["a".to_string()],
+                10,
+                lang,
+            );
+            let first_app = model.first_app_row();
+            assert!(
+                model.in_pinned_section(first_app),
+                "{lang:?}: первое приложение в закреплённых"
+            );
+        }
     }
 
     #[test]

@@ -64,28 +64,87 @@ impl Bitmap {
     }
 }
 
+/// Каталог с иконками: либо сама тема, либо базовый каталог, внутри которого
+/// темы лежат одна под другой.
+///
+/// Разница не в теории, а в том, что показал L0: иконка `zcode` лежит в
+/// `~/.local/share/icons/hicolor/512x512/apps/zcode.png`, а
+/// `moe.launcher.an-anime-game-launcher` — в
+/// `/var/lib/flatpak/exports/share/icons/hicolor/512x512/apps/…`. Базовые
+/// каталоги пользователя и экспортов flatpak отдавались поиску как темы, и
+/// иконка не находилась никогда: не хватало одного уровня `hicolor/`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Root {
+    pub path: PathBuf,
+    /// Спускаться ли в подкаталоги: `true` у базовых каталогов, где внутри
+    /// лежат темы, `false` у `/usr/share/icons/<тема>`.
+    pub themes: bool,
+}
+
+impl Root {
+    /// Каталог темы: иконка лежит прямо в нём.
+    pub fn theme(path: PathBuf) -> Self {
+        Root {
+            path,
+            themes: false,
+        }
+    }
+
+    /// Базовый каталог: иконка лежит в одной из тем внутри него.
+    pub fn base(path: PathBuf) -> Self {
+        Root { path, themes: true }
+    }
+
+    /// Каталоги, в которых ищется иконка. Для темы это сам каталог, для базового
+    /// — он сам и все его подкаталоги по алфавиту: порядок тем в базовом
+    /// каталоге правилами не задан, а `hicolor` там обычно единственный.
+    pub fn dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![self.path.clone()];
+        if !self.themes {
+            return dirs;
+        }
+        let Ok(entries) = std::fs::read_dir(&self.path) else {
+            return dirs;
+        };
+        let mut nested: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        nested.sort();
+        dirs.extend(nested);
+        dirs
+    }
+}
+
 /// Каталоги с иконками в порядке приоритета: каталог пользователя перекрывает
 /// системный, явные темы — `hicolor`.
-pub fn roots() -> Vec<PathBuf> {
+pub fn roots() -> Vec<Root> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut roots: Vec<PathBuf> = Vec::new();
-    let mut push = |path: PathBuf| {
-        if !roots.contains(&path) {
-            roots.push(path);
+    let mut roots: Vec<Root> = Vec::new();
+    let mut push = |root: Root| {
+        if !roots.iter().any(|item| item.path == root.path) {
+            roots.push(root);
         }
     };
     if let Some(home) = home.as_ref() {
-        push(home.join(".local/share/icons"));
-        push(home.join(".icons"));
-        push(home.join(".local/share/flatpak/exports/share/icons"));
+        // Базовые каталоги: внутри них темы (L0, п. «нет файла», 7 из 9).
+        push(Root::base(home.join(".local/share/icons")));
+        push(Root::base(home.join(".icons")));
+        push(Root::base(
+            home.join(".local/share/flatpak/exports/share/icons"),
+        ));
     }
     if let Some(data_home) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
-        push(data_home.join("icons"));
+        push(Root::base(data_home.join("icons")));
     }
-    push(PathBuf::from("/var/lib/flatpak/exports/share/icons"));
-    push(PathBuf::from("/usr/share/pixmaps"));
+    push(Root::base(PathBuf::from(
+        "/var/lib/flatpak/exports/share/icons",
+    )));
+    // `pixmaps` — каталог без тем: иконки лежат прямо в нём.
+    push(Root::theme(PathBuf::from("/usr/share/pixmaps")));
     for theme in themes() {
-        push(PathBuf::from("/usr/share/icons").join(theme));
+        push(Root::theme(PathBuf::from("/usr/share/icons").join(theme)));
     }
     roots
 }
@@ -138,44 +197,191 @@ fn icon_theme(content: &str) -> Option<String> {
 
 /// Каталоги внутри темы, от больших к маленьким. `scalable` первый: вектор
 /// отдаёт одинаковую картинку на любом размере, а у разных тем он ещё и
-/// единственный.
-pub const SIZES: [&str; 8] = [
-    "scalable", "512x512", "256x256", "128x128", "96x96", "64x64", "48x48", "32x32",
+/// единственный. Размеров больше, чем было: иконки `x-office-calendar` лежат в
+/// `AdwaitaLegacy/16x16/mimetypes`, а `16x16` в списке не было.
+pub const SIZES: [&str; 14] = [
+    "scalable", "512x512", "256x256", "192x192", "128x128", "96x96", "72x72", "64x64", "48x48",
+    "36x36", "32x32", "24x24", "22x22", "16x16",
+];
+
+/// Те же размеры без `x`: в раскладках `apps/<size>` и `mimetypes/<size>`
+/// (breeze, breeze-plus) каталог называется голым числом.
+pub const BARE: [&str; 13] = [
+    "512", "256", "192", "128", "96", "72", "64", "48", "36", "32", "24", "22", "16",
 ];
 
 /// Расширения по тем же каталогам: сначала вектор, потом растр.
 const EXTENSIONS: [&str; 4] = ["svg", "svgz", "png", "xpm"];
 
-/// Ищет файл иконки. `icon` — либо имя из темы, либо абсолютный путь: у
-/// AppImage и игровых лаунчеров в `Icon` лежит именно путь.
+/// Расширения для символьных иконок: `-symbolic` рисуют тем же, чем остальное,
+/// но искать их стоит только в самом конце.
+const SYMBOLIC: [&str; 2] = ["svg", "png"];
+
+/// Ищет файл иконки: первый кандидат в порядке приоритета.
+///
+/// `icon` — либо имя из темы, либо абсолютный путь: у AppImage и игровых
+/// лаунчеров в `Icon` лежит именно путь. Путь без расширения (лаунчер War
+/// Thunder отдаёт в `Icon` сам исполняемый файл) подставляет рядом одноимённые
+/// картинки — L0, «файл найден, но это не картинка».
 pub fn locate(icon: &str) -> Option<PathBuf> {
+    candidates(icon).into_iter().next()
+}
+
+/// Все кандидаты по имени иконки, от лучшего к худшему.
+///
+/// Их больше одного не зря: SVG из темы может не разобраться (L0 п. 3), и
+/// тогда берётся следующий — растр того же имени или иконка темы по
+/// умолчанию. Загрузчик идёт по списку и берёт первый, который растеризовался.
+pub fn candidates(icon: &str) -> Vec<PathBuf> {
     let icon = icon.trim();
     if icon.is_empty() {
-        return None;
+        return Vec::new();
     }
     if icon.contains('/') {
         let path = PathBuf::from(icon);
-        return path.is_file().then_some(path);
+        let mut out: Vec<PathBuf> = Vec::new();
+        if is_image(&path) && path.is_file() {
+            out.push(path.clone());
+        }
+        // Рядом с файлом нередко лежит одноимённая картинка: сам лаунчер —
+        // исполняемый файл, а значок — `launcher.png` рядом с ним.
+        for extension in ["png", "svg", "svgz"] {
+            let sibling = path.with_extension(extension);
+            if sibling.is_file() && !out.contains(&sibling) {
+                out.push(sibling);
+            }
+        }
+        return out;
     }
-    locate_in(&roots(), icon)
+    candidates_in(&roots(), icon)
 }
 
-/// Поиск по готовому списку каталогов: так же ищет иконка в тестах.
-pub fn locate_in(roots: &[PathBuf], icon: &str) -> Option<PathBuf> {
+/// Поиск по готовому списку каталогов: так же ищет иконка в тестах. В живое
+/// окно не входит — загрузчик берёт [`candidates`], потому что ему нужен весь
+/// список, а не только первый файл.
+#[cfg(test)]
+pub fn locate_in(roots: &[Root], icon: &str) -> Option<PathBuf> {
+    candidates_in(roots, icon).into_iter().next()
+}
+
+/// Кандидаты по готовому списку каталогов, от лучшего к худшему.
+///
+/// Вектор идёт перед раСТром по всей выдаче, а не по каталогам: в
+/// `~/.local/share/icons/hicolor` лежат PNG от 16 до 64 пикселей, и такой
+/// значок перебивал бы вектор из Papirus, хотя рисуется в 26 логических
+/// пикселей и на масштабе 2 был бы вдвое меньше нужного. Внутри своего
+/// формата порядок каталогов обычный: пользовательский перекрывает системный.
+pub fn candidates_in(roots: &[Root], icon: &str) -> Vec<PathBuf> {
+    // Три корзины: вектор, растр и символьные. Порядок корзин жёсткий, внутри
+    // корзины — порядок каталогов.
+    let mut buckets: [Vec<PathBuf>; 3] = [Vec::new(), Vec::new(), Vec::new()];
     for root in roots {
-        for size in SIZES {
-            for extension in EXTENSIONS {
-                let candidate = root
-                    .join(size)
-                    .join("apps")
-                    .join(format!("{icon}.{extension}"));
-                if candidate.is_file() {
-                    return Some(candidate);
+        for dir in root.dirs() {
+            for candidate in search_dir(&dir, icon) {
+                let bucket = if is_symbolic(&candidate) {
+                    2
+                } else if is_vector(&candidate) {
+                    0
+                } else {
+                    1
+                };
+                if !buckets[bucket].contains(&candidate) {
+                    buckets[bucket].push(candidate);
                 }
             }
         }
     }
-    None
+    buckets.into_iter().flatten().collect()
+}
+
+/// Символьная ли иконка: одноимённая картинка с хвостом `-symbolic`. Такие
+/// лежат в отдельных каталогах и рисуются монохромными, поэтому идут после
+/// всех обычных.
+fn is_symbolic(path: &Path) -> bool {
+    path.file_stem()
+        .is_some_and(|stem| stem.to_string_lossy().ends_with("-symbolic"))
+}
+
+/// Вектор ли это по расширению.
+fn is_vector(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        let extension = extension.to_string_lossy().to_lowercase();
+        extension == "svg" || extension == "svgz"
+    })
+}
+
+/// Раскладки внутри одного каталога темы, от лучшей к худшей.
+///
+/// Три порядка каталогов встречаются в живых темах, и L0 нашёл все три:
+/// `<size>/apps` (Papirus, hicolor), `apps/<size>` (breeze, breeze-plus — там
+/// нашлась `org.vinegarhq.Sober`), `mimetypes/<size>` и `<size>/mimetypes`
+/// (`x-office-calendar` у khal). Символьные иконки идут последними и только
+/// если ничего другого не нашлось.
+fn search_dir(dir: &Path, icon: &str) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut add = |path: PathBuf| {
+        if path.is_file() {
+            out.push(path);
+        }
+    };
+    for size in SIZES {
+        for extension in EXTENSIONS {
+            add(dir
+                .join(size)
+                .join("apps")
+                .join(format!("{icon}.{extension}")));
+        }
+    }
+    for size in BARE {
+        for extension in EXTENSIONS {
+            add(dir
+                .join("apps")
+                .join(size)
+                .join(format!("{icon}.{extension}")));
+        }
+    }
+    for size in BARE {
+        for extension in EXTENSIONS {
+            add(dir
+                .join("mimetypes")
+                .join(size)
+                .join(format!("{icon}.{extension}")));
+        }
+    }
+    for size in SIZES {
+        for extension in EXTENSIONS {
+            add(dir
+                .join(size)
+                .join("mimetypes")
+                .join(format!("{icon}.{extension}")));
+        }
+    }
+    for context in ["symbolic/apps", "apps/symbolic", "scalable/apps-symbolic"] {
+        for extension in SYMBOLIC {
+            add(dir
+                .join(context)
+                .join(format!("{icon}-symbolic.{extension}")));
+        }
+    }
+    out
+}
+
+/// Картинка ли это по расширению: у `Icon` может лежать исполняемый файл, и
+/// растеризатор такие не берёт.
+fn is_image(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        let extension = extension.to_string_lossy().to_lowercase();
+        EXTENSIONS.contains(&extension.as_str())
+    })
+}
+
+/// Растеризует первый кандидат, который разобрался.
+///
+/// Запасной вариант нужен ровно для L0 п. 3: файл найден, а `rasterize` вернул
+/// `None`. Тогда берётся следующий — растр того же имени из другого размера
+/// или темы по умолчанию.
+pub fn rasterize_first(candidates: &[PathBuf], size: u32) -> Option<Bitmap> {
+    candidates.iter().find_map(|path| rasterize(path, size))
 }
 
 /// Растеризует файл иконки в квадрат `size`. Формат выбирается по расширению,
@@ -352,6 +558,11 @@ pub fn blit(pixmap: &mut tiny_skia::Pixmap, icon: &Bitmap, x: f32, y: f32, size:
 /// искаться заново на каждом кадре, а очередь без этого росла бы на прокрутке.
 pub struct Loader {
     cache: HashMap<String, Option<Arc<Bitmap>>>,
+    /// Спеки, у которых загрузка завершилась неудачей: иконки нет ни в одной
+    /// раскладке, либо ни один файл не растеризовался. Отличать от «ещё едет»
+    /// нужно: заглушка «загрузка идёт» и заглушка «иконки не будет никогда» —
+    /// разные картинки, а по одному `None` в кэше их не различить.
+    failed: HashSet<String>,
     queued: HashSet<String>,
     tx: Sender<String>,
     rx: Receiver<(String, Option<Arc<Bitmap>>)>,
@@ -379,15 +590,22 @@ impl Loader {
             });
         Loader {
             cache: HashMap::new(),
+            failed: HashSet::new(),
             queued: HashSet::new(),
             tx: request_tx,
             rx: result_rx,
         }
     }
 
-    /// Что уже известно про иконку: `Some` — готова, `None` — её надо запросить.
+    /// Готовая иконка; `None` — её надо запросить либо она не найдётся.
     pub fn get(&self, spec: &str) -> Option<Arc<Bitmap>> {
         self.cache.get(spec).cloned().flatten()
+    }
+
+    /// Загрузка завершилась неудачей: иконки нет ни в одной раскладке. От
+    /// «ещё едет» отличается тем, что ждать больше нечего.
+    pub fn has_failed(&self, spec: &str) -> bool {
+        self.failed.contains(spec.trim())
     }
 
     /// Ставит иконку в очередь, если её ещё нет. Повторный запрос во время
@@ -410,9 +628,10 @@ impl Loader {
         if spec.is_empty() || self.cache.contains_key(spec) {
             return;
         }
-        let icon = locate(spec)
-            .and_then(|path| rasterize(&path, RASTER))
-            .map(Arc::new);
+        let icon = rasterize_first(&candidates(spec), RASTER).map(Arc::new);
+        if icon.is_none() {
+            self.failed.insert(spec.to_string());
+        }
         self.cache.insert(spec.to_string(), icon);
     }
 
@@ -423,6 +642,9 @@ impl Loader {
         // закончился, и оставшиеся иконки уже не придут.
         while let Ok((spec, icon)) = self.rx.try_recv() {
             self.queued.remove(&spec);
+            if icon.is_none() {
+                self.failed.insert(spec.clone());
+            }
             self.cache.insert(spec, icon);
             changed = true;
         }
@@ -461,61 +683,222 @@ mod tests {
         out
     }
 
-    fn temp_root(name: &str) -> PathBuf {
+    /// Каталог темы во временном дереве: `путь/подкаталог/подкаталог/имя.файл`.
+    fn fixture(name: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("hud-apps-icons-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("scalable/apps")).expect("каталог");
-        std::fs::create_dir_all(dir.join("48x48/apps")).expect("каталог");
+        std::fs::create_dir_all(&dir).expect("каталог");
         dir
     }
 
-    #[test]
-    fn a_theme_icon_is_found_in_the_first_matching_size() {
-        let root = temp_root("locate");
-        std::fs::write(root.join("scalable/apps/app.svg"), b"<svg/>").expect("запись");
-        std::fs::write(root.join("48x48/apps/app.png"), b"png").expect("запись");
-
-        let found = locate_in(std::slice::from_ref(&root), "app").expect("иконка найдена");
-        assert!(
-            found.ends_with("scalable/apps/app.svg"),
-            "вектор приоритетнее"
-        );
-
-        std::fs::remove_file(root.join("scalable/apps/app.svg")).expect("удаление");
-        let found = locate_in(&[root], "app").expect("иконка найдена");
-        assert!(found.ends_with("48x48/apps/app.png"));
+    /// Кладёт файл иконки по относительному пути внутри каталога.
+    fn place(root: &Path, relative: &str, content: &[u8]) -> PathBuf {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("родитель")).expect("каталоги");
+        std::fs::write(&path, content).expect("запись");
+        path
     }
 
-    #[test]
-    fn roots_are_searched_in_order() {
-        let first = temp_root("roots-first");
-        let second = temp_root("roots-second");
-        std::fs::write(second.join("scalable/apps/app.svg"), b"<svg/>").expect("запись");
+    /// Раст в байтах, который всегда растеризуется: тесты поиска интересует
+    /// раскладка, а не умение разбирать SVG.
+    fn png() -> Vec<u8> {
+        png_bytes(8, 8, [200, 30, 40, 255])
+    }
 
-        let found = locate_in(&[first.clone(), second.clone()], "app").expect("найдена");
-        assert!(
-            found.starts_with(&second),
-            "каталог пользователя должен перекрывать системный"
+    // ───────────────────────── раскладки из отчёта L0 ─────────────────────────
+
+    /// L0: иконка `zcode` лежит в `~/.local/share/icons/hicolor/512x512/apps`.
+    /// Базовый каталог отдаётся поиску как тема, и файл не находится никогда —
+    /// не хватает уровня `hicolor/`.
+    #[test]
+    fn a_base_root_descends_into_its_themes() {
+        let base = fixture("base-theme");
+        let icon = place(&base, "hicolor/512x512/apps/zcode.png", &png());
+        let found = locate_in(&[Root::base(base)], "zcode").expect("иконка найдена");
+        assert_eq!(found, icon);
+    }
+
+    /// L0: экспорт flatpak — тоже базовый каталог, и его тема `hicolor`.
+    #[test]
+    fn a_flatpak_export_is_a_base_root_too() {
+        let export = fixture("flatpak-export");
+        let icon = place(
+            &export,
+            "hicolor/scalable/apps/moe.launcher.an-anime-game-launcher.png",
+            &png(),
         );
+        let found = locate_in(&[Root::base(export)], "moe.launcher.an-anime-game-launcher")
+            .expect("иконка найдена");
+        assert_eq!(found, icon);
+    }
+
+    /// L0: `org.vinegarhq.Sober` нашлась в `breeze-plus/apps/48/` — размер
+    /// стоит после `apps`, а не до него.
+    #[test]
+    fn the_apps_size_layout_is_searched() {
+        let theme = fixture("apps-size");
+        let icon = place(&theme, "apps/48/org.vinegarhq.Sober.svg", b"<svg/>");
+        let found = locate_in(&[Root::theme(theme)], "org.vinegarhq.Sober").expect("найдена");
+        assert_eq!(found, icon);
+    }
+
+    /// L0: `x-office-calendar` лежит в `mimetypes` двумя способами — в breeze
+    /// это `mimetypes/64/`, в Papirus `64x64/mimetypes/`. Проверяем оба.
+    #[test]
+    fn the_mimetypes_layout_is_searched_in_both_orders() {
+        let breeze = fixture("mimetypes-bare");
+        let bare = place(&breeze, "mimetypes/64/x-office-calendar.svg", b"<svg/>");
+        assert_eq!(
+            locate_in(&[Root::theme(breeze)], "x-office-calendar").expect("breeze"),
+            bare
+        );
+
+        let papirus = fixture("mimetypes-sized");
+        let sized = place(&papirus, "64x64/mimetypes/x-office-calendar.svg", b"<svg/>");
+        assert_eq!(
+            locate_in(&[Root::theme(papirus)], "x-office-calendar").expect("papirus"),
+            sized
+        );
+    }
+
+    /// L0: темы полны иконок в размерах, которых в списке не было — 16, 22, 24,
+    /// 36, 72, 192. Без них `AdwaitaLegacy/16x16/mimetypes` не читалась.
+    #[test]
+    fn the_small_and_unusual_sizes_are_in_the_list() {
+        for size in ["16x16", "22x22", "24x24", "36x36", "72x72", "192x192"] {
+            assert!(
+                SIZES.contains(&size),
+                "{size} должен быть в списке размеров"
+            );
+            let bare = size.split('x').next().expect("число");
+            assert!(
+                BARE.contains(&bare),
+                "{bare} должен быть и в списке голых размеров"
+            );
+        }
+
+        let theme = fixture("small-size");
+        let icon = place(&theme, "16x16/mimetypes/x-office-calendar.png", &png());
+        assert_eq!(
+            locate_in(&[Root::theme(theme)], "x-office-calendar").expect("найдена"),
+            icon,
+            "иконка в 16x16 обязана находиться"
+        );
+    }
+
+    /// Символьные иконки — последний резерв: нашлись, только когда обычных
+    /// кандидатов нет.
+    #[test]
+    fn symbolic_icons_are_the_last_resort() {
+        let theme = fixture("symbolic");
+        place(&theme, "symbolic/apps/terminal-symbolic.svg", b"<svg/>");
+        let found = locate_in(&[Root::theme(theme.clone())], "terminal").expect("найдена");
+        assert!(found.to_string_lossy().ends_with("terminal-symbolic.svg"));
+
+        // Обычная иконка выигрывает у символьной, даже если символьная лежит
+        // в каталоге, который стоит раньше по алфавиту.
+        let both = fixture("symbolic-and-normal");
+        let normal = place(&both, "48x48/apps/terminal.png", &png());
+        place(&both, "symbolic/apps/terminal-symbolic.svg", b"<svg/>");
+        assert_eq!(
+            locate_in(&[Root::theme(both)], "terminal").expect("найдена"),
+            normal
+        );
+    }
+
+    /// Раскладка `<size>/apps` по теме и порядок корней: каталог пользователя
+    /// перекрывает системный.
+    #[test]
+    fn a_theme_icon_is_found_and_roots_win_in_order() {
+        let first = fixture("order-first");
+        let second = fixture("order-second");
+        let icon = place(&second, "scalable/apps/app.svg", b"<svg/>");
+        place(&first, "scalable/apps/other.svg", b"<svg/>");
+        assert_eq!(
+            locate_in(&[Root::theme(first), Root::theme(second.clone())], "app").expect("найдена"),
+            icon
+        );
+    }
+
+    /// Вектор из системной темы должен перебивать мелкий PNG из пользовательского
+    /// каталога: значок рисуется в 26 логических пикселей, и на масштабе 2
+    /// растр вдвое меньше нужного.
+    #[test]
+    fn a_vector_from_a_later_root_beats_a_raster_from_an_earlier_one() {
+        let user = fixture("user-raster");
+        let raster = place(&user, "hicolor/48x48/apps/app.png", &png());
+        let theme = fixture("system-vector");
+        let vector = place(&theme, "scalable/apps/app.svg", b"<svg/>");
+
+        let found = candidates_in(&[Root::base(user), Root::theme(theme)], "app");
+        assert_eq!(found[0], vector, "вектор должен идти первым");
+        assert!(found.contains(&raster), "растр остаётся запасным вариантом");
     }
 
     #[test]
     fn an_absent_icon_is_simply_absent() {
-        let root = temp_root("locate-missing");
-        assert!(locate_in(&[root], "definitely-not-here").is_none());
+        let root = fixture("missing");
+        assert!(locate_in(&[Root::theme(root)], "definitely-not-here").is_none());
         assert!(locate("").is_none());
         assert!(locate("   ").is_none());
+        assert!(candidates("nope-not-here").is_empty());
+    }
+
+    /// L0: у AppImage и игровых лаунчеров `Icon` — абсолютный путь. Если это
+    /// исполняемый файл, рядом нередко лежит одноимённая картинка.
+    #[test]
+    fn an_absolute_path_is_taken_as_is_and_probed_for_siblings() {
+        let dir = fixture("absolute");
+        let icon = place(&dir, "app.png", &png());
+        assert_eq!(
+            candidates(icon.to_str().expect("utf-8"))[0],
+            icon,
+            "сам путь — первый кандидат"
+        );
+
+        // L0, War Thunder: `Icon` указывает на ELF-файл без расширения.
+        let launcher = place(&dir, "War Thunder/launcher", b"ELF");
+        let sibling = place(&dir, "War Thunder/launcher.png", &png());
+        let found = candidates(launcher.to_str().expect("utf-8"));
+        assert!(
+            found.contains(&sibling),
+            "картинка рядом с исполняемым файлом обязана попасть в кандидаты: {found:?}"
+        );
+        assert!(
+            !found.contains(&launcher),
+            "исполняемый файл растеризатору не отдать"
+        );
+    }
+
+    /// L0 п. 3: файл найден, а `rasterize` вернул None. Запасной вариант —
+    /// следующий кандидат: растр того же имени из соседнего размера.
+    #[test]
+    fn a_broken_svg_falls_back_to_the_next_candidate() {
+        let theme = fixture("broken-svg");
+        place(&theme, "scalable/apps/app.svg", "не svg вовсе".as_bytes());
+        let good = place(&theme, "48x48/apps/app.png", &png());
+        let candidates = candidates_in(&[Root::theme(theme)], "app");
+        assert_eq!(candidates.len(), 2, "сначала вектор, потом растр");
+        assert!(
+            rasterize(&candidates[0], RASTER).is_none(),
+            "битый SVG обязан давать None"
+        );
+        let bitmap = rasterize_first(&candidates, RASTER).expect("запасной вариант");
+        assert_eq!((bitmap.w, bitmap.h), (RASTER, RASTER));
+        assert_eq!(candidates[1], good);
     }
 
     #[test]
-    fn an_icon_given_as_a_path_is_taken_as_is() {
-        let root = temp_root("path-icon");
-        let file = root.join("scalable/apps/app.svg");
-        std::fs::write(&file, b"<svg/>").expect("запись");
-        assert_eq!(locate(file.to_str().expect("utf-8")), Some(file));
-        assert!(locate("/nonexistent/icon.png").is_none());
+    fn rasterize_first_gives_up_when_nothing_renders() {
+        let theme = fixture("nothing-renders");
+        place(&theme, "scalable/apps/app.svg", "не svg".as_bytes());
+        let candidates = candidates_in(&[Root::theme(theme)], "app");
+        assert!(rasterize_first(&candidates, RASTER).is_none());
+        assert!(rasterize_first(&[], RASTER).is_none());
     }
+
+    // ───────────────────────── темы, корни, GTK ─────────────────────────
 
     #[test]
     fn the_icon_theme_is_read_from_gtk_settings() {
@@ -533,11 +916,33 @@ mod tests {
     fn hicolor_is_always_the_last_theme() {
         let themes = themes();
         assert_eq!(themes.last().map(String::as_str), Some("hicolor"));
+        assert!(themes.contains(&"Adwaita".to_string()));
+    }
+
+    #[test]
+    fn user_and_export_roots_are_bases_and_system_ones_are_themes() {
+        let roots = roots();
+        let by_path = |needle: &str| {
+            roots
+                .iter()
+                .find(|root| root.path.to_string_lossy().contains(needle))
+                .expect("корень есть")
+        };
         assert!(
-            themes.contains(&"Adwaita".to_string()),
-            "тема-замена Adwaita должна просматриваться"
+            by_path("/var/lib/flatpak/exports/share/icons").themes,
+            "экспорт flatpak — базовый каталог"
+        );
+        assert!(
+            !by_path("/usr/share/pixmaps").themes,
+            "pixmaps — каталог без тем"
+        );
+        assert!(
+            !by_path("/usr/share/icons/hicolor").themes,
+            "каталог темы спускаться не должен"
         );
     }
+
+    // ───────────────────────── раст ─────────────────────────
 
     #[test]
     fn png_icons_are_decoded_and_scaled() {
@@ -574,23 +979,17 @@ mod tests {
             <rect x="0" y="0" width="10" height="10" fill="#ff0000"/></svg>"##;
         let bitmap = rasterize_svg(svg, RASTER).expect("растр");
         assert_eq!((bitmap.w, bitmap.h), (RASTER, RASTER));
-        // Пиксель из середины красного прямоугольника: цвет должен быть
-        // красным, а альфа непрозрачной.
         let at = ((RASTER / 2 * RASTER + RASTER / 2) * 4) as usize;
         assert!(bitmap.rgba[at] > 200, "красный канал: {}", bitmap.rgba[at]);
         assert!(bitmap.rgba[at + 3] > 200, "альфа: {}", bitmap.rgba[at + 3]);
         assert!(bitmap.rgba[at + 1] < 40, "зелёный канал должен быть пуст");
     }
 
-    /// Растр хранится прямыми пикселями: премультипликация от resvg испортила
-    /// бы цвета на полупрозрачных краях иконки.
     #[test]
     fn the_svg_raster_is_straight_alpha() {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <rect x="0" y="0" width="5" height="10" fill="#ffffff" fill-opacity="0.5"/></svg>"##;
         let bitmap = rasterize_svg(svg, 8).expect("растр");
-        // Точка внутри прямоугольника: в восьми пикселях он занимает колонки
-        // 0..4, и правая граница уже прозрачна.
         let middle = (4 * 8 + 2) * 4;
         assert!(
             (128..=132).contains(&bitmap.rgba[middle + 3]),
@@ -606,14 +1005,16 @@ mod tests {
 
     #[test]
     fn a_raster_file_is_read_by_extension() {
-        let root = temp_root("raster-file");
-        let png = root.join("48x48/apps/app.png");
-        std::fs::write(&png, png_bytes(48, 48, [1, 2, 3, 255])).expect("запись");
-        let bitmap = rasterize(&png, RASTER).expect("растр");
+        let root = fixture("raster-file");
+        let png_file = place(
+            &root,
+            "48x48/apps/app.png",
+            &png_bytes(48, 48, [1, 2, 3, 255]),
+        );
+        let bitmap = rasterize(&png_file, RASTER).expect("растр");
         assert_eq!((bitmap.w, bitmap.h), (RASTER, RASTER));
 
-        let unknown = root.join("scalable/apps/app.xpm");
-        std::fs::write(&unknown, b"xpm").expect("запись");
+        let unknown = place(&root, "scalable/apps/app.xpm", b"xpm");
         assert!(rasterize(&unknown, RASTER).is_none(), "xpm мы не рисуем");
     }
 
@@ -626,6 +1027,8 @@ mod tests {
         };
         assert_eq!(bitmap.scaled_to(0).w, 1);
     }
+
+    // ───────────────────────── блит ─────────────────────────
 
     #[test]
     fn blit_draws_an_opaque_icon_over_the_background() {
@@ -656,7 +1059,6 @@ mod tests {
         let mut pixmap = black(4);
         blit(&mut pixmap, &icon, 0.0, 0.0, 2.0);
 
-        // Ни один пиксель не стал белым: прозрачность прошла насквозь.
         for pixel in pixmap.pixels() {
             assert!(
                 pixel.red() < 120,
@@ -682,8 +1084,6 @@ mod tests {
             rgba: vec![255; 16],
         };
         let mut pixmap = tiny_skia::Pixmap::new(4, 4).expect("буфер");
-        // Иконка целиком за левым и верхним краем: ни одного обращения к памяти
-        // за пределами буфера, а кадр не должен измениться.
         blit(&mut pixmap, &icon, -20.0, -20.0, 2.0);
         blit(&mut pixmap, &icon, 0.0, 0.0, 0.0);
         for pixel in pixmap.pixels() {
@@ -691,29 +1091,35 @@ mod tests {
         }
     }
 
+    // ───────────────────────── загрузчик ─────────────────────────
+
+    /// Пока ответ не пришёл, иконка «ещё едет»: `has_failed` обязан молчать, иначе
+    /// первая отрисовка показала бы «иконки не будет» вместо заглушки загрузки.
     #[test]
-    fn the_loader_caches_missing_icons_too() {
-        let mut loader = Loader::new();
+    fn a_queued_icon_is_not_yet_failed() {
+        let loader = Loader::new();
         let spec = format!("definitely-not-here-{}", std::process::id());
         assert!(loader.get(&spec).is_none());
+        assert!(!loader.has_failed(&spec), "в пути — не значит провал");
+    }
+
+    /// Провал фиксируется один раз и после него запрос не повторяется: без
+    /// этого очередь росла бы на каждое перерисовывание кадра.
+    #[test]
+    fn the_loader_marks_a_failed_icon_and_keeps_it_failed() {
+        let mut loader = Loader::new();
+        let spec = format!("definitely-not-here-{}", std::process::id());
         loader.request(&spec);
         loader.request(&spec);
-        // Второй запрос во время ожидания должен быть проигнорирован: иначе
-        // очередь росла бы на каждое перерисовывание кадра.
-        assert_eq!(loader.pending(), 1);
+        assert_eq!(loader.pending(), 1, "повтор во время ожидания игнорируется");
         for _ in 0..400 {
             if loader.take() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(
-            loader.get(&spec).is_none(),
-            "иконки нет, и это уже известно"
-        );
-        assert!(
-            loader.cache.contains_key(&spec),
-            "отрицательный ответ кэшируется"
-        );
+        assert!(loader.get(&spec).is_none());
+        assert!(loader.has_failed(&spec), "провал должен быть зафиксирован");
+        assert!(loader.cache.contains_key(&spec), "и кэш, и провал");
     }
 }
