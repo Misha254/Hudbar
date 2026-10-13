@@ -1346,13 +1346,53 @@ fn hints_width(view: &mut MenuView<'_>, hints: &[&str]) -> f32 {
 /// подсказки прыгали бы в момент появления статуса.
 const COUNTER_SAMPLES: [&str; 2] = ["0/0", "100/100"];
 
+/// Ключ кэша резерва подвала: язык, тема и кегль подписи.
+///
+/// Темы в ключе достаточно: `font_name` зависит только от неё, а `TextPainter`
+/// пересоздаётся ровно при смене этого флага (`sync_theme_lang`).
+#[derive(Clone, Copy, PartialEq)]
+struct ZoneKey {
+    lang: Language,
+    pixel: bool,
+    caption: f32,
+}
+
+thread_local! {
+    /// Последний измеренный резерв. Один кадр, один язык и тема — мерить
+    /// каждый кадр незачем: четыре строки `text_width` стоили 0.8 мс на карточке.
+    static ZONE: std::cell::Cell<Option<(ZoneKey, f32)>> = const { std::cell::Cell::new(None) };
+    /// Сколько раз резерв мерили по-настоящему. Только для теста.
+    static ZONE_MISSES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Сколько раз резерв правой зоны измерялся по-настоящему.
+#[cfg(test)]
+pub fn zone_misses() -> u32 {
+    ZONE_MISSES.with(|cell| cell.get())
+}
+
 /// Резерв правой зоны подвала.
 ///
 /// Берётся максимум из двух вещей: самая широкая строка счётчика и самый
 /// широкий статус на языке окна вместе с точкой. Считается всегда, независимо
 /// от того, что нарисовано сейчас: иначе левая часть подвала сдвигалась бы
 /// в момент, когда вместо счётчика появляется статус, и обратно.
+///
+/// Резерв зависит только от языка, темы и кегля подписи, поэтому измеряется
+/// один раз на эту тройку и дальше берётся из кэша. Шрифт в ключ не входит:
+/// он выводится из темы, а `TextPainter` пересоздаётся при её смене.
 pub fn right_zone_width(view: &mut MenuView<'_>, lang: Language) -> f32 {
+    let key = ZoneKey {
+        lang,
+        pixel: view.pixel,
+        caption: view.scale.caption,
+    };
+    if let Some((cached, width)) = ZONE.with(|cell| cell.get())
+        && cached == key
+    {
+        return width;
+    }
+    ZONE_MISSES.with(|cell| cell.set(cell.get() + 1));
     let chrome = strings::chrome(lang);
     let size = view.scale.caption;
     let counter = COUNTER_SAMPLES
@@ -1364,7 +1404,9 @@ pub fn right_zone_width(view: &mut MenuView<'_>, lang: Language) -> f32 {
         .map(|text| view.painter.text_width(text, size))
         .fold(0.0_f32, f32::max);
     let status_block = STATUS_DOT + spacing::XS + status;
-    counter.max(status_block)
+    let width = counter.max(status_block);
+    ZONE.with(|cell| cell.set(Some((key, width))));
+    width
 }
 
 /// Раскладка подсказок подвала: возвращает набор строк и их левую границу.
@@ -2219,7 +2261,10 @@ mod tests {
             let mut icons = TextPainter::new(settings_icons::FONT);
             let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
 
+            // Первый вызов на этом ключе меряет, второй — берёт из кэша.
+            let misses = zone_misses();
             let reserve = right_zone_width(&mut view, lang);
+            assert_eq!(zone_misses(), misses + 1, "первый вызов меряет");
             let chrome = strings::chrome(lang);
             let counter = super::COUNTER_SAMPLES
                 .iter()
@@ -2233,11 +2278,32 @@ mod tests {
                 "резерв {reserve} уже самого широкого: счётчик {counter}, статус {status}"
             );
             assert_eq!(
-                reserve,
                 right_zone_width(&mut view, lang),
-                "резерв обязан считаться одинаково при любом содержимом"
+                reserve,
+                "тот же ключ обязан дать то же значение"
+            );
+            assert_eq!(
+                zone_misses(),
+                misses + 1,
+                "повторный вызов на том же ключе не меряет"
             );
         }
+
+        // Смена языка инвалидирует кэш: у русского и английского статусы разной
+        // ширины, а значит разный и резерв.
+        let mut pixmap = blank_buffer();
+        let mut painter = TextPainter::new(&font_name(false));
+        let mut icons = TextPainter::new(settings_icons::FONT);
+        let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+        let misses = zone_misses();
+        let ru = right_zone_width(&mut view, Language::Ru);
+        let en = right_zone_width(&mut view, Language::En);
+        assert_ne!(ru, en, "у языков разная ширина статуса");
+        assert_eq!(zone_misses(), misses + 2, "смена языка меряет заново");
+        // Возврат к прежнему ключу меряет снова: кэш на одну запись, а не на все.
+        let misses = zone_misses();
+        assert_eq!(right_zone_width(&mut view, Language::Ru), ru);
+        assert_eq!(zone_misses(), misses + 1, "кэш держит одну запись");
     }
 
     /// Три уровня подсказок: берётся первый влезший, и выбор детерминирован.
