@@ -7,7 +7,7 @@
 //! или длины списка пересобирает сетку целиком, и прежняя позиция к новой
 //! отношения не имеет: там рамка встаёт на место.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -127,6 +127,11 @@ impl Frame {
 #[derive(Debug, Default)]
 pub struct Fade {
     started: HashMap<PathBuf, Instant>,
+    /// Порядок старта проявлений, спереди самые старые. Сама карта порядок не
+    /// хранит, а вытеснять надо именно их: `HashMap` обходится в произвольном
+    /// порядке, и под потолок попадал бы случайный набор — в том числе тот,
+    /// что ещё проявляется и мигнул бы в 1.0 на середине перехода.
+    order: VecDeque<PathBuf>,
     /// Сколько путей держим, пока идёт проявление. Карта растёт только до
     /// этого размера, иначе открытие папки на тысячу файлов съело бы память.
     cap: usize,
@@ -140,6 +145,7 @@ impl Fade {
     pub fn new() -> Self {
         Self {
             started: HashMap::new(),
+            order: VecDeque::new(),
             cap: FADE_CAPACITY,
         }
     }
@@ -148,6 +154,7 @@ impl Fade {
     /// держать их в карте незачем.
     pub fn clear(&mut self) {
         self.started.clear();
+        self.order.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -159,19 +166,74 @@ impl Fade {
     }
 
     /// Заметить, что миниатюра пришла после открытия окна.
-    pub fn begin(&mut self, path: &Path, now: Instant) {
+    ///
+    /// `settings` нужен для вытеснения: под потолок уходят завершённые
+    /// проявления, а идущее вытесняется только когда завершённых не осталось.
+    pub fn begin(&mut self, path: &Path, now: Instant, settings: AnimSettings) {
         if self.started.contains_key(path) {
             return;
         }
         if self.started.len() >= self.cap {
-            // Потолок достигнут: самые старые пути уходят, иначе карта растёт
-            // вместе с числом файлов в папке.
-            let stale: Vec<PathBuf> = self.started.keys().take(self.cap / 4).cloned().collect();
-            for path in stale {
-                self.started.remove(&path);
-            }
+            // Потолок достигнут: карта иначе растёт вместе с числом файлов в
+            // папке, а порядок вытеснения задаёт `order`. Сначала уходят
+            // завершённые проявления; идущее вытесняется только на остаток,
+            // если завершённых не хватило.
+            let wanted = self.cap / 4;
+            let dropped = self.evict(now, settings, wanted, true);
+            self.evict(now, settings, wanted - dropped, false);
         }
         self.started.insert(path.to_path_buf(), now);
+        self.order.push_back(path.to_path_buf());
+    }
+
+    /// Проявление миниатюры от момента её старта.
+    fn tween(started: Instant, settings: AnimSettings) -> Tween {
+        Tween::new(
+            0.0,
+            1.0,
+            started,
+            settings.scaled(THUMB_FADE),
+            anim::ease_out_cubic,
+        )
+    }
+
+    /// Дошло ли проявление до конца.
+    fn settled(&self, path: &Path, now: Instant, settings: AnimSettings) -> bool {
+        self.started
+            .get(path)
+            .is_some_and(|started| Self::tween(*started, settings).done(now))
+    }
+
+    /// Убрать до `wanted` записей выбранного класса, самые старые первыми.
+    ///
+    /// Обход идёт по `order`, то есть по времени старта, поэтому «самые
+    /// старые» — буквально первые в очереди, а не произвольные ключи карты.
+    /// Возвращает, сколько записей на самом деле ушло.
+    fn evict(
+        &mut self,
+        now: Instant,
+        settings: AnimSettings,
+        wanted: usize,
+        settled: bool,
+    ) -> usize {
+        if wanted == 0 {
+            return 0;
+        }
+        let victims: Vec<PathBuf> = self
+            .order
+            .iter()
+            .filter(|path| self.settled(path, now, settings) == settled)
+            .take(wanted)
+            .cloned()
+            .collect();
+        if victims.is_empty() {
+            return 0;
+        }
+        for path in &victims {
+            self.started.remove(path);
+        }
+        self.order.retain(|path| !victims.contains(path));
+        victims.len()
     }
 
     /// Готова ли миниатюра на момент кадра.
@@ -180,13 +242,7 @@ impl Fade {
             // Готова к открытию: показывается сразу, без перехода.
             return 1.0;
         };
-        let tween = Tween::new(
-            0.0,
-            1.0,
-            started,
-            settings.scaled(THUMB_FADE),
-            anim::ease_out_cubic,
-        );
+        let tween = Self::tween(started, settings);
         if tween.done(now) {
             return 1.0;
         }
@@ -195,16 +251,9 @@ impl Fade {
 
     /// Идёт ли хоть одно проявление: цикл держит короткий тик, пока не кончат.
     pub fn animating(&self, now: Instant, settings: AnimSettings) -> bool {
-        self.started.values().any(|started| {
-            !Tween::new(
-                0.0,
-                1.0,
-                *started,
-                settings.scaled(THUMB_FADE),
-                anim::ease_out_cubic,
-            )
-            .done(now)
-        })
+        self.started
+            .values()
+            .any(|started| !Self::tween(*started, settings).done(now))
     }
 }
 
@@ -432,7 +481,7 @@ mod tests {
     fn a_late_thumb_ramps_from_zero() {
         let settings = AnimSettings::default();
         let mut fade = Fade::new();
-        fade.begin(&path("b.jpg"), ms(50));
+        fade.begin(&path("b.jpg"), ms(50), settings);
 
         assert!((fade.alpha(&path("b.jpg"), ms(50), settings) - 0.0).abs() < 1e-6);
         assert!(fade.animating(ms(50), settings));
@@ -447,7 +496,7 @@ mod tests {
     fn the_fade_runs_for_the_declared_time() {
         let settings = AnimSettings::default();
         let mut fade = Fade::new();
-        fade.begin(&path("c.jpg"), ms(0));
+        fade.begin(&path("c.jpg"), ms(0), settings);
 
         assert!(
             fade.animating(ms(0) + THUMB_FADE - Duration::from_millis(1), settings),
@@ -460,7 +509,7 @@ mod tests {
     fn disabled_animations_show_late_thumbs_right_away() {
         let settings = AnimSettings::new(false, 1.0);
         let mut fade = Fade::new();
-        fade.begin(&path("d.jpg"), ms(0));
+        fade.begin(&path("d.jpg"), ms(0), settings);
 
         assert!((fade.alpha(&path("d.jpg"), ms(0), settings) - 1.0).abs() < 1e-6);
         assert!(!fade.animating(ms(0), settings));
@@ -470,8 +519,8 @@ mod tests {
     fn beginning_the_same_path_twice_keeps_the_first_start() {
         let settings = AnimSettings::default();
         let mut fade = Fade::new();
-        fade.begin(&path("e.jpg"), ms(0));
-        fade.begin(&path("e.jpg"), ms(100));
+        fade.begin(&path("e.jpg"), ms(0), settings);
+        fade.begin(&path("e.jpg"), ms(100), settings);
 
         assert!(fade.alpha(&path("e.jpg"), ms(100), settings) < 1.0);
         assert!((fade.alpha(&path("e.jpg"), ms(200), settings) - 1.0).abs() < 1e-6);
@@ -479,23 +528,98 @@ mod tests {
 
     #[test]
     fn a_changed_folder_clears_the_map() {
+        let settings = AnimSettings::default();
         let mut fade = Fade::new();
         for index in 0..5 {
-            fade.begin(&path(&format!("{index}.jpg")), ms(0));
+            fade.begin(&path(&format!("{index}.jpg")), ms(0), settings);
         }
         assert_eq!(fade.len(), 5);
 
         fade.clear();
 
         assert!(fade.is_empty());
-        assert!((fade.alpha(&path("0.jpg"), ms(0), AnimSettings::default()) - 1.0).abs() < 1e-6);
+        assert!((fade.alpha(&path("0.jpg"), ms(0), settings) - 1.0).abs() < 1e-6);
+    }
+
+    /// Вытеснение обязано идти по времени старта. Обход `HashMap` даёт
+    /// произвольный порядок, и под потолок попадал бы случайный набор путей.
+    #[test]
+    fn overflowing_the_cap_drops_the_oldest_paths_first() {
+        let settings = AnimSettings::default();
+        let mut fade = Fade::new();
+        // Каждый путь стартует на миллисекунду позже предыдущего, и к моменту
+        // вытеснения все проявления давно завершены.
+        for index in 0..FADE_CAPACITY {
+            fade.begin(&path(&format!("{index}.jpg")), ms(index as u64), settings);
+        }
+        assert_eq!(fade.len(), FADE_CAPACITY);
+
+        // Переполнение: первая же вставка сверху вытесняет четверть потолка.
+        fade.begin(&path("new.jpg"), ms(FADE_CAPACITY as u64), settings);
+        assert_eq!(fade.len(), FADE_CAPACITY - FADE_CAPACITY / 4 + 1);
+
+        let quarter = FADE_CAPACITY / 4;
+        for index in 0..quarter {
+            let victim = path(&format!("{index}.jpg"));
+            assert!(
+                !fade.started.contains_key(&victim),
+                "путь {index} стартовал раньше всех и должен уйти первым"
+            );
+        }
+        for index in quarter..FADE_CAPACITY {
+            let keeper = path(&format!("{index}.jpg"));
+            assert!(
+                fade.started.contains_key(&keeper),
+                "путь {index} не самый старый и не должен вытесняться"
+            );
+        }
+    }
+
+    /// Идущее проявление не должно вытесняться, пока есть завершённые:
+    /// выброшенный ключ читается как «готово к открытию», то есть альфа
+    /// скачком становится 1.0 прямо посреди перехода.
+    #[test]
+    fn unfinished_fades_survive_while_finished_ones_remain() {
+        let settings = AnimSettings::default();
+        let mut fade = Fade::new();
+        let half = FADE_CAPACITY / 2;
+
+        // Первая половина стартует давно и успела завершиться.
+        for index in 0..half {
+            fade.begin(&path(&format!("{index}.jpg")), ms(0), settings);
+        }
+        // Вторая половина стартует прямо сейчас и ещё идёт.
+        for index in half..FADE_CAPACITY {
+            fade.begin(&path(&format!("{index}.jpg")), ms(1_000_000), settings);
+        }
+        assert_eq!(fade.len(), FADE_CAPACITY);
+
+        // Момент, когда идущие ещё не завершены.
+        fade.begin(&path("new.jpg"), ms(1_000_000), settings);
+        assert_eq!(fade.len(), FADE_CAPACITY - FADE_CAPACITY / 4 + 1);
+
+        for index in 0..FADE_CAPACITY / 4 {
+            let gone = path(&format!("{index}.jpg"));
+            assert!(
+                !fade.started.contains_key(&gone),
+                "завершённое проявление {index} уходит первым"
+            );
+        }
+        for index in FADE_CAPACITY / 4..FADE_CAPACITY {
+            let kept = path(&format!("{index}.jpg"));
+            assert!(
+                fade.started.contains_key(&kept),
+                "проявление {index} ещё идёт, вытеснять его нельзя"
+            );
+        }
     }
 
     #[test]
     fn the_map_does_not_grow_past_its_cap() {
+        let settings = AnimSettings::default();
         let mut fade = Fade::new();
         for index in 0..(FADE_CAPACITY * 3) {
-            fade.begin(&path(&format!("{index}.jpg")), ms(0));
+            fade.begin(&path(&format!("{index}.jpg")), ms(0), settings);
         }
 
         assert!(

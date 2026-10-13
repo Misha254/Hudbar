@@ -310,31 +310,92 @@ impl KeyboardHandler for App {
     }
 }
 
+/// Какая поверхность панели совпала с закрытой композитором.
+///
+/// Отдельная чистая функция вместо разбора прямо в `closed()`: правило «какой
+/// слой чем обнуляется» проверяется тестом без композитора, без сокета и без
+/// живой `App`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closed {
+    /// Панель: при отключении выхода её надо пересоздать.
+    Panel,
+    /// Popup или grab: оба закрывают всю связку панели.
+    PopupOrGrab,
+    Tooltip,
+    /// OSD — тоже слой на своём выводе.
+    Osd,
+    /// Ничего не совпало: слой чужой или уже сброшенный.
+    Unknown,
+}
+
+/// Разбор закрытого слоя по совпадениям поверхностей.
+///
+/// Порядок повторяет прежнюю цепочку `if/else if`: панель проверяется первой,
+/// потому что её слой существует всегда и совпадает сам с собой.
+pub fn classify_closed(
+    is_panel: bool,
+    is_popup: bool,
+    is_grab: bool,
+    is_tooltip: bool,
+    is_osd: bool,
+) -> Closed {
+    if is_panel {
+        Closed::Panel
+    } else if is_popup || is_grab {
+        Closed::PopupOrGrab
+    } else if is_tooltip {
+        Closed::Tooltip
+    } else if is_osd {
+        Closed::Osd
+    } else {
+        Closed::Unknown
+    }
+}
+
 impl LayerShellHandler for App {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        if layer.wl_surface() == self.layer.wl_surface() {
-            // Композитор закрыл surface панели. Обычно это отключение вывода
-            // (крышка ноутбука), а не конец сессии: пересоздаём панель, иначе
-            // после возврата выхода верхняя панель не вернётся никогда.
-            self.recreate_panel = true;
-        } else if self
-            .popup
-            .as_ref()
-            .is_some_and(|p| layer.wl_surface() == p.layer.wl_surface())
-            || self
-                .grab
+        let surface = layer.wl_surface();
+        let closed = classify_closed(
+            surface == self.layer.wl_surface(),
+            self.popup
                 .as_ref()
-                .is_some_and(|g| layer.wl_surface() == g.layer.wl_surface())
-        {
-            self.panel = None;
-            self.popup = None;
-            self.grab = None;
-        } else if self
-            .tooltip
-            .as_ref()
-            .is_some_and(|t| layer.wl_surface() == t.layer.wl_surface())
-        {
-            self.tooltip = None;
+                .is_some_and(|p| surface == p.layer.wl_surface()),
+            self.grab
+                .as_ref()
+                .is_some_and(|g| surface == g.layer.wl_surface()),
+            self.tooltip
+                .as_ref()
+                .is_some_and(|t| surface == t.layer.wl_surface()),
+            self.osd
+                .as_ref()
+                .is_some_and(|o| surface == o.layer.wl_surface()),
+        );
+        match closed {
+            Closed::Panel => {
+                // Композитор закрыл surface панели. Обычно это отключение вывода
+                // (крышка ноутбука), а не конец сессии: пересоздаём панель, иначе
+                // после возврата выхода верхняя панель не вернётся никогда.
+                self.recreate_panel = true;
+            }
+            Closed::PopupOrGrab => {
+                self.panel = None;
+                self.popup = None;
+                self.grab = None;
+            }
+            Closed::Tooltip => {
+                self.tooltip = None;
+            }
+            Closed::Osd => {
+                // OSD — слой на своём выводе, и при отключении выхода композитор
+                // закрывает его так же, как панель. Раньше эта ветка отсутствовала:
+                // закрытый `LayerSurface` оставался в `self.osd`, `draw_osd`
+                // продолжал вешать на него буфер, и композитор, для которого
+                // работа с закрытым слоем — ошибка протокола, разрывал соединение.
+                // Итог был не пересоздание, а смерть процесса панели.
+                self.osd = None;
+                self.shared.dirty.store(true, Ordering::Relaxed);
+            }
+            Closed::Unknown => {}
         }
     }
 
@@ -426,3 +487,61 @@ impl ProvidesRegistryState for App {
 
 delegate_registry!(App);
 smithay_client_toolkit::delegate_dispatch2!(App);
+
+#[cfg(test)]
+mod tests {
+    use super::{Closed, classify_closed};
+
+    #[test]
+    fn the_closed_panel_is_recognised_first() {
+        assert_eq!(
+            classify_closed(true, false, false, false, false),
+            Closed::Panel
+        );
+        // Панель совпадает и с OSD, если слои перепутаны: порядок обязателен,
+        // иначе панель потеряла бы пересоздание при отключении выхода.
+        assert_eq!(
+            classify_closed(true, false, false, false, true),
+            Closed::Panel
+        );
+    }
+
+    #[test]
+    fn popup_and_grab_both_close_the_whole_group() {
+        assert_eq!(
+            classify_closed(false, true, false, false, false),
+            Closed::PopupOrGrab
+        );
+        assert_eq!(
+            classify_closed(false, false, true, false, false),
+            Closed::PopupOrGrab
+        );
+    }
+
+    #[test]
+    fn tooltip_is_its_own_case() {
+        assert_eq!(
+            classify_closed(false, false, false, true, false),
+            Closed::Tooltip
+        );
+    }
+
+    /// Регрессия: закрытый OSD обязан опознаваться и обнуляться. Раньше такой
+    /// ветки не было, и закрытый слой оставался в `self.osd` — до протокольной
+    /// ошибки и смерти процесса панели на отключении вывода.
+    #[test]
+    fn a_closed_osd_layer_is_recognised() {
+        assert_eq!(
+            classify_closed(false, false, false, false, true),
+            Closed::Osd
+        );
+    }
+
+    #[test]
+    fn a_foreign_or_already_dropped_layer_changes_nothing() {
+        assert_eq!(
+            classify_closed(false, false, false, false, false),
+            Closed::Unknown
+        );
+    }
+}
