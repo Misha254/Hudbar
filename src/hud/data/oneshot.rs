@@ -10,7 +10,7 @@
 //! в панели разошлось бы при первом же изменении команды.
 
 use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,37 @@ pub fn run_with_timeout_stdin(
     stdin: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<(Option<i32>, String, String), String> {
+    let (status, stdout, stderr) = run_captured(program, args, stdin, timeout)?;
+    Ok((status.code(), stdout, stderr))
+}
+
+/// Как [`run_with_timeout`], но собранным в [`Output`].
+///
+/// Нужен там, где вызывающий смотрит не только на код, но и на `status.success()`
+/// или забирает `stdout`/`stderr` целиком — так устроен `log::output`, отдающий
+/// результат команды наружу без переделки.
+pub fn output_with_timeout(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, String> {
+    let (status, stdout, stderr) = run_captured(program, args, None, timeout)?;
+    Ok(Output {
+        status,
+        stdout: stdout.into_bytes(),
+        stderr: stderr.into_bytes(),
+    })
+}
+
+/// Общая механика: запуск, чтение вывода в потоках, ожидание с таймаутом и
+/// снятие процессной группы при превышении. Оба публичных входа отличаются
+/// только формой результата.
+fn run_captured(
+    program: &str,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<(ExitStatus, String, String), String> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -111,7 +142,7 @@ pub fn run_with_timeout_stdin(
     };
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();
-    Ok((status.code(), stdout, stderr))
+    Ok((status, stdout, stderr))
 }
 
 fn stop_child(child: &mut Child) {

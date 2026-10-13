@@ -1,10 +1,20 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use chrono::Local;
+
+use super::data::oneshot;
+
+/// Сколько ждём внешнюю команду, прочитанную через `output`/`status`.
+///
+/// Предел обязателен: `log::output` зовётся с главного потока панели, и
+/// зависший демон (`niri`, `nmcli`, `bluetoothctl`) иначе встал бы колом —
+/// ни перерисовки, ни ввода, до самого SIGTERM.
+pub const TIMEOUT: Duration = Duration::from_secs(2);
 
 fn path() -> PathBuf {
     let base = std::env::var_os("XDG_STATE_HOME")
@@ -49,7 +59,7 @@ fn command_line(program: &str, args: &[&str]) -> String {
 
 pub fn output(program: &str, args: &[&str]) -> Option<Output> {
     let command = command_line(program, args);
-    match Command::new(program).args(args).output() {
+    match oneshot::output_with_timeout(program, args, TIMEOUT) {
         Ok(output) if output.status.success() => Some(output),
         Ok(output) => {
             warn(format!(
@@ -60,8 +70,10 @@ pub fn output(program: &str, args: &[&str]) -> Option<Output> {
             ));
             None
         }
+        // Сюда попадают и «не запустился», и «не ответил за 2000 мс»: оба
+        // случая для панели выглядят одинаково — значения просто нет.
         Err(error) => {
-            warn(format!("command unavailable ({command}): {error}"));
+            warn(format!("command failed ({command}): {error}"));
             None
         }
     }
@@ -73,7 +85,9 @@ pub fn status(program: &str, args: &[&str]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::command_line;
+    use std::time::Instant;
+
+    use super::{TIMEOUT, command_line, output, status};
 
     #[test]
     fn redacts_password_arguments() {
@@ -84,5 +98,39 @@ mod tests {
 
         assert!(line.contains("<redacted>"));
         assert!(!line.contains("secret"));
+    }
+
+    /// Главный поток панели ждёт внешнюю команду синхронно: без предела
+    /// зависший `niri` или `nmcli` встал бы колом до самого SIGTERM.
+    #[test]
+    fn a_sleeping_command_is_cut_off_instead_of_being_waited_out() {
+        let started = Instant::now();
+        let result = output("sh", &["-c", "sleep 30"]);
+        let elapsed = started.elapsed();
+
+        assert!(result.is_none(), "зависшая команда — это None, а не вывод");
+        assert!(
+            elapsed < TIMEOUT + std::time::Duration::from_secs(2),
+            "ждали {elapsed:?} при пределе {TIMEOUT:?}: команда отпущена не была"
+        );
+    }
+
+    #[test]
+    fn status_is_false_when_the_command_outlives_the_timeout() {
+        assert!(!status("sh", &["-c", "sleep 30"]));
+    }
+
+    #[test]
+    fn a_normal_command_still_returns_its_output() {
+        let result = output("printf", &["ok"]).expect("printf есть");
+
+        assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), "ok");
+        assert!(result.status.success());
+    }
+
+    #[test]
+    fn a_missing_program_is_none_not_a_panic() {
+        assert!(output("hud-bar-nonexistent", &[]).is_none());
+        assert!(!status("hud-bar-nonexistent", &[]));
     }
 }

@@ -154,7 +154,7 @@ fn set_audio_lists(shared: &Arc<Shared>, result: Result<(Vec<AudioDev>, Vec<Audi
     };
     let ee = ee_state_now(&sinks);
     let changed = {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.audio_loading = false;
         let mut c = false;
         if g.sinks != sinks {
@@ -198,7 +198,7 @@ fn set_audio_lists(shared: &Arc<Shared>, result: Result<(Vec<AudioDev>, Vec<Audi
 
 pub fn refresh_audio(shared: &Arc<Shared>) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.audio_loading = true;
     }
     shared.mark();
@@ -210,7 +210,7 @@ pub fn refresh_audio(shared: &Arc<Shared>) {
 
 pub fn audio_set_default(shared: &Arc<Shared>, node: &str, is_sink: bool) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.audio_loading = true;
         let list = if is_sink {
             &mut g.sinks

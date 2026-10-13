@@ -39,7 +39,7 @@ pub fn refresh_workspaces(shared: &Arc<Shared>) {
         let mut ws: Vec<Ws> = list.iter().filter_map(parse_ws).collect();
         ws.sort_by_key(|w| w.idx);
         let changed = {
-            let mut g = s.sys.lock().unwrap();
+            let mut g = crate::hud::lock::mutex(&s.sys);
             if g.workspaces != ws {
                 g.workspaces = ws;
                 true
@@ -61,7 +61,7 @@ fn handle_niri(shared: &Arc<Shared>, v: &serde_json::Value) {
     {
         let mut ws: Vec<Ws> = list.iter().filter_map(parse_ws).collect();
         ws.sort_by_key(|w| w.idx);
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         if g.workspaces != ws {
             g.workspaces = ws;
             drop(g);
@@ -82,7 +82,7 @@ fn handle_niri(shared: &Arc<Shared>, v: &serde_json::Value) {
             return;
         };
         let focused = ev.get("focused").and_then(|f| f.as_bool()).unwrap_or(false);
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         let mut changed = false;
         for w in g.workspaces.iter_mut() {
             if w.id == id {
@@ -108,7 +108,7 @@ fn handle_niri(shared: &Arc<Shared>, v: &serde_json::Value) {
             return;
         };
         let urgent = ev.get("urgent").and_then(|u| u.as_bool()).unwrap_or(false);
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         let mut changed = false;
         for w in g.workspaces.iter_mut() {
             if w.id == id && w.urgent != urgent {

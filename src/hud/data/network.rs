@@ -132,7 +132,7 @@ fn set_wifi_list(shared: &Arc<Shared>, result: Result<Vec<WifiNet>, String>) {
         Err(error) => (Vec::new(), Some(error)),
     };
     let changed = {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.wifi_loading = false;
         let mut changed = false;
         if g.wifi_list != list {
@@ -193,7 +193,7 @@ pub(crate) fn set_bt_list(shared: &Arc<Shared>, result: Result<Vec<BtDev>, Strin
         Err(error) => (Vec::new(), Some(error)),
     };
     let changed = {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.bt_loading = false;
         let mut changed = false;
         if g.bt_list != list {
@@ -213,7 +213,7 @@ pub(crate) fn set_bt_list(shared: &Arc<Shared>, result: Result<Vec<BtDev>, Strin
 
 pub fn refresh_wifi(shared: &Arc<Shared>) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.wifi_loading = true;
     }
     shared.mark();
@@ -223,7 +223,7 @@ pub fn refresh_wifi(shared: &Arc<Shared>) {
 
 pub fn refresh_bt(shared: &Arc<Shared>) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.bt_loading = true;
     }
     shared.mark();
@@ -273,7 +273,7 @@ pub fn wifi_connect_pass(shared: &Arc<Shared>, ssid: &str, pass: &str) {
 pub fn wifi_disconnect(shared: &Arc<Shared>) {
     let s = shared.clone();
     std::thread::spawn(move || {
-        let iface = { s.sys.lock().unwrap().wifi_iface.clone() };
+        let iface = { crate::hud::lock::mutex(&s.sys).wifi_iface.clone() };
         if let Some(iface) = iface {
             let _ = crate::hud::log::status("nmcli", &["dev", "disconnect", &iface]);
         }
@@ -284,7 +284,7 @@ pub fn wifi_disconnect(shared: &Arc<Shared>) {
 
 pub fn wifi_radio(shared: &Arc<Shared>, on: bool) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.wifi_loading = true;
     }
     shared.mark();
@@ -298,7 +298,7 @@ pub fn wifi_radio(shared: &Arc<Shared>, on: bool) {
 
 pub fn bt_power(shared: &Arc<Shared>, on: bool) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.bt_loading = true;
     }
     shared.mark();

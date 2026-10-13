@@ -56,6 +56,17 @@ mod instance;
 #[allow(dead_code)]
 #[path = "../hud/layer.rs"]
 mod layer;
+/// Одноразовые читатели нужны `log`: он запускает внешние команды с
+/// предельным ожиданием. Весь `data` с его потоками и DBus этому бинарнику
+/// не нужен — только сам модуль чтений, как в `hud-menu`.
+#[path = "../hud/data/oneshot.rs"]
+pub mod oneshot_data;
+
+/// Псевдоним `data::oneshot`, чтобы `log` обращался к чтениям одним и тем же
+/// путём в панели и в этом бинарнике.
+pub mod data {
+    pub use super::oneshot_data as oneshot;
+}
 #[allow(dead_code)]
 #[path = "../hud/log.rs"]
 mod log;
@@ -229,7 +240,7 @@ impl WpApp {
             .filter(|path| provider.get(path).is_some())
             .collect();
         for path in ready {
-            self.thumb_fade.begin(&path, now);
+            self.thumb_fade.begin(&path, now, self.ctx.anim);
         }
     }
 

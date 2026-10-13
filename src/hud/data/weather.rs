@@ -90,7 +90,7 @@ fn weather_run(shared: &Arc<Shared>) -> bool {
     };
     let mut changed = false;
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         if g.weather != text {
             g.weather = text.clone();
             changed = true;
@@ -124,7 +124,7 @@ pub(super) fn weather_loop(shared: Arc<Shared>) {
 
 pub fn refresh_weather(shared: &Arc<Shared>) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.weather_loading = true;
     }
     shared.mark();

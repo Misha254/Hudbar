@@ -56,7 +56,7 @@ fn refresh(shared: &Shared) {
     let sink = wpctl_volume("@DEFAULT_AUDIO_SINK@");
     let source = wpctl_volume("@DEFAULT_AUDIO_SOURCE@");
     let changed = {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         apply(&mut g, sink, source)
     };
     if changed {

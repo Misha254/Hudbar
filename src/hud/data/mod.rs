@@ -170,7 +170,7 @@ pub fn spawn(shared: Arc<Shared>) {
 }
 pub fn refresh_tray_menu(shared: &Arc<Shared>, service: &str, menu_path: &str) {
     {
-        let mut g = shared.sys.lock().unwrap();
+        let mut g = crate::hud::lock::mutex(&shared.sys);
         g.tray_menu_loading = true;
         g.tray_menu_owner = (service.to_string(), menu_path.to_string());
         g.tray_menu.clear();
@@ -181,7 +181,7 @@ pub fn refresh_tray_menu(shared: &Arc<Shared>, service: &str, menu_path: &str) {
     std::thread::spawn(move || {
         let entries = crate::hud::tray::fetch_menu_entries(&svc, &mp);
         let mine = {
-            let mut g = s.sys.lock().unwrap();
+            let mut g = crate::hud::lock::mutex(&s.sys);
             if g.tray_menu_owner != (svc.clone(), mp.clone()) {
                 false
             } else {
@@ -197,7 +197,7 @@ pub fn refresh_tray_menu(shared: &Arc<Shared>, service: &str, menu_path: &str) {
 }
 
 pub fn send_tray_menu_click(shared: &Arc<Shared>, entry_id: i32) {
-    let (svc, mp) = shared.sys.lock().unwrap().tray_menu_owner.clone();
+    let (svc, mp) = crate::hud::lock::mutex(&shared.sys).tray_menu_owner.clone();
     if svc.is_empty() || mp.is_empty() {
         return;
     }
@@ -264,7 +264,7 @@ fn sys_loop(shared: Arc<Shared>) {
 
         let mut changed = false;
         {
-            let mut g = shared.sys.lock().unwrap();
+            let mut g = crate::hud::lock::mutex(&shared.sys);
             macro_rules! upd {
                 ($f:ident, $v:expr) => {
                     let v = $v;
