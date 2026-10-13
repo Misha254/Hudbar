@@ -247,15 +247,17 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             panel: mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA),
             idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
             // Рамка карточки — не украшение, а граница слоя: у слоя ровно размер
-            // карточки, тени нет, и отделяет её только эта линия. На 0.35
-            // к акценту она давала 1.74–2.38:1, то есть не отделяла.
-            border: mix(p.base, p.primary, 0.65),
+            // карточки, тени нет, и отделяет её только эта линия. На 0.35 к
+            // акценту она давала 1.98:1 и не отделяла совсем; 0.45 давало
+            // 2.52:1, тоже ниже порога графики. 0.55 — 3.28:1 в худшей схеме,
+            // и рамка при этом не читается второй подсветкой, как на 0.65.
+            border: mix(p.base, p.primary, 0.55),
             accent: p.primary,
             text: p.text,
-            // 0.61 — минимальная альфа, при которой `muted` проходит 4.5:1 к
-            // карточке и к полю ввода на модельных палитрах всех десяти схем в
-            // обоих режимах. На 0.58 худший случай давал 4.09:1.
-            muted: p.text.with_a(0.61),
+            // 0.63 — минимальная альфа, при которой `muted` проходит 4.5:1 с запасом:
+            // худший случай по десяти схемам в обоих режимах — 4.81:1. На
+            // 0.61 было 4.54, на 0.58 было 4.09.
+            muted: p.text.with_a(0.63),
             surface: palette::Rgba(0, 0, 0, 0),
             surface_hover: palette::Rgba(0, 0, 0, 0),
             border_subtle: palette::Rgba(0, 0, 0, 0),
@@ -486,6 +488,47 @@ mod tests {
             failures.is_empty(),
             "пары ниже порога в Pixel:\n{}",
             failures.join("\n")
+        );
+    }
+
+    /// Запас поверх порога: вторая роль, на которую смотрит тест.
+    const MUTED_MARGIN: f32 = 4.8;
+
+    /// `muted` держит запас над порогом мелкого текста.
+    ///
+    /// WCAG требует 4.5:1, но `muted` — роль с самым большим числом
+    /// употреблений в меню: значение справа, подпись пути, подвал, префикс
+    /// крошек, иконка, заливка полосы, кольцо тумблера, полоса прокрутки. На
+    /// ровно 4.5:1 любая правка палитры матем или рост числа схем роняет роль
+    /// в провал молча, поэтому порог поднят на 0.3.
+    #[test]
+    fn muted_keeps_a_margin_over_the_text_threshold() {
+        let mut worst = f32::MAX;
+        let mut where_ = "";
+        for light in [false, true] {
+            for scheme in MODEL_SCHEMES {
+                let model = model(scheme, light);
+                let ui = ui_palette(
+                    false,
+                    palette::Palette {
+                        base: model.base,
+                        text: model.text,
+                        primary: model.primary,
+                        secondary: model.secondary,
+                        on_primary: model.primary,
+                        error: model.text,
+                    },
+                );
+                let value = contrast(ui.muted, ui.panel);
+                if value < worst {
+                    worst = value;
+                    where_ = scheme;
+                }
+            }
+        }
+        assert!(
+            worst >= MUTED_MARGIN,
+            "худший случай {worst:.2}:1 у схемы {where_}, требуется {MUTED_MARGIN}:1"
         );
     }
 
