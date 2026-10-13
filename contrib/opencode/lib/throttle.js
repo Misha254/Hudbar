@@ -61,8 +61,12 @@ export class Throttle {
 }
 
 /**
- * Множество id разрешений, по которым уже показали уведомление.
- * Ответ на разрешение (`permission.replied`) убирает id.
+ * Множество id, по которым уже показали уведомление.
+ *
+ * Используется дважды: для разрешений (`permission.asked` / `permission.replied`)
+ * и для форм (`form.created` / `form.replied` / `form.cancelled`). Ответ или
+ * отмена убирают id — иначе повторное событие по той же форме молчало бы
+ * навсегда.
  */
 export class PermissionMemory {
   constructor() {
