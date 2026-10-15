@@ -12,6 +12,9 @@ home = Path.home()
 config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
 state_path = config / "hudbar/settings.json"
 legacy_state_path = config / "hud-settings/settings.json"
+# Старый каталог читается только до этой даты (docs/ROADMAP.md, F).
+LEGACY_DEADLINE = "2027-01-01"
+_warned_legacy = False
 defaults = {
     "language": "ru",
     "appearance": {"theme": "pixel"},
@@ -37,14 +40,39 @@ def write_atomic(path: Path, text: str) -> None:
     os.replace(temporary, path)
 
 
+def legacy_state() -> dict:
+    """Содержимое старого файла; пусто, если его нет или он битый."""
+    try:
+        return json.loads(legacy_state_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def warn_legacy() -> None:
+    """Одна строка за запуск: сколько ещё живёт старый каталог.
+
+    Молчит, пока канонический файл на месте: старый при этом только
+    подмешивает отсутствующие секции, и предупреждать на каждое нажатие
+    в меню было бы шумом.
+    """
+    global _warned_legacy
+    if _warned_legacy:
+        return
+    _warned_legacy = True
+    print(
+        f"hudbar: reading legacy {legacy_state_path}; supported until {LEGACY_DEADLINE},"
+        f" then move it to {state_path}",
+        file=sys.stderr,
+    )
+
+
 def load_state() -> dict:
     try:
         state = json.loads(state_path.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
-        try:
-            state = json.loads(legacy_state_path.read_text())
-        except (FileNotFoundError, json.JSONDecodeError):
-            state = {}
+        state = legacy_state()
+        if state:
+            warn_legacy()
     if "hudbar" not in state:
         state = {"hudbar": state}
     state.setdefault("language", defaults["language"])
@@ -53,10 +81,7 @@ def load_state() -> dict:
     order = state.get("module_order", MODULE_KEYS)
     state["module_order"] = [key for key in order if key in MODULE_KEYS]
     state["module_order"] += [key for key in MODULE_KEYS if key not in state["module_order"]]
-    try:
-        legacy = json.loads(legacy_state_path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        legacy = {}
+    legacy = legacy_state()
     for section in ("appearance", "notifications"):
         if section not in state and section in legacy:
             state[section] = legacy[section]

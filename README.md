@@ -202,7 +202,8 @@ DND, воркспейсы, элементы трея.
 
 `settings.json` содержит секции `appearance`, `hudbar` и `notifications`. Установщик перед
 обновлением объединяет старые настройки и сохраняет backup; исходный файл
-`~/.config/hud-settings/settings.json` оставляется без изменений.
+`~/.config/hud-settings/settings.json` оставляется без изменений: он читается как запасной
+вариант до 01.01.2027, дальше живёт только `hudbar/settings.json` (см. ROADMAP, F).
 
 Ошибки внешних зависимостей и ненулевые коды выхода пишутся в
 `~/.local/state/hudbar.log` или `$XDG_STATE_HOME/hudbar.log`. Секреты прячутся по

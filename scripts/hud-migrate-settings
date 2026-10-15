@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,11 @@ DEFAULTS = {
 }
 
 
+# Старый каталог — единственная причина существования скрипта, и срок его
+# чтения объявлен в docs/ROADMAP.md, F.
+LEGACY_DEADLINE = "2027-01-01"
+
+
 def read_json(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -40,6 +46,12 @@ def merge_settings(config_home: Path) -> dict:
     legacy_path = config_home / "hud-settings/settings.json"
     canonical = read_json(canonical_path)
     legacy = read_json(legacy_path)
+    if legacy:
+        print(
+            f"hudbar: {legacy_path} is the legacy path (supported until"
+            f" {LEGACY_DEADLINE}); its contents move into {canonical_path}",
+            file=sys.stderr,
+        )
 
     if isinstance(canonical.get("hudbar"), dict):
         result = canonical

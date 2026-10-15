@@ -17,8 +17,11 @@ Bluetooth, DND, audio, microphone, wallpapers, power menu, and screen lock.
 
 All persistent HUD state is stored in `~/.config/hudbar/settings.json` under the `appearance`,
 `hudbar`, and `notifications` sections. The previous `~/.config/hud-settings/settings.json` file
-is read only during migration. `hud-migrate-settings` merges it with any existing flat HUDbar
-settings, writes a backup before changing the canonical file, and leaves legacy files untouched.
+is read only as a fallback until 2027-01-01, and a script says so on stderr when it actually
+reads it. `hud-migrate-settings` merges it with any existing flat HUDbar settings, writes a backup
+before changing the canonical file, and leaves legacy files untouched. After 2027-01-01 the
+fallbacks, the section merge in `hud-setting`, `hud-migrate-settings` and the legacy directory
+itself go away (ROADMAP F).
 
 ## Removed Legacy Settings Window
 
