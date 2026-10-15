@@ -13,13 +13,13 @@
 //! открытым и показывает статус.
 
 use super::super::data::oneshot;
+use super::super::schemes;
 use super::action::Action;
 use super::settings::{
     ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, Language, Module, OSD_DURATION_MAX_MS,
     OSD_DURATION_MIN_MS,
 };
 use super::settings_icons;
-use super::settings_ui;
 use super::state::Menu;
 use super::system::ProviderKey;
 use super::tree::Node;
@@ -494,7 +494,7 @@ fn style_section_with(lang: Language, wallpaper: WallpaperTools) -> Node {
         Node::choice(
             settings_icons::SCHEME,
             t("Схема matugen", "matugen scheme"),
-            &settings_ui::SCHEMES,
+            &schemes::SCHEMES,
             values::scheme_index,
             values::set_scheme,
         )

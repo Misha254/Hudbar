@@ -1,9 +1,9 @@
-//! Токены окна настроек: цвета, радиусы, шрифты, отступы.
+//! Токены интерфейса: цвета, радиусы, шрифты, отступы.
 //!
 //! До этого файла значения жили в вызовах `fill_round_rect` и `painter.paint`
 //! числами, а палитра — в общем слое настроек. Здесь один источник правды:
 //! компонент берёт токен по имени, а не вспоминает число. Токены описывают
-//! текущий вид окна, поэтому их подстановка ничего не меняет на экране —
+//! текущий вид окон, поэтому их подстановка ничего не меняет на экране —
 //! это чистая подготовка к дизайн-системе.
 //!
 //! Новые роли палитры (`surface`, `surface_hover`, `border_focus`, …) пока не
@@ -101,6 +101,16 @@ pub fn type_scale(pixel: bool) -> TypeScale {
             caption: 12.0,
             value: 15.0,
         }
+    }
+}
+
+/// Шрифт темы: у Pixel и обычной он разный. Им же пользуются снапшоты, чтобы
+/// PNG и живое окно рисовались одним шрифтом.
+pub fn font_name(pixel: bool) -> String {
+    if pixel {
+        "Minecraft Rus".to_string()
+    } else {
+        "JetBrainsMono Nerd Font Propo".to_string()
     }
 }
 
@@ -334,7 +344,6 @@ const MUTED_MARGIN: f32 = 4.8;
 
 #[cfg(test)]
 mod tests {
-    use super::super::settings_ui;
     use super::*;
 
     /// Модельные палитры схем matugen: тона Material 3 по семействам схем.
@@ -619,25 +628,6 @@ mod tests {
         }
         assert!(worst >= 4.5, "подвальные подсказки и счётчик: {worst}");
         assert!(worst >= MUTED_MARGIN, "и с запасом, как `muted`: {worst}");
-    }
-
-    /// Токены обязаны совпадать с геометрией окна, иначе появится второй
-    /// источник правды и раскладка разъедется.
-    #[test]
-    fn layout_tokens_match_the_window_geometry() {
-        assert_eq!(
-            CONTENT_MAX_W,
-            settings_ui::WIDTH - settings_ui::PAD_X - settings_ui::PAD_R
-        );
-        assert_eq!(PAGE_PAD, settings_ui::PAD_R);
-        assert_eq!(ROW_H, settings_ui::ROW_H);
-        assert_eq!(CARD_PAD, settings_ui::CARD_PAD);
-        assert_eq!(SECTION_GAP, settings_ui::ZONE_GAP);
-        assert_eq!(RAIL_W, settings_ui::RAIL_W);
-        assert_eq!(
-            RAIL_GAP,
-            settings_ui::PAD_X - settings_ui::RAIL_X - settings_ui::RAIL_W
-        );
     }
 
     /// Отступы кратны базовым четырём: иначе сетка разъездится.

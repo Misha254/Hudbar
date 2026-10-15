@@ -17,7 +17,7 @@
 //! а не замыкает кольцо. ←/→ внутри схем остаются кольцом чипов — там нет
 //! соседа слева или справа.
 
-use super::super::settings_ui::Rect;
+use super::super::geom::Rect;
 use super::grid::Dir;
 use super::layout;
 use super::state::{Hover, Outcome, State, Zone};

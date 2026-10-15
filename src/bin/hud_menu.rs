@@ -78,6 +78,12 @@ pub mod data {
 #[path = "../hud/anim.rs"]
 mod anim;
 #[allow(dead_code)]
+#[path = "../hud/canvas.rs"]
+mod canvas;
+#[allow(dead_code)]
+#[path = "../hud/geom.rs"]
+mod geom;
+#[allow(dead_code)]
 #[path = "../hud/layer.rs"]
 mod layer;
 #[path = "../hud/log.rs"]
@@ -101,26 +107,11 @@ mod settings;
 #[allow(dead_code)]
 #[path = "../hud/settings_icons.rs"]
 mod settings_icons;
-#[allow(dead_code)]
-#[path = "../hud/settings_snapshot.rs"]
-mod settings_snapshot;
-#[allow(dead_code)]
-#[path = "../hud/settings_ui.rs"]
-mod settings_ui;
-#[allow(dead_code)]
-#[path = "../hud/settings_view.rs"]
-mod settings_view;
-#[allow(dead_code)]
-#[path = "../hud/settings_widgets.rs"]
-mod settings_widgets;
 #[path = "../hud/shell.rs"]
 mod shell;
 #[allow(dead_code)]
 #[path = "../hud/text.rs"]
 mod text;
-#[allow(dead_code)]
-#[path = "../hud/ui_layout.rs"]
-mod ui_layout;
 #[allow(dead_code)]
 #[path = "../hud/ui_tokens.rs"]
 mod ui_tokens;
@@ -128,13 +119,13 @@ mod ui_tokens;
 #[path = "../hud/wallpaper.rs"]
 mod wallpaper;
 
+use geom::Rect;
 use menu::input::MenuInput;
 use menu::state::Menu;
 use menu::state::{Frame, Outcome};
 use menu::system::{CommandRunner, ProviderKey, spawn_fetch};
 use menu::view::{self, MenuView};
 use repeat::Repeat;
-use settings_ui::Rect;
 use text::{SCALE, TextPainter};
 
 /// Пространство слоя: по нему правится размытие в `rules.kdl`.
@@ -407,7 +398,7 @@ impl MenuApp {
         let pixel = current.theme.as_deref() == Some("pixel");
         if pixel != self.pixel {
             self.pixel = pixel;
-            self.painter = TextPainter::new(&view::font_name(pixel));
+            self.painter = TextPainter::new(&ui_tokens::font_name(pixel));
         }
         if current.language != self.menu.lang() {
             self.menu.set_lang(current.language);
@@ -1062,7 +1053,7 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
         pointer: None,
         keyboard: None,
         mods: Modifiers::default(),
-        painter: TextPainter::new(&view::font_name(pixel)),
+        painter: TextPainter::new(&ui_tokens::font_name(pixel)),
         icons: TextPainter::new(settings_icons::FONT),
         menu,
         highlight: menu::highlight::Highlight::new(started),

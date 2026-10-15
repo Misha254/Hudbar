@@ -21,11 +21,11 @@ use super::super::config::Config;
 use super::super::config_io::{self, Patch};
 use super::super::data::oneshot;
 use super::super::log;
+use super::super::schemes;
 use super::super::settings::{
     self, FONT_SIZE_MAX, FONT_SIZE_MIN, HEIGHT_MAX, HEIGHT_MIN, Language, Module,
     NotificationPosition, OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS, clamp,
 };
-use super::super::settings_ui;
 use super::super::wallpaper;
 
 /// Переключатель модуля панели: чтение флага из файла, запись точечным
@@ -424,7 +424,7 @@ pub fn scheme_index() -> usize {
 
 /// Индекс схемы по имени. Чистая функция ради теста.
 pub fn scheme_index_of(name: &str) -> usize {
-    settings_ui::SCHEMES
+    schemes::SCHEMES
         .iter()
         .position(|scheme| *scheme == name)
         .unwrap_or(0)
@@ -433,7 +433,7 @@ pub fn scheme_index_of(name: &str) -> usize {
 /// Смена схемы: применяется к текущим обоям откреплённо через общий
 /// враппер. Меню не ждёт пересчёт matugen.
 pub fn set_scheme(index: usize) {
-    let scheme = settings_ui::SCHEMES
+    let scheme = schemes::SCHEMES
         .get(index)
         .copied()
         .unwrap_or("scheme-tonal-spot");
@@ -478,11 +478,11 @@ mod tests {
     }
 
     #[test]
-    fn scheme_index_matches_the_settings_window_list() {
+    fn scheme_index_matches_the_scheme_list() {
         assert_eq!(scheme_index_of("scheme-tonal-spot"), 0);
         assert!(scheme_index_of("scheme-smart") > 0);
         assert_eq!(scheme_index_of("nope"), 0);
-        assert_eq!(settings_ui::SCHEMES.len(), 10);
+        assert_eq!(schemes::SCHEMES.len(), 10);
     }
 
     #[test]

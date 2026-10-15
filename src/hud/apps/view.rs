@@ -13,14 +13,14 @@ use super::super::menu::view::{RowsHighlight, selected_background};
 use super::icons::{self, Loader};
 use super::model::{Model, Row};
 
+pub use super::super::canvas::{fill_rect, fill_round_rect, stroke_rect};
+use super::super::geom::Rect;
 /// Прозрачность карточки — общая с менем: правило одна, а две реализации
 /// разъехались бы на пиксель.
 pub use super::super::menu::view::apply_card_alpha;
 use super::super::palette::{self, Rgba};
 use super::super::settings::Language;
 use super::super::settings_icons;
-use super::super::settings_ui::Rect;
-use super::super::settings_view::{fill_rect, fill_round_rect, stroke_rect};
 use super::super::text::{Align, SCALE, TextPainter};
 use super::super::ui_tokens::{
     TypeScale, UiPalette, radii, radius, spacing, type_scale, ui_palette,
@@ -1256,7 +1256,7 @@ mod tests {
         //painter по ссылке на «вытекшую» память — под тест это безопасно, но
         // написано явно.
         let painter: &'static mut TextPainter = Box::leak(Box::new(TextPainter::new(
-            &crate::settings_view::font_name(pixel),
+            &crate::ui_tokens::font_name(pixel),
         )));
         let icons: &'static mut TextPainter =
             Box::leak(Box::new(TextPainter::new(settings_icons::FONT)));

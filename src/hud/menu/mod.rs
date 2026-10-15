@@ -65,8 +65,7 @@ use tree::Node;
 
 #[allow(unused_imports)]
 pub(crate) use super::{
-    bind_data, config_io, palette, settings, settings_icons, settings_ui, settings_view,
-    settings_widgets, text, ui_tokens,
+    bind_data, canvas, config_io, geom, palette, settings, settings_icons, text, ui_tokens,
 };
 
 /// Заголовок приложения в крошках: «HUD › Стиль».

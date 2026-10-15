@@ -24,10 +24,10 @@
 //! отдельной копией painter с шрифтом Nerd Font: в Pixel основной шрифт —
 //! Minecraft Rus, и иконок в нём нет.
 
+use super::super::canvas::{fill_disc_hard, fill_rect, fill_round_rect, stroke_rect};
+use super::super::geom::Rect;
 use super::super::palette;
 use super::super::settings_icons;
-use super::super::settings_ui::Rect;
-use super::super::settings_view::{fill_disc_hard, fill_rect, fill_round_rect, stroke_rect};
 use super::super::text::{Align, SCALE, TextPainter};
 use super::super::ui_tokens::{
     TypeScale, UiPalette, mix, radii, radius, spacing, type_scale, ui_palette,
@@ -1450,19 +1450,11 @@ pub fn theme(pixel: bool, base: palette::Palette) -> (UiPalette, TypeScale) {
     (ui_palette(pixel, base), type_scale(pixel))
 }
 
-/// Шрифт основного текста по теме.
-pub fn font_name(pixel: bool) -> String {
-    if pixel {
-        "Minecraft Rus".to_string()
-    } else {
-        "JetBrainsMono Nerd Font Propo".to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::settings_icons;
     use super::super::text::TextPainter;
+    use super::super::ui_tokens::font_name;
     use super::super::{Action, Menu, Node};
     use super::*;
 

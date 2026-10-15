@@ -43,7 +43,7 @@ pub mod view;
 // `super::`, поэтому реэкспорт повторяет то, что делает `menu/mod.rs`.
 #[allow(unused_imports)]
 pub(crate) use super::{
-    bind_data, log, palette, settings, settings_icons, settings_ui, settings_view, text, ui_tokens,
+    bind_data, canvas, geom, log, palette, settings, settings_icons, text, ui_tokens,
 };
 
 /// Подписи окна выбора обоев. Лежат здесь, а не в `menu`: окно обоев
