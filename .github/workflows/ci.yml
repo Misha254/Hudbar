@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# Пуш в ту же ветку отменяет прошлый прогон: смысла держать очередь нет.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Больше прав прогону не нужно: только чтение репозитория.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: fmt, clippy, тесты
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Крейт `dbus` линкует системный libdbus (`libdbus-sys`), wayland-rs и
+      # xkbcommon — системные библиотеки через pkg-config. Без них сборка
+      # падает на линковке, а не на компиляции, и причина неочевидна.
+      - name: Системные зависимости
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libdbus-1-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Формат
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Тесты идут с пустым HOME: панель читает ~/.config/hudbar, и на чистой
+      # машине подстановки из окружения разработчика быть не должно.
+      - name: Тесты
+        run: |
+          mkdir -p "$HOME"
+          cargo test --locked
+        env:
+          HOME: ${{ runner.temp }}/ci-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/ci-home/.config
+          XDG_STATE_HOME: ${{ runner.temp }}/ci-home/.local/state
+
+  plugin:
+    name: плагин opencode
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: contrib/opencode
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Тесты плагина
+        run: npm test
+
+  # Релизная сборка дорогая: LTO и один codegen-unit. На каждый PR достаточно
+  # проверок выше, полная сборка — только на тегах.
+  release-build:
+    name: release-сборка (теги)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Системные зависимости
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libdbus-1-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Сборка
+        run: cargo build --release --locked
+
+  # Информационный: уязвимости в зависимостях видеть полезно, но блокировать
+  # слияние чужим CVE нельзя — красный статус не гасит процесс.
+  deny:
+    name: cargo-deny (информационный)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories

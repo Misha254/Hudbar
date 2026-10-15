@@ -535,22 +535,57 @@ mod tests {
 
     /// Вложенный вход: `system/control` открывает подменю сразу, за один
     /// запуск. Так бинд доезжает до нужного места без второго нажатия.
+    ///
+    /// Дерево синтетическое: в настоящем строка `system/control` появляется
+    /// только когда конфиги лежат на диске, и на чистой машине тест проверял
+    /// бы отсутствие `~/.config`, а не вход.
     #[test]
     fn a_nested_path_enters_the_child_level() {
-        let mut menu = super::real::menu();
+        let mut menu = Menu::new(nested_tree());
         assert!(super::open_section(&mut menu, "system/control"));
         assert_eq!(menu.depth(), 2, "вход в подменю раздела");
-        let titles: Vec<&str> = menu
+        assert_eq!(menu.current().title, "Панель управления");
+        let selected = menu
             .current()
             .list
-            .items()
+            .selected_item()
+            .expect("выбранная строка");
+        assert_eq!(selected.id, "control/niri");
+    }
+
+    /// Корень как у настоящего меню: разделы из `SECTIONS` по порядку, во
+    /// «Системе» — подменю `system/control` с одной строкой. Остальные
+    /// разделы — листья: входу нужны только позиция раздела и личность
+    /// подменю.
+    fn nested_tree() -> Vec<Node> {
+        SECTIONS
             .iter()
-            .map(|item| item.title.as_str())
-            .collect();
-        assert!(
-            titles.iter().any(|title| title.contains("kitty")),
-            "открылся список целей: {titles:?}"
-        );
+            .map(|(key, title)| {
+                if *key == "system" {
+                    Node::submenu(
+                        settings_icons::SYSTEM,
+                        title,
+                        vec![
+                            Node::submenu(
+                                settings_icons::CONTROLS,
+                                "Панель управления",
+                                vec![
+                                    Node::action(
+                                        settings_icons::SYSTEM,
+                                        "niri",
+                                        Action::Run("kitty", &["-e", "nvim"]),
+                                    )
+                                    .with_id("control/niri"),
+                                ],
+                            )
+                            .with_id("system/control"),
+                        ],
+                    )
+                } else {
+                    Node::action(settings_icons::DOT, title, Action::Back)
+                }
+            })
+            .collect()
     }
 
     /// Несуществующий вложенный уровень не должен оставлять меню в

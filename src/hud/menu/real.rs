@@ -787,9 +787,19 @@ fn system_section(lang: Language) -> Node {
 /// но строкой меню. Отдельный скрипт и второй лаунчер не нужны — список и
 /// есть окно.
 fn control_node(lang: Language) -> Option<Node> {
+    control_node_with(lang, targets())
+}
+
+/// Строки подменю из готового списка целей. Список приходит снаружи, потому
+/// что настоящие цели зависят от того, какие конфиги лежат в `$HOME`: тест на
+/// чистой машине иначе не проверял бы ничего.
+fn control_node_with(
+    lang: Language,
+    targets: Vec<(&'static str, &'static str, String)>,
+) -> Option<Node> {
     // `when` умеет только `fn() -> bool`, а путь здесь со значением: строки с
     // несуществующим каталогом просто не строятся.
-    let children: Vec<Node> = targets()
+    let children: Vec<Node> = targets
         .into_iter()
         .filter(|(_, _, path)| std::path::Path::new(path).exists())
         .map(|(icon, title, path)| {
@@ -840,7 +850,14 @@ fn open_in_editor(path: String) -> Action {
 /// его бинды, потом панель и терминал, потом остальное окружение.
 fn targets() -> Vec<(&'static str, &'static str, String)> {
     let home = std::env::var("HOME").unwrap_or_default();
-    let path = |parts: &str| std::path::Path::new(&home).join(parts);
+    targets_in(std::path::Path::new(&home))
+}
+
+/// Цели для заданного домашнего каталога. Вынесено ради тестов: список строк
+/// строится по тому, что реально лежит на диске, и проверять это на машине
+/// разработчика — значит зависеть от его `~/.config`.
+fn targets_in(home: &std::path::Path) -> Vec<(&'static str, &'static str, String)> {
+    let path = |parts: &str| home.join(parts);
     vec![
         (settings_icons::SYSTEM, "niri", path(".config/niri")),
         (
@@ -1025,39 +1042,47 @@ mod tests {
     use super::*;
 
     /// Панель управления — подменю с целями, а не запуск второго лаунчера.
-    /// Проверяется на дереве: набор путей зависит от машины.
+    /// Цели здесь свои: настоящий список зависит от того, какие конфиги лежат
+    /// на машине, и на чистой машине такой тест не проверял бы ничего.
     #[test]
-    fn control_panel_is_a_submenu_of_configs() {
-        let Some(control) = control_node(Language::Ru) else {
-            return; // на машине нет ни одного каталога конфигов
-        };
+    fn control_panel_keeps_only_targets_that_exist_on_disk() {
+        let existing = std::env::current_exe().expect("путь тестового бинаря");
+        let missing = std::env::temp_dir().join(format!(
+            "hudbar-control-target-missing-{}",
+            std::process::id()
+        ));
+        let targets = vec![
+            (
+                settings_icons::SYSTEM,
+                "niri",
+                existing.to_string_lossy().into_owned(),
+            ),
+            (
+                settings_icons::PANEL,
+                "waybar",
+                missing.to_string_lossy().into_owned(),
+            ),
+        ];
+        let control = control_node_with(Language::Ru, targets).expect("цель есть");
         assert_eq!(control.title, "Панель управления");
         let super::super::tree::NodeKind::Submenu(children) = &control.kind else {
             panic!("ожидалось подменю, {:?}", control.kind);
         };
-        assert!(!children.is_empty());
-        for child in children {
-            let super::super::tree::NodeKind::Action(Action::Spawn(program, args)) = &child.kind
-            else {
-                panic!("строка должна запускать редактор: {:?}", child.kind);
-            };
-            assert_eq!(*program, "kitty");
-            assert_eq!(
-                args,
-                &["-e", "nvim", args[2]],
-                "открываем nvim с путём из строки"
-            );
-            let path = args[2];
-            assert!(
-                std::path::Path::new(path).exists(),
-                "цели без пути на диске: {path}"
-            );
-            assert!(
-                child.identity().starts_with("control/"),
-                "своя личность у строки: {}",
-                child.identity()
-            );
-        }
+        assert_eq!(children.len(), 1, "строка без пути на диске не строится");
+        let child = &children[0];
+        let super::super::tree::NodeKind::Action(Action::Spawn(program, args)) = &child.kind else {
+            panic!("строка должна запускать редактор: {:?}", child.kind);
+        };
+        assert_eq!(*program, "kitty");
+        assert_eq!(args[1], "nvim", "открываем nvim");
+        assert_eq!(std::path::Path::new(args[2]), existing);
+        assert_eq!(
+            child.identity(),
+            format!(
+                "control/{}",
+                existing.file_name().unwrap_or_default().to_string_lossy()
+            )
+        );
     }
 
     /// Цели не должны повторяться: два пункта на один и тот же путь — это
