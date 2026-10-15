@@ -49,10 +49,15 @@ jobs:
 
       # Тесты идут с пустым HOME: панель читает ~/.config/hudbar, и на чистой
       # машине подстановки из окружения разработчика быть не должно.
-      - name: Тесты
+      - name: Чистое окружение тестов
         run: |
-          mkdir -p "$HOME"
-          cargo test --locked
+          mkdir -p "$RUNNER_TEMP/ci-home"
+          # rustup держит домашний каталог в $HOME, а тесты пойдут с пустым
+          # HOME: запоминаем настоящий каталог до подмены.
+          echo "RUSTUP_HOME=$(rustup show home)" >> "$GITHUB_ENV"
+
+      - name: Тесты
+        run: cargo test --locked
         env:
           HOME: ${{ runner.temp }}/ci-home
           XDG_CONFIG_HOME: ${{ runner.temp }}/ci-home/.config
