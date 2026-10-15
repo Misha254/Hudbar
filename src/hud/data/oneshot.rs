@@ -31,9 +31,8 @@ pub fn run_with_timeout(
 
 /// Как [`run_with_timeout`], но с байтами на stdin команды. Механизм для
 /// случая, когда секрет не должен попадать в `argv` вовсе: pipe не виден в
-/// `ps` и `/proc/<pid>/cmdline`. Готов и покрыт тестами. В W5.2b пароль Wi-Fi
-/// уходит через `CmdArg::Secret`, то есть всё-таки в `argv` — перевести его
-/// сюда мешает `nmcli`, который пароль из stdin не читает. Аргументы здесь
+/// `ps` и `/proc/<pid>/cmdline`. Так уходит пароль Wi-Fi: `nmcli --ask` читает
+/// его из stdin (спрашивает через readline, pty не нужен). Аргументы здесь
 /// по-прежнему передаются без shell, напрямую в `Command`.
 pub fn run_with_timeout_stdin(
     program: &str,

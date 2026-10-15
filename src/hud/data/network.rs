@@ -230,41 +230,27 @@ pub fn refresh_bt(shared: &Arc<Shared>) {
     let s = shared.clone();
     std::thread::spawn(move || set_bt_list(&s, bt_now()));
 }
-pub fn wifi_connect(shared: &Arc<Shared>, ssid: &str, secured: bool) {
+pub fn wifi_connect(shared: &Arc<Shared>, ssid: &str) {
     let s = shared.clone();
     let ssid = ssid.to_string();
     std::thread::spawn(move || {
-        if secured {
-            let out = std::process::Command::new("zenity")
-                .args(["--password", "--title", &format!("Wi-Fi: {ssid}")])
-                .output();
-            let pass = match out {
-                Ok(o) if o.status.success() => {
-                    String::from_utf8_lossy(&o.stdout).trim().to_string()
-                }
-                _ => return,
-            };
-            let _ = crate::hud::log::status(
-                "nmcli",
-                &["dev", "wifi", "connect", &ssid, "password", &pass],
-            );
-        } else {
-            let _ = crate::hud::log::status("nmcli", &["dev", "wifi", "connect", &ssid]);
-        }
+        let _ = crate::hud::log::status("nmcli", &["dev", "wifi", "connect", &ssid]);
         std::thread::sleep(Duration::from_millis(900));
         set_wifi_list(&s, wifi_now());
     });
 }
 
+/// Подключение к защищённой сети с паролем. Команду собирает `menu::wifi` —
+/// один источник правды с меню, — а пароль уходит на stdin (`nmcli --ask`):
+/// в `argv` его нет, а в журнал попадает только отказ и без `stderr` (nmcli
+/// умеет вернуть в сообщении сам пароль).
 pub fn wifi_connect_pass(shared: &Arc<Shared>, ssid: &str, pass: &str) {
     let s = shared.clone();
     let ssid = ssid.to_string();
     let pass = pass.to_string();
     std::thread::spawn(move || {
-        let _ = crate::hud::log::status(
-            "nmcli",
-            &["dev", "wifi", "connect", &ssid, "password", &pass],
-        );
+        let spec = crate::hud::menu::wifi::connect_with_password(&ssid, &pass);
+        crate::hud::menu::system::run_logged(&spec);
         std::thread::sleep(Duration::from_millis(900));
         set_wifi_list(&s, wifi_now());
     });
