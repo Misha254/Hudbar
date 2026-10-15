@@ -56,7 +56,9 @@ fn main() {
     // вызовов `Instant::now()` — иначе разные значения читались бы в разные
     // микро instants и кадр дёргался бы.
     let started = std::time::Instant::now();
-    let anim = hud::anim::AnimSettings::new(hud_settings.animations, hud_settings.animation_speed);
+    // На энергосбережении анимации гаснут сами, настройку не трогаем.
+    let mut anim_on = hud_settings.animations && power_profile::anim_allowed();
+    let anim = hud::anim::AnimSettings::new(anim_on, hud_settings.animation_speed);
     let conn = Connection::connect_to_env().expect("wayland connection");
     let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
     let qh = event_queue.handle();
@@ -119,6 +121,9 @@ fn main() {
     };
 
     let mut buf = [0u8; 64];
+    // Момент последней сверки профиля питания: чаще раза в 15 секунд файл
+    // в `/sys` дёргать незачем.
+    let mut power_check = started;
     while !app.exit {
         let current_settings_stamp = hud::settings::modified();
         if current_settings_stamp != settings_stamp {
@@ -131,12 +136,28 @@ fn main() {
             app.settings = new_settings;
             // Настройки анимаций применяются сразу: выключение должно убрать
             // движение, а не оставить текущий твин идти до конца.
-            app.anim =
-                hud::anim::AnimSettings::new(app.settings.animations, app.settings.animation_speed);
+            // Энергосбережение учитывается и здесь, иначе правка настроек
+            // включила бы анимации обратно в обход профиля.
+            anim_on = app.settings.animations && power_profile::anim_allowed();
+            app.anim = hud::anim::AnimSettings::new(anim_on, app.settings.animation_speed);
             app.hover_anim.set_settings(app.anim);
             app.popup_anim.duration = app.anim.scaled(app.popup_anim.duration);
             settings_stamp = current_settings_stamp;
             app.shared.dirty.store(true, Ordering::Relaxed);
+        }
+        // Профиль питания перечитывается редко и без настроек: переключение в
+        // энергосбережение на ходу тоже должно гасить анимации, а возврат —
+        // возвращать их без перезапуска панели.
+        if app.now.duration_since(power_check) >= std::time::Duration::from_secs(15) {
+            power_check = app.now;
+            let on = app.settings.animations && power_profile::anim_allowed();
+            if on != anim_on {
+                anim_on = on;
+                app.anim = hud::anim::AnimSettings::new(on, app.settings.animation_speed);
+                app.hover_anim.set_settings(app.anim);
+                app.popup_anim.duration = app.anim.scaled(app.popup_anim.duration);
+                app.shared.dirty.store(true, Ordering::Relaxed);
+            }
         }
         let now = chrono::Local::now().format("%a, %d %b %H:%M").to_string();
         if now != app.clock {

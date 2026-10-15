@@ -90,6 +90,7 @@ src/hud/actions.rs     действия пользователя: фокус, з
 src/hud/tray.rs        протокол StatusNotifierWatcher / StatusNotifierItem
 src/hud/palette.rs     цвета из colors.css
 src/hud/settings.rs    что показывать, из settings.json
+src/hud/shell.rs       общие куски цикла окон: шаг колеса, ожидание сокета, дожимание проявления
 src/hud/app/mod.rs     связывает ui, render и handlers
 src/hud/app/ui.rs      константы, иконки, типы интерфейса, примитивы рисования
 src/hud/app/render/mod.rs     App и общие импорты отрисовки

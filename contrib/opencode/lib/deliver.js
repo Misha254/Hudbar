@@ -21,6 +21,16 @@ export const APP_NAME = "opencode";
 export const DELIVER_TIMEOUT_MS = 2000;
 
 /**
+ * Сколько живёт уведомление на экране, мс.
+ *
+ * Передаётся в notify-send явно (`-t`) и без этого не обойтись: у пользователя
+ * в dunstrc не задан `timeout`, и critical-уведомления не гаснут сами вообще —
+ * висят, пока не закрыть руками. Проверено: `notify-send -u critical` без `-t`
+ * живёт дольше минуты, `-t 5000` закрывается через пять секунд.
+ */
+export const DEFAULT_TIMEOUT_MS = 10000;
+
+/**
  * Собрать argv для notify-send.
  *
  * Вынесено отдельно, чтобы тесты проверяли сам массив, а не результат
@@ -28,7 +38,7 @@ export const DELIVER_TIMEOUT_MS = 2000;
  *
  * @param {string} title
  * @param {string} body
- * @param {{ urgency?: string, tag?: string, appName?: string }} [options]
+ * @param {{ urgency?: string, tag?: string, appName?: string, timeoutMs?: number }} [options]
  * @returns {string[]}
  */
 export function buildNotifyArgs(title, body, options = {}) {
@@ -37,6 +47,8 @@ export function buildNotifyArgs(title, body, options = {}) {
     options.appName ?? APP_NAME,
     "-u",
     options.urgency ?? "normal",
+    "-t",
+    String(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
   ];
   if (options.tag) {
     args.push("-h", `string:x-dunst-stack-tag:${options.tag}`);
@@ -55,6 +67,7 @@ export function buildNotifyArgs(title, body, options = {}) {
  * @param {object} [options]
  * @param {"low"|"normal"|"critical"} [options.urgency]
  * @param {string} [options.tag]
+ * @param {number} [options.timeoutMs] сколько живёт уведомление на экране
  * @param {string} [options.program] подмена бинаря для тестов
  * @param {(entry: {level: string, message: string, extra?: object}) => void} [options.log]
  * @returns {Promise<{ ok: boolean, reason?: string, code?: number }>}

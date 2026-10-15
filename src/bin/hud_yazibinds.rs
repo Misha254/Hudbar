@@ -11,7 +11,6 @@ use std::time::SystemTime;
 use cosmic_text::{
     Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent,
 };
-use nix::poll::{PollFd, PollFlags, poll};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_registry,
@@ -46,6 +45,8 @@ mod bind_data;
 mod binds_layout;
 #[path = "../hud/palette.rs"]
 mod palette;
+#[path = "../hud/shell.rs"]
+mod shell;
 
 use bind_data::Entry;
 
@@ -567,22 +568,10 @@ impl YaziApp {
         self.layout(text, size, size + 8.0).0
     }
 
-    /// Дельта колеса в целых строках. Тачпад шлёт value120 меньше 120, поэтому
-    /// дробный остаток копим и отдаём по целой строке.
+    /// Дельта колеса в целых строках. Формула общая (`shell::axis_steps`):
+    /// дробный остаток тачпада копится и отдаётся по целой строке.
     fn axis_step(&mut self, v: &AxisScroll) -> i32 {
-        let delta = if v.value120 != 0 {
-            v.value120 as f32 / 120.0
-        } else if v.discrete != 0 {
-            v.discrete as f32
-        } else if v.absolute != 0.0 {
-            v.absolute.signum() as f32 * 3.0
-        } else {
-            0.0
-        };
-        self.scroll_acc += delta;
-        let steps = self.scroll_acc.trunc();
-        self.scroll_acc -= steps;
-        steps as i32
+        shell::axis_steps(&mut self.scroll_acc, v) as i32
     }
 
     /// Фактический верх глифов относительно переданного y (logical px).
@@ -1285,18 +1274,10 @@ fn main() {
         if event_queue.flush().is_err() {
             break;
         }
-        if let Some(guard) = event_queue.prepare_read() {
-            let mut fds = [PollFd::new(conn.as_fd(), PollFlags::POLLIN)];
-            let _ = poll(&mut fds, 250u16);
-            if fds[0]
-                .revents()
-                .is_some_and(|flags| flags.intersects(PollFlags::POLLIN))
-            {
-                let _ = guard.read();
-            } else {
-                drop(guard);
-            }
-        }
+        // Сон фиксированный: анимаций и клиентского повтора тут нет
+        // (повторы шлёт композитор и будят сокет сами), ждать нечего —
+        // только не крутить цикл вхолостую.
+        shell::poll_read(&mut event_queue, conn.as_fd(), 250u16);
         // Ошибка разговора с вейлендом — повод выйти, иначе цикл крутится вхолостую.
         if event_queue.dispatch_pending(&mut app).is_err() {
             break;

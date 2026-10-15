@@ -403,23 +403,16 @@ fn section_row(view: &mut AppsView<'_>, rect: Rect, title: &str) {
 }
 
 /// Рисовать ли булавку на строке.
-///
-/// В секции «Закреплённые» не рисуем никогда, кроме выбранной строки: там у
-/// всех строк одна и та же булавка, и она перестаёт что-то сообщать. В «Все
-/// приложения» и при поиске секций нет — там булавка и есть единственный
-/// признак закреплённости, поэтому она рисуется у закреплённых. Выбранная
-/// строка показывает булавку всегда: под ней видно, что произойдёт по Enter.
-fn show_pin(model: &Model, row: usize, selected: bool) -> bool {
+/// Булавка рисуется у каждого закреплённого приложения всегда, включая секцию
+/// «Закреплённые»: это единый признак закреплённости во всём списке.
+fn show_pin(model: &Model, row: usize, _selected: bool) -> bool {
     let Some(Row::App(index)) = model.rows().get(row) else {
         return false;
     };
     let Some(app) = model.apps().get(*index) else {
         return false;
     };
-    if !model.is_pinned(&app.id) {
-        return false;
-    }
-    selected || !model.in_pinned_section(row)
+    model.is_pinned(&app.id)
 }
 
 /// Строка приложения: иконка, имя и метка закрепления справа.
@@ -1084,10 +1077,10 @@ mod tests {
 
     // ───────────────────────── булавка ─────────────────────────
 
-    /// В секции «Закреплённые» булавка у всех строк и второй раз ничего не
-    /// сообщает, поэтому её там нет.
+    /// Закреплённое приложение носит булавку везде, включая свою секцию:
+    /// это единый признак закреплённости во всём списке.
     #[test]
-    fn the_pin_is_hidden_inside_the_pinned_section() {
+    fn the_pin_shows_inside_the_pinned_section() {
         let mut model = two_sections();
         let pinned_row = model
             .rows()
@@ -1097,8 +1090,8 @@ mod tests {
         assert!(model.in_pinned_section(pinned_row));
         model.select(pinned_row);
         assert!(
-            !show_pin(&model, pinned_row, false),
-            "в своей секции булавка лишняя"
+            show_pin(&model, pinned_row, false),
+            "в своей секции булавка тоже рисуется"
         );
         assert!(
             show_pin(&model, pinned_row, true),
@@ -1106,13 +1099,13 @@ mod tests {
         );
     }
 
-    /// Вне секции «Закреплённые» булавка рисуется у закреплённых. В списке с
-    /// секциями таких строк не бывает: закреплённое приложение живёт только в
-    /// своей секции, поэтому проверяется обратное — ни одна строка второй
+    /// Незакреплённые строки булавку не получают нигде — ни обычные, ни
+    /// выбранные. В списке с секциями закреплённое приложение живёт только в
+    /// своей секции, поэтому здесь проверяется обратное: ни одна строка второй
     /// секции булавку не получает. Случай «закреплённая строка вне своей
     /// секции» — это поиск, он разобран следующим тестом.
     #[test]
-    fn only_pinned_rows_outside_the_section_carry_the_pin() {
+    fn unpinned_rows_carry_no_pin() {
         let model = two_sections();
         let outside: Vec<usize> = model
             .rows()

@@ -73,6 +73,9 @@ mod log;
 #[allow(dead_code)]
 #[path = "../hud/palette.rs"]
 mod palette;
+#[allow(dead_code)]
+#[path = "../hud/power_profile.rs"]
+mod power_profile;
 #[path = "../hud/repeat.rs"]
 mod repeat;
 // Нужен state.rs ради текущей схемы, но само окно обоев схемы уже не рисует.
@@ -97,6 +100,8 @@ mod settings_view;
 #[allow(dead_code)]
 #[path = "../hud/settings_widgets.rs"]
 mod settings_widgets;
+#[path = "../hud/shell.rs"]
+mod shell;
 #[allow(dead_code)]
 #[path = "../hud/text.rs"]
 mod text;
@@ -385,6 +390,7 @@ impl WpApp {
         surface.damage_buffer(0, 0, pw as i32, ph as i32);
         let _ = buffer.attach_to(surface);
         self.ctx.layer.commit();
+        shell::finish_fade(&mut self.ctx.dirty, openness);
     }
 }
 
@@ -807,6 +813,17 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
     let pixel = loaded.theme.as_deref() == Some("pixel");
     let lang = loaded.language;
     let anim = anim::AnimSettings::new(loaded.animations, loaded.animation_speed);
+    // На энергосбережении процессор придушен и анимации идут рывками:
+    // гасим их на время пикера, настройку пользователя не трогаем.
+    let anim = if loaded.animations && !power_profile::anim_allowed() {
+        debug_log("энергосбережение: анимации выключены на время пикера");
+        anim::AnimSettings {
+            enabled: false,
+            ..anim
+        }
+    } else {
+        anim
+    };
     let started = std::time::Instant::now();
     let palette = palette::load();
     let ui = ui_tokens::ui_palette(pixel, palette);

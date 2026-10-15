@@ -114,6 +114,7 @@ export default {
 
       await deliver(decision.title, decision.body, {
         urgency: decision.urgency,
+        timeoutMs: decision.timeoutMs,
         tag: decision.tag,
         log: (entry) => log(entry.level, entry.message, entry.extra),
       });

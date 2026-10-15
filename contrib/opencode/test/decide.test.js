@@ -437,6 +437,19 @@ test("ошибка не проходит под глобальный лимит 
   assert.equal(decision.notify, true);
 });
 
+test("таймауты жизни на экране различаются по важности", () => {
+  // Критичные живут дольше, «готово» — мимо: его и так видно в окне.
+  const state = fresh();
+  run(state, started("s1"));
+  assert.equal(run(state, done("s1")).timeoutMs, 8000);
+  assert.equal(run(fresh(), permission()).timeoutMs, 20000);
+  assert.equal(run(fresh(), questionForm()).timeoutMs, 20000);
+  assert.equal(
+    run(fresh(), { type: "session.error", data: { sessionID: "s1" } }).timeoutMs,
+    20000,
+  );
+});
+
 // --- прочее ------------------------------------------------------------------
 
 test("неизвестный тип молчит", () => {

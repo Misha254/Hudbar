@@ -87,6 +87,15 @@ opencode service restart
 Троттлинг: не чаще 1 уведомления на пару (sessionID, kind) за 5 с; глобально
 не больше 3 «готово» в минуту. Critical-типы лимит обходят.
 
+### Время жизни на экране
+
+`notify-send` вызывается с явным `-t`: 8 с для «готово», 20 с для вопросов,
+разрешений и ошибок. Без `-t` уведомление живёт бесконечно: в `~/.config/dunst/dunstrc`
+не задан `timeout`, а critical dunst сам не гасит — проверено на машине,
+`notify-send -u critical` висел дольше минуты, `-t 5000` закрылся через пять
+секунд. Значения лежат в `TIMEOUT_MS` (`lib/decide.js`), дефолт транспорта —
+`DEFAULT_TIMEOUT_MS` (`lib/deliver.js`).
+
 ## Структура
 
 ```
@@ -178,7 +187,7 @@ cd /home/mihail/code/hudbar/contrib/opencode
 node --test test/proc.test.js test/strings.test.js test/throttle.test.js test/decide.test.js test/deliver.test.js test/focus-debug.test.js
 ```
 
-104 тестов. Живой вызов niri висит в песочнице раннера (из shell отвечает
+107 тестов. Живой вызов niri висит в песочнице раннера (из shell отвечает
 мгновенно), поэтому вынесен в `test/live-niri.test.js` и в прогон не входит.
 Запуск вручную: `node --test test/live-niri.test.js`.
 

@@ -28,8 +28,6 @@ use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nix::poll::{PollFd, PollFlags, poll};
-
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_registry,
@@ -115,6 +113,8 @@ mod settings_view;
 #[allow(dead_code)]
 #[path = "../hud/settings_widgets.rs"]
 mod settings_widgets;
+#[path = "../hud/shell.rs"]
+mod shell;
 #[allow(dead_code)]
 #[path = "../hud/text.rs"]
 mod text;
@@ -551,6 +551,7 @@ impl MenuApp {
         surface.damage_buffer(0, 0, pw as i32, ph as i32);
         let _ = buffer.attach_to(surface);
         self.ctx.layer.commit();
+        shell::finish_fade(&mut self.ctx.dirty, openness);
     }
 }
 
@@ -678,23 +679,11 @@ impl PointerHandler for MenuApp {
                 PointerEventKind::Press { button: 0x110, .. } => self.click(position.0, position.1),
                 PointerEventKind::Axis { vertical, .. } => {
                     let scroll = vertical;
-                    // Тачпад шлёт `value120`: одно деление — это 120, а в
-                    // единицах строк это меньше одного. Поэтому деления
-                    // копятся остатком, иначе одно нажатие колеса молчало бы.
-                    let delta = if scroll.value120 != 0 {
-                        scroll.value120 as f32 / 120.0_f32
-                    } else if scroll.discrete != 0 {
-                        scroll.discrete as f32
-                    } else if scroll.absolute != 0.0 {
-                        (scroll.absolute.signum() * 3.0) as f32
-                    } else {
-                        return;
-                    };
-                    self.scroll_acc += -delta;
-                    let steps = self.scroll_acc.trunc();
-                    self.scroll_acc -= steps;
-                    if steps != 0.0 {
-                        self.apply(MenuInput::Page(steps as isize));
+                    // Колесо — построчно, а не постранично.
+                    let steps = shell::axis_steps(&mut self.scroll_acc, &scroll);
+                    let dir = steps.signum();
+                    for _ in 0..steps.abs() {
+                        self.apply(MenuInput::Move(dir));
                     }
                 }
                 _ => {}
@@ -1027,10 +1016,13 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
     // тема — из `settings.json`.
     let mut menu = menu::real::menu();
     let pixel = settings::load().theme.as_deref() == Some("pixel");
-    let anim = anim::AnimSettings::new(
-        settings::load().animations,
-        settings::load().animation_speed,
-    );
+    let user_anim = settings::load().animations;
+    // На энергосбережении анимации гаснут сами, настройку не трогаем.
+    let anim_on = user_anim && power_profile::anim_allowed();
+    if user_anim && !anim_on {
+        debug_log("энергосбережение: анимации выключены на время меню");
+    }
+    let anim = anim::AnimSettings::new(anim_on, settings::load().animation_speed);
     let started = std::time::Instant::now();
     let mut direct = false;
     if menu::open_section(&mut menu, section) {
@@ -1226,33 +1218,23 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
         // меню сразу, а не после следующего сообщения композитора. Пока есть
         // фоновые задачи (providers/команды), тик короче — результат worker-а
         // подхватывается быстро, без ожидания ввода.
-        if let Some(guard) = event_queue.prepare_read() {
-            // В простое тик длинный: от его частоты не зависит ничего — ни
-            // курсор (в карточке его нет), ни таймеры (их в окне нет вовсе).
-            // Пока есть фоновые задачи, тик короткий: результат worker-а
-            // подхватывается без ожидания ввода. С удержанной стрелкой тик
-            // ещё короче — иначе повтор шёл бы рывками.
-            // Проявление и ход подсветки идут кадрами: ждать дольше 16 мс
-            // значило бы проявлять окно и гнать подсветку ступенями.
-            let moving = app.ctx.animating(now) || app.highlight.animating(now);
-            let idle = if !moving && app.jobs.is_empty() {
-                250u16
-            } else {
-                16u16
-            };
-            let wait = match app.repeat.wait_hint() {
-                Some(hint) => idle.min(hint.as_millis().clamp(1, u16::MAX as u128) as u16),
-                None => idle,
-            };
-            let mut fds = [PollFd::new(conn.as_fd(), PollFlags::POLLIN)];
-            let _ = poll(&mut fds, wait);
-            let readable = fds[0]
-                .revents()
-                .is_some_and(|events| events.intersects(PollFlags::POLLIN));
-            if readable {
-                let _ = guard.read();
-            }
-        }
+        // В простое тик длинный: от его частоты не зависит ничего — ни
+        // курсор (в карточке его нет), ни таймеры (их в окне нет вовсе).
+        // Пока есть фоновые задачи, тик короткий: результат worker-а
+        // подхватывается без ожидания ввода. С удержанной стрелкой тик
+        // ещё короче — иначе повтор шёл бы рывками.
+        // Проявление и ход подсветки идут кадрами: ждать дольше 16 мс
+        // значило бы проявлять окно и гнать подсветку ступенями.
+        // Грязный флаг тоже будит короткий тик: недожатое проявление
+        // должно дойти до непрозрачного кадра сразу, а не через простой.
+        let moving = app.ctx.animating(now) || app.highlight.animating(now) || app.ctx.dirty;
+        let idle = if !moving && app.jobs.is_empty() {
+            250u16
+        } else {
+            16u16
+        };
+        let wait = shell::wait_ms(app.repeat.wait_hint(), idle);
+        shell::poll_read(&mut event_queue, conn.as_fd(), wait);
     }
     Ok(())
 }

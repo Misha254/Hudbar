@@ -10,7 +10,6 @@ use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nix::poll::{PollFd, PollFlags, poll};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_registry,
@@ -73,6 +72,9 @@ mod log;
 #[path = "../hud/palette.rs"]
 mod palette;
 #[allow(dead_code)]
+#[path = "../hud/power_profile.rs"]
+mod power_profile;
+#[allow(dead_code)]
 #[path = "../hud/repeat.rs"]
 mod repeat;
 #[allow(dead_code)]
@@ -93,6 +95,8 @@ mod settings_view;
 #[allow(dead_code)]
 #[path = "../hud/settings_widgets.rs"]
 mod settings_widgets;
+#[path = "../hud/shell.rs"]
+mod shell;
 #[allow(dead_code)]
 #[path = "../hud/text.rs"]
 mod text;
@@ -353,6 +357,7 @@ impl SchemesApp {
         surface.damage_buffer(0, 0, pw as i32, ph as i32);
         let _ = buffer.attach_to(surface);
         self.ctx.layer.commit();
+        shell::finish_fade(&mut self.ctx.dirty, openness);
     }
 }
 
@@ -759,7 +764,11 @@ fn run() -> Result<(), String> {
 
     let loaded = settings::load();
     let pixel = loaded.theme.as_deref() == Some("pixel");
-    let anim = anim::AnimSettings::new(loaded.animations, loaded.animation_speed);
+    // На энергосбережении анимации гаснут сами, настройку не трогаем.
+    let anim = anim::AnimSettings::new(
+        loaded.animations && power_profile::anim_allowed(),
+        loaded.animation_speed,
+    );
     let started = std::time::Instant::now();
     let palette = palette::load();
     let ui = ui_tokens::ui_palette(pixel, palette);
@@ -825,30 +834,16 @@ fn run() -> Result<(), String> {
         if app.exit.load(Ordering::Relaxed) {
             break;
         }
-        if let Some(guard) = event_queue.prepare_read() {
-            // С удержанной стрелкой ждать дольше интервала повтора нельзя.
-            // Проявление и ход подсветки идут кадрами: ждать дольше 16 мс
-            // значило бы проявлять окно и гнать подсветку ступенями.
-            let idle = if app.ctx.animating(now) || app.sel_moving(now) {
-                16u16
-            } else {
-                200u16
-            };
-            let wait = app
-                .repeat
-                .wait_hint()
-                .map(|left| left.as_millis().clamp(1, u16::MAX as u128) as u16)
-                .unwrap_or(idle)
-                .min(idle);
-            let mut fds = [PollFd::new(conn.as_fd(), PollFlags::POLLIN)];
-            let _ = poll(&mut fds, wait);
-            let readable = fds[0]
-                .revents()
-                .is_some_and(|events| events.intersects(PollFlags::POLLIN));
-            if readable {
-                let _ = guard.read();
-            }
-        }
+        // С удержанной стрелкой ждать дольше интервала повтора нельзя.
+        // Проявление и ход подсветки идут кадрами: ждать дольше 16 мс
+        // значило бы проявлять окно и гнать подсветку ступенями.
+        let idle = if app.ctx.animating(now) || app.sel_moving(now) {
+            16u16
+        } else {
+            200u16
+        };
+        let wait = shell::wait_ms(app.repeat.wait_hint(), idle);
+        shell::poll_read(&mut event_queue, conn.as_fd(), wait);
     }
     Ok(())
 }

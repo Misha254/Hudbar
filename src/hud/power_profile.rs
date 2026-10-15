@@ -47,6 +47,12 @@ fn service_present() -> bool {
         .is_ok()
 }
 
+/// На `power-saver` процессор придушен и покадровые анимации идут рывками,
+/// поэтому окна гасят их сами, не трогая настройку пользователя.
+pub fn anim_allowed() -> bool {
+    current() != Some("power-saver")
+}
+
 /// Текущий профиль по тому, что ядро пишет в `energy_performance_preference`:
 /// файл не читается — профиль неизвестен, а не «энергосбережение».
 pub fn current() -> Option<&'static str> {
@@ -173,5 +179,12 @@ mod tests {
     fn unknown_profiles_are_refused_before_dbus() {
         let error = set("turbo").expect_err("чужой профиль не принимаем");
         assert!(error.contains("turbo"), "{error}");
+    }
+
+    #[test]
+    fn anim_flag_follows_the_saver_profile() {
+        // Детерминировано на любой машине: флаг — это отрицание сейвера,
+        // какой бы профиль сейчас ни стоял.
+        assert_eq!(anim_allowed(), current() != Some("power-saver"));
     }
 }

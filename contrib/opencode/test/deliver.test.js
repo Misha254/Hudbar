@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DELIVER_TIMEOUT_MS, buildNotifyArgs, deliver } from "../lib/deliver.js";
+import { DEFAULT_TIMEOUT_MS, DELIVER_TIMEOUT_MS, buildNotifyArgs, deliver } from "../lib/deliver.js";
 
 /** Заголовки, которые пытаются что-то выполнить. */
 const EVIL_TITLES = ["$(touch /tmp/HUDBAR_INJECTED)", "'; touch /tmp/HUDBAR_INJECTED; '"];
@@ -49,12 +49,27 @@ test("argv собирается ровно как задумано", () => {
     "opencode",
     "-u",
     "low",
+    "-t",
+    String(DEFAULT_TIMEOUT_MS),
     "-h",
     "string:x-dunst-stack-tag:opencode-s1-done",
     "--",
     "Готово",
     "Моя сессия",
   ]);
+});
+
+test("таймаут жизни на экране передаётся явно", () => {
+  // Без `-t` dunst с незаданным в dunstrc timeout не гасит critical сам.
+  const args = buildNotifyArgs("Вопрос", "тело", { urgency: "critical", timeoutMs: 20000 });
+  const index = args.indexOf("-t");
+  assert.notEqual(index, -1);
+  assert.equal(args[index + 1], "20000");
+});
+
+test("таймаут по умолчанию есть, даже если его не передали", () => {
+  const args = buildNotifyArgs("t", "b");
+  assert.equal(args[args.indexOf("-t") + 1], String(DEFAULT_TIMEOUT_MS));
 });
 
 test("тег не передаётся, если его нет", () => {
@@ -70,8 +85,9 @@ test("заголовок с минусом остаётся позиционны
   assert.equal(args[dashIndex + 2], "тело");
 });
 
-test("таймаут задан", () => {
+test("таймаут запуска не путается с таймаутом жизни", () => {
   assert.equal(DELIVER_TIMEOUT_MS, 2000);
+  assert.notEqual(DEFAULT_TIMEOUT_MS, DELIVER_TIMEOUT_MS);
 });
 
 // --- заглушка вместо живого dunst ------------------------------------------
@@ -91,6 +107,8 @@ test("deliver доставляет argv до подставленного бин
     "opencode",
     "-u",
     "low",
+    "-t",
+    String(DEFAULT_TIMEOUT_MS),
     "-h",
     "string:x-dunst-stack-tag:opencode-s1-done",
     "--",

@@ -29,7 +29,7 @@ import {
 /**
  * Ответ на событие.
  * @typedef {{ notify: false, reason: string }
- *   | { notify: true, title: string, body: string, urgency: "low"|"normal"|"critical", kind: string, sessionID: string, tag: string }
+ *   | { notify: true, title: string, body: string, urgency: "low"|"normal"|"critical", timeoutMs: number, kind: string, sessionID: string, tag: string }
  * } Decision
  */
 
@@ -45,6 +45,15 @@ const DONE_TYPES = new Set([
 
 /** События об ошибке. */
 const ERROR_TYPES = new Set(["session.error", "session.execution.failed"]);
+
+/**
+ * Сколько живёт уведомление на экране, мс.
+ *
+ * Критичные живут дольше: на них нужно успеть ответить. Без явного `-t` dunst
+ * с незаданным в dunstrc `timeout` не гасит critical вообще — висят, пока не
+ * закрыть руками (проверено на машине пользователя).
+ */
+const TIMEOUT_MS = { low: 8000, normal: 10000, critical: 20000 };
 
 /** Помечаем сессию работающей. */
 export function markBusy(busySessions, sessionID) {
@@ -260,6 +269,7 @@ export function decide({
       title: titleFor("done"),
       body: bodyFor(event, payload, false, sessionTitle),
       urgency: "low",
+      timeoutMs: TIMEOUT_MS.low,
       kind: "done",
       sessionID,
       tag: `opencode-${sessionID}-done`,
@@ -285,6 +295,7 @@ export function decide({
         isSubagent,
       ),
       urgency: "critical",
+      timeoutMs: TIMEOUT_MS.critical,
       kind,
       sessionID,
       tag: `opencode-${sessionID}-${kind}`,
@@ -316,6 +327,7 @@ export function decide({
       title: titleFor(kind),
       body: bodyFor(event, payload, isSubagent, sessionTitle),
       urgency: "critical",
+      timeoutMs: TIMEOUT_MS.critical,
       kind,
       sessionID,
       tag: `opencode-${sessionID}-${kind}`,
@@ -342,6 +354,7 @@ export function decide({
         title: titleFor(kind),
         body: markSubagent(STRINGS.errorWithoutSession, false),
         urgency: "critical",
+        timeoutMs: TIMEOUT_MS.critical,
         kind,
         sessionID: "",
         tag: `opencode--${kind}`,
@@ -355,6 +368,7 @@ export function decide({
       title: titleFor(kind),
       body: bodyFor(event, payload, false, sessionTitle),
       urgency: "critical",
+      timeoutMs: TIMEOUT_MS.critical,
       kind,
       sessionID,
       tag: `opencode-${sessionID}-${kind}`,
