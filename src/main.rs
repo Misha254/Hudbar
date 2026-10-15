@@ -46,6 +46,9 @@ fn create_panel(
     layer.set_exclusive_zone(reserve);
     layer.set_margin(1, 0, 1, 0);
     layer.commit();
+    // Слой создаётся и заново после отключения вывода: строка в журнале —
+    // единственный след того, что панель вернулась.
+    hud::log::trace(format!("слой создан: панель, высота {height}"));
     layer
 }
 

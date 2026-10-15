@@ -317,6 +317,7 @@ impl AppsApp {
 
     /// Рисует кадр и отдаёт буфер слою.
     fn draw(&mut self) {
+        let _frame = log::Frame::start("лаунчер");
         let now = std::time::Instant::now();
         let openness = self.ctx.openness_now(now, self.pixel);
         let visible = self.model.visible().len();

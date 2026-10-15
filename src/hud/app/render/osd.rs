@@ -247,6 +247,7 @@ impl App {
         if self.osd.take().is_none() {
             return;
         }
+        crate::hud::log::trace("слой уничтожен: OSD");
         self.osd_anim = anim::Tween::settled(0.0, self.now);
         self.osd_fill = anim::Tween::settled(0.0, self.now);
         self.shared.dirty.store(true, Ordering::Relaxed);
@@ -273,6 +274,7 @@ impl App {
                 .set_input_region(Some(region.wl_region()));
         }
         layer.commit();
+        crate::hud::log::trace("слой создан: OSD");
         self.osd_anim = anim::Tween::settled(0.0, self.now);
         self.osd_fill = anim::Tween::settled(fill_fraction(snapshot.value), self.now);
         self.osd = Some(Osd {
