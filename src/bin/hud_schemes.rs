@@ -66,6 +66,12 @@ pub mod data {
     pub use super::oneshot_data as oneshot;
 }
 #[allow(dead_code)]
+#[path = "../hud/canvas.rs"]
+mod canvas;
+#[allow(dead_code)]
+#[path = "../hud/geom.rs"]
+mod geom;
+#[allow(dead_code)]
 #[path = "../hud/log.rs"]
 mod log;
 #[allow(dead_code)]
@@ -86,23 +92,11 @@ mod settings;
 #[allow(dead_code)]
 #[path = "../hud/settings_icons.rs"]
 mod settings_icons;
-#[allow(dead_code)]
-#[path = "../hud/settings_ui.rs"]
-mod settings_ui;
-#[allow(dead_code)]
-#[path = "../hud/settings_view.rs"]
-mod settings_view;
-#[allow(dead_code)]
-#[path = "../hud/settings_widgets.rs"]
-mod settings_widgets;
 #[path = "../hud/shell.rs"]
 mod shell;
 #[allow(dead_code)]
 #[path = "../hud/text.rs"]
 mod text;
-#[allow(dead_code)]
-#[path = "../hud/ui_layout.rs"]
-mod ui_layout;
 #[allow(dead_code)]
 #[path = "../hud/ui_tokens.rs"]
 mod ui_tokens;
@@ -112,9 +106,9 @@ mod ui_tokens;
 #[path = "../hud/wallpaper.rs"]
 mod wallpaper;
 
+use geom::Rect;
 use repeat::Repeat;
 use schemes::{CARD_W, FOOTER_H, PAD, SCHEMES};
-use settings_ui::Rect;
 use text::Align;
 use text::{SCALE, TextPainter};
 
@@ -362,7 +356,7 @@ impl SchemesApp {
     }
 }
 
-use settings_ui::Language;
+use settings::Language;
 
 /// Карточка со схемами: заголовок, плитки с точками и подписью, подсказки.
 fn paint(
@@ -801,7 +795,7 @@ fn run() -> Result<(), String> {
         keyboard: None,
         mods: Modifiers::default(),
         repeat: Repeat::default(),
-        painter: TextPainter::new(&settings_view::font_name(pixel)),
+        painter: TextPainter::new(&ui_tokens::font_name(pixel)),
         icons: TextPainter::new(settings_icons::FONT),
         model: Schemes::open(),
         ui,

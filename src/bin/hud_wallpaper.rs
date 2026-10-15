@@ -83,6 +83,12 @@ mod repeat;
 #[path = "../hud/anim.rs"]
 mod anim;
 #[allow(dead_code)]
+#[path = "../hud/canvas.rs"]
+mod canvas;
+#[allow(dead_code)]
+#[path = "../hud/geom.rs"]
+mod geom;
+#[allow(dead_code)]
 #[path = "../hud/schemes.rs"]
 mod schemes;
 #[allow(dead_code)]
@@ -91,23 +97,11 @@ mod settings;
 #[allow(dead_code)]
 #[path = "../hud/settings_icons.rs"]
 mod settings_icons;
-#[allow(dead_code)]
-#[path = "../hud/settings_ui.rs"]
-mod settings_ui;
-#[allow(dead_code)]
-#[path = "../hud/settings_view.rs"]
-mod settings_view;
-#[allow(dead_code)]
-#[path = "../hud/settings_widgets.rs"]
-mod settings_widgets;
 #[path = "../hud/shell.rs"]
 mod shell;
 #[allow(dead_code)]
 #[path = "../hud/text.rs"]
 mod text;
-#[allow(dead_code)]
-#[path = "../hud/ui_layout.rs"]
-mod ui_layout;
 #[allow(dead_code)]
 #[path = "../hud/ui_tokens.rs"]
 mod ui_tokens;
@@ -115,8 +109,8 @@ mod ui_tokens;
 #[path = "../hud/wallpaper.rs"]
 mod wallpaper;
 
+use geom::Rect;
 use repeat::Repeat;
-use settings_ui::Rect;
 use text::{SCALE, TextPainter};
 use wallpaper::input::{WpInput, click as click_at, motion as motion_at};
 use wallpaper::state::{Outcome, State};
@@ -863,7 +857,7 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
         keyboard: None,
         mods: Modifiers::default(),
         repeat: Repeat::default(),
-        painter: TextPainter::new(&settings_view::font_name(pixel)),
+        painter: TextPainter::new(&ui_tokens::font_name(pixel)),
         icons: TextPainter::new(settings_icons::FONT),
         state,
         ui,

@@ -77,6 +77,12 @@ mod anim;
 #[path = "../hud/apps/mod.rs"]
 mod apps;
 #[allow(dead_code)]
+#[path = "../hud/canvas.rs"]
+mod canvas;
+#[allow(dead_code)]
+#[path = "../hud/geom.rs"]
+mod geom;
+#[allow(dead_code)]
 #[path = "../hud/layer.rs"]
 mod layer;
 #[allow(dead_code)]
@@ -103,26 +109,11 @@ mod settings;
 #[allow(dead_code)]
 #[path = "../hud/settings_icons.rs"]
 mod settings_icons;
-#[allow(dead_code)]
-#[path = "../hud/settings_snapshot.rs"]
-mod settings_snapshot;
-#[allow(dead_code)]
-#[path = "../hud/settings_ui.rs"]
-mod settings_ui;
-#[allow(dead_code)]
-#[path = "../hud/settings_view.rs"]
-mod settings_view;
-#[allow(dead_code)]
-#[path = "../hud/settings_widgets.rs"]
-mod settings_widgets;
 #[path = "../hud/shell.rs"]
 mod shell;
 #[allow(dead_code)]
 #[path = "../hud/text.rs"]
 mod text;
-#[allow(dead_code)]
-#[path = "../hud/ui_layout.rs"]
-mod ui_layout;
 #[allow(dead_code)]
 #[path = "../hud/ui_tokens.rs"]
 mod ui_tokens;
@@ -133,10 +124,10 @@ mod wallpaper;
 use apps::keys::{self, Input};
 use apps::model::Model;
 use apps::{icons, launch, view};
+use geom::Rect;
 use menu::highlight;
 use menu::view::RowsHighlight;
 use repeat::Repeat;
-use settings_ui::Rect;
 use text::{SCALE, TextPainter};
 
 /// Пространство слоя: по нему правится размытие в `rules.kdl`.
@@ -801,7 +792,7 @@ fn event_loop() -> Result<(), String> {
         keyboard: None,
         mods: Modifiers::default(),
         repeat: Repeat::default(),
-        painter: TextPainter::new(&settings_view::font_name(pixel)),
+        painter: TextPainter::new(&ui_tokens::font_name(pixel)),
         icons: TextPainter::new(settings_icons::FONT),
         model,
         loader: icons::Loader::new(),

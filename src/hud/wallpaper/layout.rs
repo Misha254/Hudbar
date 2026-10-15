@@ -4,7 +4,7 @@
 //! (элемент внутри своей зоны, подпись внутри плитки), а не пиксели. Значения
 //! берутся из токенов `ui_tokens`, поэтому смена темы меняет и геометрию.
 
-use super::super::settings_ui::Rect;
+use super::super::geom::Rect;
 use super::super::ui_tokens::spacing;
 
 /// Ширина карточки окна.

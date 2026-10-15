@@ -1,4 +1,4 @@
-//! Текст окна настроек: измерение настоящих границ глифов и центрирование.
+//! Текст интерфейса: измерение настоящих границ глифов и центрирование.
 //!
 //! Раньше высота текстового блока бралась из заданной высоты строки
 //! (`size + 8`), а базовая линия считалась как `rect.y + (rect.h - (ascent +
@@ -13,8 +13,8 @@
 
 use std::collections::HashMap;
 
+use super::geom::Rect;
 use super::palette;
-use super::settings_ui::Rect;
 use cosmic_text::{
     Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent,
 };

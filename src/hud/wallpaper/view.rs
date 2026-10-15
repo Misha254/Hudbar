@@ -7,12 +7,11 @@
 
 use std::path::Path;
 
+use super::super::canvas::{self, BadgeKind, Ctx, fill_rect, fill_round_rect, stroke_rect};
+use super::super::geom::Rect;
 use super::super::palette;
 use super::super::settings::Language;
 use super::super::settings_icons;
-use super::super::settings_ui::Rect;
-use super::super::settings_view::{self, fill_rect, fill_round_rect, stroke_rect};
-use super::super::settings_widgets::{self, BadgeKind, Ctx};
 use super::super::text::{Align, SCALE, TextPainter};
 use super::super::ui_tokens::{self, UiPalette};
 use super::layout::{self, Area, Zones};
@@ -155,7 +154,7 @@ pub fn render_with(
         layout::CARD_W,
         layout::CARD_H,
     );
-    let mut text = TextPainter::new(&settings_view::font_name(pixel));
+    let mut text = TextPainter::new(&ui_tokens::font_name(pixel));
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, pixel, ui);
     let frame = Frame {
@@ -190,7 +189,7 @@ pub fn render_window(
     .expect("pixmap");
     pixmap.fill(tiny_skia::Color::TRANSPARENT);
     let card = Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H);
-    let mut text = TextPainter::new(&settings_view::font_name(pixel));
+    let mut text = TextPainter::new(&ui_tokens::font_name(pixel));
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, pixel, ui);
     let frame = Frame {
@@ -541,7 +540,7 @@ fn grid(canvas: &mut Canvas<'_, '_>, frame: &Frame<'_>, zones: Zones, ts: ui_tok
             if current {
                 let badge = layout::active_badge(thumb);
                 let mut ctx = canvas.ctx();
-                settings_widgets::badge(
+                canvas::badge(
                     &mut ctx,
                     badge,
                     super::strings::BADGE_ACTIVE,
@@ -809,7 +808,7 @@ mod tests {
         )
         .expect("pixmap");
         pixmap.fill(tiny_skia::Color::TRANSPARENT);
-        let mut text = TextPainter::new(&settings_view::font_name(pixel));
+        let mut text = TextPainter::new(&ui_tokens::font_name(pixel));
         let mut icons = TextPainter::new(settings_icons::FONT);
         let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, pixel, ui);
         let frame = Frame {
@@ -958,7 +957,7 @@ mod tests {
         let mut pixmap = tiny_skia::Pixmap::new(2400, 1600).expect("pixmap");
         let ui = ui_tokens::ui_palette(false, palette::Palette::default());
         let ts = ui_tokens::type_scale(false);
-        let mut text = TextPainter::new(&settings_view::font_name(false));
+        let mut text = TextPainter::new(&ui_tokens::font_name(false));
         let mut icons = TextPainter::new(settings_icons::FONT);
         let canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, false, ui);
         let card = Rect::new(

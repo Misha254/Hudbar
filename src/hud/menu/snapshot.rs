@@ -12,12 +12,12 @@
 //! кадра взят у оверлея меню в niri: 1200x800, этого хватает, чтобы увидеть
 //! и карточку, и поле вокруг неё.
 
+use super::super::geom::Rect;
 use super::super::palette;
 use super::super::settings_icons;
-use super::super::settings_ui::Rect;
 use super::super::text::Align;
 use super::super::text::{SCALE, TextPainter};
-use super::super::ui_tokens::radii;
+use super::super::ui_tokens::{font_name, radii};
 use super::demo_menu;
 use super::item::ItemKind;
 use super::state::Outcome;
@@ -142,7 +142,7 @@ pub fn render_menu_card(menu: &Menu, pixel: bool) -> tiny_skia::Pixmap {
     let mut pixmap =
         tiny_skia::Pixmap::new((card_w * SCALE) as u32, (card_h * SCALE) as u32).expect("pixmap");
     pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
-    let mut painter = TextPainter::new(&view::font_name(pixel));
+    let mut painter = TextPainter::new(&font_name(pixel));
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut window = MenuView {
         pixmap: &mut pixmap,
@@ -165,7 +165,7 @@ pub fn render_frame(frame: &Frame, pixel: bool) -> tiny_skia::Pixmap {
     let mut pixmap =
         tiny_skia::Pixmap::new((FRAME_W * SCALE) as u32, (FRAME_H * SCALE) as u32).expect("pixmap");
     backdrop(&mut pixmap, ui);
-    let mut painter = TextPainter::new(&view::font_name(pixel));
+    let mut painter = TextPainter::new(&font_name(pixel));
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut menu_view = MenuView {
         pixmap: &mut pixmap,
@@ -191,7 +191,7 @@ pub fn render_subject(subject: Subject, pixel: bool) -> tiny_skia::Pixmap {
     let mut pixmap =
         tiny_skia::Pixmap::new((FRAME_W * SCALE) as u32, (FRAME_H * SCALE) as u32).expect("pixmap");
     backdrop(&mut pixmap, ui);
-    let mut painter = TextPainter::new(&view::font_name(pixel));
+    let mut painter = TextPainter::new(&font_name(pixel));
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut menu_view = MenuView {
         pixmap: &mut pixmap,
@@ -267,9 +267,19 @@ fn backdrop(pixmap: &mut tiny_skia::Pixmap, ui: super::super::ui_tokens::UiPalet
     let _ = ui;
 }
 
-/// Запись буфера в PNG. Та же функция, что у окна настроек.
+/// Запись буфера в PNG. Буфер непрозрачный, поэтому альфа идёт как есть.
 pub fn write_png(pixmap: &tiny_skia::Pixmap, path: &std::path::Path) -> Result<(), String> {
-    super::super::settings_snapshot::write_png(pixmap, path)
+    let file = std::fs::File::create(path)
+        .map_err(|error| format!("не создался {}: {error}", path.display()))?;
+    let writer = std::io::BufWriter::new(file);
+    let mut encoder = png::Encoder::new(writer, pixmap.width(), pixmap.height());
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut png = encoder
+        .write_header()
+        .map_err(|error| format!("PNG: {error}"))?;
+    png.write_image_data(pixmap.data())
+        .map_err(|error| format!("PNG: {error}"))
 }
 
 /// Разбор `--snapshot <state> <out.png> [--theme normal|pixel]`.
@@ -345,7 +355,7 @@ pub fn render_icons(pixel: bool) -> tiny_skia::Pixmap {
     let height = ((140.0 + rows as f32 * cell_h) * SCALE) as u32;
     let mut pixmap = tiny_skia::Pixmap::new(width, height).expect("pixmap");
     pixmap.fill(ui.base.to_tiny());
-    let mut painter = TextPainter::new(&view::font_name(pixel));
+    let mut painter = TextPainter::new(&font_name(pixel));
     let mut icons = TextPainter::new(settings_icons::FONT);
     let title = Rect::new(24.0, 20.0, 400.0, 32.0);
     painter.paint(

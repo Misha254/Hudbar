@@ -24,9 +24,11 @@ settings, writes a backup before changing the canonical file, and leaves legacy 
 
 The window, its `hud-settings-rs` binary and the `hud-settings` wrapper are gone: the menu and
 the native keybind/wallpaper windows cover the settings it used to own, and nothing launched it.
-The shared UI layer (`settings_ui`, `settings_view`, `settings_snapshot`, `settings_widgets`)
-stays, because the menu, wallpaper, VPN and schemes windows are built on it. The stale paragraph
-The Wi-Fi, audio and Bluetooth stages it had covered are complete and live in the menu instead.
+Its leftover layout modules (`settings_ui`, `settings_view`, `settings_snapshot`,
+`settings_widgets`, `ui_layout`) are gone too: the menu, wallpaper, VPN and schemes windows only
+ever used the drawing primitives, the `Rect` geometry and the font name. Those now live in
+`src/hud/canvas.rs`, `src/hud/geom.rs` and `ui_tokens::font_name`. The Wi-Fi, audio and Bluetooth
+stages it had covered are complete and live in the menu instead.
 
 ## Deprecated active routes
 
