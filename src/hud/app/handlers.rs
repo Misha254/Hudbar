@@ -58,18 +58,28 @@ impl CompositorHandler for App {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        crate::hud::log::trace(format!(
+            "слой вошёл на вывод: {} → {}",
+            self.layer_kind(surface).name(),
+            describe_output(&self.output_state, output)
+        ));
     }
 
     fn surface_leave(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        crate::hud::log::trace(format!(
+            "слой вышел с вывода: {} → {}",
+            self.layer_kind(surface).name(),
+            describe_output(&self.output_state, output)
+        ));
     }
 }
 
@@ -78,9 +88,36 @@ impl OutputHandler for App {
         &mut self.output_state
     }
 
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        crate::hud::log::trace(format!(
+            "вывод появился: {}",
+            describe_output(&self.output_state, &output)
+        ));
+    }
+
+    fn update_output(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        crate::hud::log::trace(format!(
+            "вывод изменился: {}",
+            describe_output(&self.output_state, &output)
+        ));
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        crate::hud::log::trace(format!(
+            "вывод пропал: {}",
+            describe_output(&self.output_state, &output)
+        ));
+    }
 }
 
 impl SeatHandler for App {
@@ -310,13 +347,13 @@ impl KeyboardHandler for App {
     }
 }
 
-/// Какая поверхность панели совпала с закрытой композитором.
+/// Какой из наших слоёв совпал с поверхностью события.
 ///
-/// Отдельная чистая функция вместо разбора прямо в `closed()`: правило «какой
-/// слой чем обнуляется» проверяется тестом без композитора, без сокета и без
-/// живой `App`.
+/// Отдельная чистая функция вместо разбора прямо в обработчиках: правило
+/// «какой это слой» нужно и `closed()`, и `configure()`, и трассировке, а
+/// проверяется оно тестом без композитора, без сокета и без живой `App`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Closed {
+pub enum LayerKind {
     /// Панель: при отключении выхода её надо пересоздать.
     Panel,
     /// Popup или grab: оба закрывают всю связку панели.
@@ -328,34 +365,49 @@ pub enum Closed {
     Unknown,
 }
 
-/// Разбор закрытого слоя по совпадениям поверхностей.
+impl LayerKind {
+    /// Имя слоя для журнала: строки журнала читает человек, а `Debug`-имена
+    /// вариантов — нет.
+    pub fn name(self) -> &'static str {
+        match self {
+            LayerKind::Panel => "панель",
+            LayerKind::PopupOrGrab => "popup/grab",
+            LayerKind::Tooltip => "тултип",
+            LayerKind::Osd => "OSD",
+            LayerKind::Unknown => "чужой слой",
+        }
+    }
+}
+
+/// Разбор слоя по совпадениям поверхностей.
 ///
 /// Порядок повторяет прежнюю цепочку `if/else if`: панель проверяется первой,
 /// потому что её слой существует всегда и совпадает сам с собой.
-pub fn classify_closed(
+pub fn classify_layer(
     is_panel: bool,
     is_popup: bool,
     is_grab: bool,
     is_tooltip: bool,
     is_osd: bool,
-) -> Closed {
+) -> LayerKind {
     if is_panel {
-        Closed::Panel
+        LayerKind::Panel
     } else if is_popup || is_grab {
-        Closed::PopupOrGrab
+        LayerKind::PopupOrGrab
     } else if is_tooltip {
-        Closed::Tooltip
+        LayerKind::Tooltip
     } else if is_osd {
-        Closed::Osd
+        LayerKind::Osd
     } else {
-        Closed::Unknown
+        LayerKind::Unknown
     }
 }
 
-impl LayerShellHandler for App {
-    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        let surface = layer.wl_surface();
-        let closed = classify_closed(
+impl App {
+    /// Какой наш слой отвечает этой поверхности: та же пятёрка сравнений, что
+    /// и у разбора закрытого слоя, поэтому и живёт рядом.
+    fn layer_kind(&self, surface: &wl_surface::WlSurface) -> LayerKind {
+        classify_layer(
             surface == self.layer.wl_surface(),
             self.popup
                 .as_ref()
@@ -369,23 +421,50 @@ impl LayerShellHandler for App {
             self.osd
                 .as_ref()
                 .is_some_and(|o| surface == o.layer.wl_surface()),
-        );
+        )
+    }
+}
+
+/// Вывод одной строкой для журнала: `eDP-1 (1920x1080, масштаб 1)`.
+fn describe_output(state: &OutputState, output: &wl_output::WlOutput) -> String {
+    match state.info(output) {
+        Some(info) => describe_device(info.name.as_deref(), info.logical_size, info.scale_factor),
+        // У исчезающего вывода данных может не остаться: тогда подробностей
+        // нет, но событие всё равно видно.
+        None => "без данных".to_string(),
+    }
+}
+
+/// Сборка строки вывода: имя и режим приходят разными событиями, поэтому
+/// любая из частей может отсутствовать.
+fn describe_device(name: Option<&str>, size: Option<(i32, i32)>, scale: i32) -> String {
+    let name = name.unwrap_or("без имени");
+    match size {
+        Some((w, h)) => format!("{name} ({w}x{h}, масштаб {scale})"),
+        None => format!("{name} (масштаб {scale})"),
+    }
+}
+
+impl LayerShellHandler for App {
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
+        let closed = self.layer_kind(layer.wl_surface());
+        crate::hud::log::trace(format!("слой закрыт композитором: {}", closed.name()));
         match closed {
-            Closed::Panel => {
+            LayerKind::Panel => {
                 // Композитор закрыл surface панели. Обычно это отключение вывода
                 // (крышка ноутбука), а не конец сессии: пересоздаём панель, иначе
                 // после возврата выхода верхняя панель не вернётся никогда.
                 self.recreate_panel = true;
             }
-            Closed::PopupOrGrab => {
+            LayerKind::PopupOrGrab => {
                 self.panel = None;
                 self.popup = None;
                 self.grab = None;
             }
-            Closed::Tooltip => {
+            LayerKind::Tooltip => {
                 self.tooltip = None;
             }
-            Closed::Osd => {
+            LayerKind::Osd => {
                 // OSD — слой на своём выводе, и при отключении выхода композитор
                 // закрывает его так же, как панель. Раньше эта ветка отсутствовала:
                 // закрытый `LayerSurface` оставался в `self.osd`, `draw_osd`
@@ -395,7 +474,7 @@ impl LayerShellHandler for App {
                 self.osd = None;
                 self.shared.dirty.store(true, Ordering::Relaxed);
             }
-            Closed::Unknown => {}
+            LayerKind::Unknown => {}
         }
     }
 
@@ -407,6 +486,12 @@ impl LayerShellHandler for App {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
+        crate::hud::log::trace(format!(
+            "configure: {} {}x{}",
+            self.layer_kind(layer.wl_surface()).name(),
+            configure.new_size.0,
+            configure.new_size.1
+        ));
         if layer.wl_surface() == self.layer.wl_surface() {
             if configure.new_size.0 != 0 {
                 self.width = configure.new_size.0;
@@ -490,39 +575,39 @@ smithay_client_toolkit::delegate_dispatch2!(App);
 
 #[cfg(test)]
 mod tests {
-    use super::{Closed, classify_closed};
+    use super::{LayerKind, classify_layer, describe_device};
 
     #[test]
     fn the_closed_panel_is_recognised_first() {
         assert_eq!(
-            classify_closed(true, false, false, false, false),
-            Closed::Panel
+            classify_layer(true, false, false, false, false),
+            LayerKind::Panel
         );
         // Панель совпадает и с OSD, если слои перепутаны: порядок обязателен,
         // иначе панель потеряла бы пересоздание при отключении выхода.
         assert_eq!(
-            classify_closed(true, false, false, false, true),
-            Closed::Panel
+            classify_layer(true, false, false, false, true),
+            LayerKind::Panel
         );
     }
 
     #[test]
     fn popup_and_grab_both_close_the_whole_group() {
         assert_eq!(
-            classify_closed(false, true, false, false, false),
-            Closed::PopupOrGrab
+            classify_layer(false, true, false, false, false),
+            LayerKind::PopupOrGrab
         );
         assert_eq!(
-            classify_closed(false, false, true, false, false),
-            Closed::PopupOrGrab
+            classify_layer(false, false, true, false, false),
+            LayerKind::PopupOrGrab
         );
     }
 
     #[test]
     fn tooltip_is_its_own_case() {
         assert_eq!(
-            classify_closed(false, false, false, true, false),
-            Closed::Tooltip
+            classify_layer(false, false, false, true, false),
+            LayerKind::Tooltip
         );
     }
 
@@ -532,16 +617,45 @@ mod tests {
     #[test]
     fn a_closed_osd_layer_is_recognised() {
         assert_eq!(
-            classify_closed(false, false, false, false, true),
-            Closed::Osd
+            classify_layer(false, false, false, false, true),
+            LayerKind::Osd
         );
     }
 
     #[test]
     fn a_foreign_or_already_dropped_layer_changes_nothing() {
         assert_eq!(
-            classify_closed(false, false, false, false, false),
-            Closed::Unknown
+            classify_layer(false, false, false, false, false),
+            LayerKind::Unknown
         );
+    }
+
+    /// Имена слоёв уходят в журнал: пустая строка или чужое имя сделали бы
+    /// трассировку бесполезной.
+    #[test]
+    fn every_layer_has_a_name_for_the_log() {
+        let kinds = [
+            LayerKind::Panel,
+            LayerKind::PopupOrGrab,
+            LayerKind::Tooltip,
+            LayerKind::Osd,
+            LayerKind::Unknown,
+        ];
+        for kind in kinds {
+            assert!(!kind.name().is_empty());
+        }
+        assert_eq!(LayerKind::Unknown.name(), "чужой слой");
+    }
+
+    /// У вывода может не быть ни имени, ни размера: строка журнала обязана
+    /// собраться без них.
+    #[test]
+    fn an_output_without_data_still_has_a_line() {
+        assert_eq!(describe_device(None, None, 2), "без имени (масштаб 2)");
+        assert_eq!(
+            describe_device(Some("eDP-1"), Some((1920, 1080)), 1),
+            "eDP-1 (1920x1080, масштаб 1)"
+        );
+        assert_eq!(describe_device(Some("DP-2"), None, 2), "DP-2 (масштаб 2)");
     }
 }

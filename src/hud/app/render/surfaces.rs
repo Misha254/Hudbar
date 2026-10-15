@@ -2,6 +2,10 @@ use super::*;
 
 impl App {
     pub fn frame(&mut self) {
+        // Замер кадра: медленная перерисовка уходит в журнал строкой о
+        // бюджете. Самый долгий кадр — единственное, что видно со стороны
+        // панели, когда она дёргается.
+        let _frame = crate::hud::log::Frame::start("панель");
         self.regions.clear();
 
         if self.panel.is_some() && self.popup_t() <= 0.001 && self.popup_target() <= 0.001 {
@@ -150,6 +154,7 @@ impl App {
 
     pub fn destroy_tooltip(&mut self) {
         if self.tooltip.is_some() {
+            crate::hud::log::trace("слой уничтожен: тултип");
             self.tooltip = None;
             self.shared.dirty.store(true, Ordering::Relaxed);
         }
@@ -218,6 +223,7 @@ impl App {
                 .set_input_region(Some(region.wl_region()));
         }
         layer.commit();
+        crate::hud::log::trace(format!("слой создан: тултип {}x{}", w as u32, h));
         self.tooltip = Some(Tooltip {
             layer,
             configured: false,
@@ -299,6 +305,9 @@ impl App {
     }
 
     pub fn destroy_popup(&mut self) {
+        if self.panel.is_some() || self.grab.is_some() {
+            crate::hud::log::trace("слой уничтожен: popup/grab");
+        }
         self.panel = None;
         self.popup = None;
         self.grab = None;
@@ -425,6 +434,7 @@ impl App {
             configured: false,
             size: (w as u32, h),
         });
+        crate::hud::log::trace(format!("слой создан: панель управления {w}x{h}"));
         self.shared.dirty.store(true, Ordering::Relaxed);
     }
 

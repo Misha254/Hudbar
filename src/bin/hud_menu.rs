@@ -80,6 +80,7 @@ mod anim;
 #[allow(dead_code)]
 #[path = "../hud/layer.rs"]
 mod layer;
+#[allow(dead_code)]
 #[path = "../hud/log.rs"]
 mod log;
 #[allow(dead_code)]
@@ -472,6 +473,7 @@ impl MenuApp {
 
     /// Рисует кадр и отдаёт буфер слою.
     fn draw(&mut self) {
+        let _frame = log::Frame::start("меню");
         // Степень проявления окна на текущий момент. Считается один раз на
         // кадр и уходит в общий множитель альфы.
         let now = std::time::Instant::now();
