@@ -2109,7 +2109,7 @@ mod tests {
         assert_eq!(input.masked(), "");
     }
 
-    /// Подтверждение собирает команду с секретным аргументом, кладёт её в
+    /// Подтверждение собирает команду с секретом на stdin, кладёт её в
     /// очередь worker-а, помечает строку занятой и выбрасывает буфер.
     #[test]
     fn submit_queues_a_secret_command_and_clears_the_buffer() {
@@ -2130,10 +2130,15 @@ mod tests {
         // дерева, по которому построены строки.
         assert_eq!(jobs[0].refresh, ProviderKey::WIFI);
         let line = jobs[0].commands[0].log_line();
-        assert!(line.contains("nmcli device wifi connect"), "{line}");
+        assert!(line.contains("nmcli --ask device wifi connect"), "{line}");
         assert!(
             !line.contains("тихийпароль"),
             "пароль ушёл в очередь: {line}"
+        );
+        assert_eq!(
+            jobs[0].commands[0].stdin_bytes(),
+            Some("тихийпароль".as_bytes()),
+            "пароль должен уехать на stdin"
         );
         assert!(jobs[0].commands[0].has_secrets());
         assert_eq!(
@@ -2208,6 +2213,7 @@ mod tests {
     }
 
     /// Пустой пароль отправляется как есть: правил паролей тут не изобретаем.
+    /// Пустой stdin — это ровно то, что ввели.
     #[test]
     fn empty_password_is_sent_to_nmcli_unchanged() {
         let mut menu = wifi_password_menu();
@@ -2215,8 +2221,7 @@ mod tests {
         assert_eq!(menu.submit_secret_input(), Outcome::Changed);
         let jobs = menu.take_pending_commands();
         assert_eq!(jobs.len(), 1);
-        let (_, args) = jobs[0].commands[0].argv();
-        assert_eq!(args.last().map(String::as_str), Some(""));
+        assert_eq!(jobs[0].commands[0].stdin_bytes(), Some(&[][..]));
         assert!(jobs[0].commands[0].has_secrets());
     }
 

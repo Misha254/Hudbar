@@ -92,18 +92,20 @@ chromium. Не хватает:
   `hud-telegram-rs`, systemd-юниты `hud-telegram` и `opencode-serve` и Mini App
   вынесены из сборки. Ветка `telegram-bridge-backup` сохраняет прежнее
   состояние; идея, как управлять opencode с телефона иначе, пока открыта.
-- Secret hardening: инфраструктура stdin **готова и покрыта тестами** —
-  `SecretData` с красным `Debug`, `CommandSpec::stdin`, `stdin_bytes`,
-  и `run_with_timeout_stdin`, который пишет секрет в pipe отдельным потоком и
-  не зависает, если команда stdin не читает. Осталось одно: `connect_with_password`
-  в `src/hud/menu/wifi.rs` по-прежнему зовёт `.secret_arg(password)`, то есть
-  пароль уходит в `argv` и виден в `ps` / `/proc/<pid>/cmdline`.
-  **Развилка до кода:** `nmcli` не умеет читать пароль из stdin (проверено на
-  `nmcli 1.58.1`: нет ни `--password-stdin`, ни другого входа; `--ask`
-  спрашивает недостающие параметры, но на несуществующей сети сначала ищет
-  саму сеть). Варианты: оставить `secret_arg` и задокументировать исключение,
-  либо писать пароль в keyring/файл и подключаться через сохранённый профиль.
-- Ограничение клонирования: `CmdArg::Secret(String)` клонируется вместе с
+- Secret hardening: пароля Wi-Fi больше нет в `argv`. `connect_with_password`
+  в `src/hud/menu/wifi.rs` собирает `nmcli --ask device wifi connect <SSID>` и
+  кладёт пароль в stdin (`SecretData`): `ps` и `/proc/<pid>/cmdline` его не
+  видят, журнал знает только `<stdin redacted>`, а `stderr` команды с секретом
+  не пишется вовсе (nmcli умеет вернуть в сообщении сам пароль —
+  `'%s' is not valid WPA PSK`). Почему хватает pipe: `--ask` разрешает nmcli
+  спросить недостающий секрет, а спрашивает он через readline поверх stdin
+  (`nmc_readline_echo` в NetworkManager), pty не нужен. Догадки по слову
+  `password` убраны из обоих журналов (`log::command_line`,
+  `CommandSpec::log_line`): прячет пометка. Проверено живьём 15.10.2026
+  (`nmcli` 1.58.1, сеть `HONOR 200`): промпт `Password (802-11-wireless-security.psk)`
+  прочитан из pipe, подключение прошло, а `ps` за минуту наблюдения показал
+  только `nmcli --ask device wifi connect <SSID>` — пароля в `argv` не было.
+- Ограничение клонирования: `SecretData(Vec<u8>)` клонируется вместе с
   командой, потому что так устроен `Action`. Правило сейчас: секрет
   копируется только внутрь команды при submit и никогда — наружу в текст.
 - Мелочи: анимации, курсор после обновления, звук, шрифты.
@@ -125,7 +127,7 @@ chromium. Не хватает:
 2. «Управление устройствами»: предложение — USB-накопители и диски через
    udisksctl (udiskie не стоит), сетевые адаптеры. (решено: `udisksctl`,
    см. `src/hud/menu/storage.rs`)
-3. Secret Wi-Fi: оставить `secret_arg` в `argv` или уйти в keyring/файл,
-   раз `nmcli` не читает stdin. (открыто, до кода)
+3. Secret Wi-Fi: закрыто — пароль уходит на stdin (`nmcli --ask`, см. F,
+   «Secret hardening»), проверено живьём 15.10.2026.
 
 Каждая стадия заканчивается отчётом: `fmt`/`check`/`clippy`/`test`/`diff check`.
