@@ -7,11 +7,11 @@
 //! помечена «выполняется».
 //!
 //! Пароли вводятся через [`Action::SecretInput`](super::action::Action):
-//! защищённая сеть без профиля открывает поле ввода, а после `Enter` команда
-//! `nmcli device wifi connect <SSID> password <PASSWORD>` собирается с
-//! паролем как `CmdArg::Secret` — в журналах и `Debug` его нет, но в `argv`
-//! процесса он попадает (см. `secret`). Открытые сети и сети с сохранённым
-//! профилем подключаются без ввода.
+//! защищённая сеть без профиля открывает поле ввода, а после `Enter`
+//! собирается `nmcli --ask device wifi connect <SSID>`, где пароль едет по
+//! stdin (`SecretData`) — ни в `argv`, ни в журналах, ни в `Debug` его нет
+//! (см. `secret`). Открытые сети и сети с сохранённым профилем подключаются
+//! без ввода.
 //!
 //! Безопасность argv. SSID приходит из эфира и может содержать пробелы,
 //! кавычки, `:`, `\\` и начинаться с `-`. Поэтому:
@@ -29,8 +29,8 @@ use super::secret::SecretTarget;
 use super::settings::Language;
 use super::settings_icons;
 use super::system::{
-    CommandError, CommandRunner, CommandSpec, ProviderError, ProviderKey, SystemCommandRunner,
-    SystemProvider,
+    CommandError, CommandRunner, CommandSpec, ProviderError, ProviderKey, SecretData,
+    SystemCommandRunner, SystemProvider,
 };
 use super::tree::Node;
 use std::time::Duration;
@@ -543,17 +543,22 @@ pub fn connect_open_action(ssid: &str) -> Action {
 }
 
 /// Подключение к защищённой сети с паролем:
-/// `nmcli device wifi connect <SSID> password <PASSWORD>`.
+/// `nmcli --ask device wifi connect <SSID>`, пароль — по stdin.
 ///
-/// SSID — отдельный `CmdArg::Plain`, пароль — `CmdArg::Secret`. Shell не
-/// используется. ВНИМАНИЕ: `CmdArg::Secret` прячет значение от журналов,
-/// статусов и `Debug`, но не от `ps` или `/proc/<pid>/cmdline`: секрет
-/// физически передаётся в `argv`. От того, чтобы его там не было, спасает
-/// только stdin, и это отдельная задача.
+/// Пароля нет ни в `argv` (а значит, и в `ps` с `/proc/<pid>/cmdline`), ни в
+/// журнале: `--ask` разрешает nmcli спросить недостающий секрет, а спрашивает
+/// он через readline поверх stdin (`nmc_readline_echo` в NetworkManager), так
+/// что хватает pipe — pty не нужен.
+///
+/// Отсюда следствие для вызывающего: `stderr` этой команды нельзя писать в
+/// журнал как есть — nmcli умеет вернуть в сообщении сам пароль
+/// (`'%s' is not valid WPA PSK`). Строка журнала у описания своя,
+/// с `<stdin redacted>`.
 ///
 /// Правило для SSID с ведущим дефисом — то же, что у открытой сети в W5.2a.
 pub fn connect_with_password(ssid: &str, password: &str) -> CommandSpec {
     let mut command = CommandSpec::new("nmcli")
+        .arg("--ask")
         .arg("device")
         .arg("wifi")
         .arg("connect");
@@ -562,8 +567,7 @@ pub fn connect_with_password(ssid: &str, password: &str) -> CommandSpec {
     }
     command
         .arg(ssid)
-        .arg("password")
-        .secret_arg(password)
+        .stdin(SecretData::from_str(password))
         .with_timeout(CONNECT_TIMEOUT)
 }
 
@@ -1321,32 +1325,23 @@ mod tests {
         );
     }
 
-    /// Подключение с паролем: SSID — обычный аргумент, пароль — секретный.
-    /// Никакого `sh -c`, пароля в строке журнала нет.
+    /// Подключение с паролем: пароля нет ни в `argv` (его не увидит `ps`),
+    /// ни в журнале — он уезжает по stdin вместе с `--ask`.
     #[test]
     fn connect_with_password_keeps_the_password_out_of_every_text() {
         let spec = connect_with_password("HONOR 200", "тихийпароль");
         let (program, args) = spec.argv();
         assert_eq!(program, "nmcli");
-        assert_eq!(
-            args,
-            [
-                "device",
-                "wifi",
-                "connect",
-                "HONOR 200",
-                "password",
-                "тихийпароль"
-            ]
-        );
+        assert_eq!(args, ["--ask", "device", "wifi", "connect", "HONOR 200"]);
         assert!(
             !args.iter().any(|arg| arg == "-c" || arg.contains("sh -c")),
             "shell не используется"
         );
+        assert_eq!(spec.stdin_bytes(), Some("тихийпароль".as_bytes()));
         let line = spec.log_line();
-        assert!(line.contains("nmcli device wifi connect"), "{line}");
+        assert!(line.contains("nmcli --ask device wifi connect"), "{line}");
         assert!(!line.contains("тихийпароль"), "пароль в log_line: {line}");
-        assert!(line.contains("<redacted>"), "{line}");
+        assert!(line.contains("<stdin redacted>"), "{line}");
         let debug = format!("{spec:?}");
         assert!(!debug.contains("тихийпароль"), "пароль в Debug: {debug}");
         assert!(spec.has_secrets());
@@ -1360,33 +1355,29 @@ mod tests {
         for (ssid, expected) in [
             (
                 "My:Network",
-                vec!["device", "wifi", "connect", "My:Network", "password"],
+                vec!["--ask", "device", "wifi", "connect", "My:Network"],
             ),
             (
                 "Дом \\ принтер",
-                vec!["device", "wifi", "connect", "Дом \\ принтер", "password"],
+                vec!["--ask", "device", "wifi", "connect", "Дом \\ принтер"],
             ),
             (
                 "HONOR 200",
-                vec!["device", "wifi", "connect", "HONOR 200", "password"],
+                vec!["--ask", "device", "wifi", "connect", "HONOR 200"],
             ),
             (
                 "-dash-net",
-                vec!["device", "wifi", "connect", "--", "-dash-net", "password"],
+                vec!["--ask", "device", "wifi", "connect", "--", "-dash-net"],
             ),
             (
                 "Сеть Wi-Fi",
-                vec!["device", "wifi", "connect", "Сеть Wi-Fi", "password"],
+                vec!["--ask", "device", "wifi", "connect", "Сеть Wi-Fi"],
             ),
         ] {
             let spec = connect_with_password(ssid, "pw");
             let (_, args) = spec.argv();
-            assert_eq!(
-                &args[..expected.len()],
-                expected.as_slice(),
-                "SSID {ssid:?}"
-            );
-            assert_eq!(args.len(), expected.len() + 1, "после SSID идёт пароль");
+            assert_eq!(args, expected, "SSID {ssid:?}");
+            assert_eq!(spec.stdin_bytes(), Some("pw".as_bytes()), "SSID {ssid:?}");
             assert!(
                 !spec.log_line().contains("pw") || ssid.contains("pw"),
                 "{ssid:?}"
@@ -1395,18 +1386,19 @@ mod tests {
     }
 
     /// Пустой пароль не запрещаем: NetworkManager сам решит, допустим ли он.
-    /// Важно, что он всё равно уходит секретным аргументом, а не пустым
-    /// `Plain`.
+    /// Важно, что он всё равно уезжает по stdin, а не пустым аргументом.
     #[test]
-    fn empty_password_is_still_a_secret_argument() {
+    fn empty_password_still_travels_by_stdin() {
         let spec = connect_with_password("open-ish", "");
         let (_, args) = spec.argv();
-        assert_eq!(
-            args,
-            ["device", "wifi", "connect", "open-ish", "password", ""]
-        );
+        assert_eq!(args, ["--ask", "device", "wifi", "connect", "open-ish"]);
+        assert_eq!(spec.stdin_bytes(), Some(&[][..]));
         assert!(spec.has_secrets());
-        assert!(!spec.log_line().contains("Plain"), "{}", spec.log_line());
+        assert!(
+            spec.log_line().contains("<stdin redacted>"),
+            "{}",
+            spec.log_line()
+        );
     }
 
     #[test]

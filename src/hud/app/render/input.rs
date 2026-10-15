@@ -301,7 +301,7 @@ impl App {
                     if n.in_use {
                         data::wifi_disconnect(&self.shared);
                     } else if n.security.is_empty() || n.security == "--" {
-                        data::wifi_connect(&self.shared, &n.ssid, false);
+                        data::wifi_connect(&self.shared, &n.ssid);
                     } else if let Some(pn) = self.panel.as_mut() {
                         pn.view = PanelView::Password {
                             ssid: n.ssid.clone(),

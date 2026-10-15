@@ -15,17 +15,14 @@
 //!     размножить случайным `.clone()` состояния. Наружу уходит только
 //!     [`SecretFrame`] с маской из точек, а при подтверждении буфер
 //!     переезжает в команду через [`SecretInput::into_parts`];
-//!   * [`CmdArg::Secret`](super::system::CmdArg) — дальше пароль живёт внутри
-//!     `CommandSpec`, затем в `CommandJob` очереди worker-а и, наконец, в
-//!     настоящем `argv` дочернего процесса. UI-буфера после submit уже нет,
-//!     но «пароль полностью исчез» — неправда: он временно существует в
-//!     команде и виден через `ps`/`/proc/<pid>/cmdline`.
+//!   * [`SecretData`](super::system::SecretData) — дальше пароль живёт внутри
+//!     `CommandSpec` как stdin команды: в `argv` дочернего процесса он не
+//!     попадает вовсе, а в журнал и `Debug` — по типу (`log_line`), не по
+//!     догадке.
 //!
-//! Чего `CmdArg::Secret` не делает: значение всё равно попадает в `argv`
-//! дочернего процесса, а значит доступно тому, кто читает `/proc/<pid>/cmdline`
-//! или `ps`. Секрет скрыт от журналов, статусов, `Debug` и снимков — но не от
-//! просмотра процессов. Настоящая защита от этого — stdin, и это отдельная
-//! задача, а не то, что здесь сделано.
+//! Секрет всё ещё ходит по памяти процесса (буфер → `SecretData` → pipe), но
+//! ни в `argv`, ни в журнале, ни в снимках его нет: подсмотреть его через
+//! `ps` или `/proc/<pid>/cmdline` нельзя.
 
 use super::settings::Language;
 use super::system::{CommandSpec, ProviderKey};
@@ -77,9 +74,9 @@ impl SecretTarget {
         }
     }
 
-    /// Команда для этого секрета. Пароль переезжает в `CommandSpec` как
-    /// `CmdArg::Secret`: в UI-буфере его после этого нет, но в команде,
-    /// очереди и `argv` процесса он временно живёт — см. модуль.
+    /// Команда для этого секрета. Пароль переезжает в `CommandSpec` на stdin
+    /// (`SecretData`): в UI-буфере и в `argv` процесса его после этого нет —
+    /// см. модуль.
     pub fn command(&self, password: &str) -> CommandSpec {
         match self {
             SecretTarget::Wifi { ssid, .. } => super::wifi::connect_with_password(ssid, password),
@@ -290,8 +287,8 @@ mod tests {
     }
 
     /// Submit переезжает владением, а не клонированием: `into_parts`
-    /// расходует ввод целиком. Пароль оказывается секретным аргументом
-    /// команды (настоящий `argv`), но ни в журнале, ни в `Debug` его нет.
+    /// расходует ввод целиком. Пароль оказывается stdin команды — в `argv`,
+    /// журнале и `Debug` его нет.
     #[test]
     fn submit_moves_the_buffer_into_the_command_without_cloning() {
         let target = SecretTarget::wifi("HONOR 200", "wifi/net/HONOR 200");
@@ -303,7 +300,11 @@ mod tests {
         let spec = target.command(&password);
         let (program, args) = spec.argv();
         assert_eq!(program, "nmcli");
-        assert_eq!(args.last().map(String::as_str), Some("тихийпароль"));
+        assert!(
+            !args.iter().any(|arg| arg.contains("тихийпароль")),
+            "пароль в argv: {args:?}"
+        );
+        assert_eq!(spec.stdin_bytes(), Some("тихийпароль".as_bytes()));
         assert!(spec.has_secrets());
         assert!(
             !spec.log_line().contains("тихийпароль"),

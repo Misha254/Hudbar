@@ -6,13 +6,11 @@
 //! кадр, а запрос на каждый hover/scroll плодил бы процессы. Поэтому здесь три
 //! маленькие вещи вместо фреймворка:
 //!
-//! * `CommandSpec` — что запустить: программа, аргументы без shell и
-//!   секретный аргумент с отредактированным представлением для логов.
-//!   Пароль Wi-Fi сейчас идёт через `CmdArg::Secret`, то есть в `argv`
-//!   процесса; скрыт он только от журналов, статусов, `Debug` и снимков.
-//!   Механизм stdin (`SecretData` + `run_with_timeout_stdin`) написан и
-//!   покрыт тестами, но `nmcli` пароль из stdin не читает — см. развилку
-//!   в `docs/ROADMAP.md`, раздел F.
+//! * `CommandSpec` — что запустить: программа, аргументы без shell и секрет
+//!   (`SecretData` на stdin либо помеченный `CmdArg::Secret`), скрытый от
+//!   `Debug`, статусов, журнала и снимков. Пароль Wi-Fi едет по stdin
+//!   (`nmcli --ask` читает его оттуда), поэтому в `argv` его нет вовсе —
+//!   ни в `ps`, ни в `/proc/<pid>/cmdline`;
 //! * `CommandRunner` — как запустить: timeout, process group cleanup и
 //!   записывающий `ScriptedRunner` для тестов;
 //! * `ProviderSlot` — где лежит результат: поколение отсекает устаревшие
@@ -29,6 +27,7 @@ use std::collections::VecDeque;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use super::super::log;
 use super::settings::Language;
 use super::settings_icons;
 use super::tree::Node;
@@ -71,8 +70,9 @@ impl ProviderKey {
 
 /// Аргумент команды: обычное значение или секрет. Секрет не попадает в
 /// `Debug`, статус, журнал и снимок — но в настоящий `argv` попадает, а значит
-/// виден в списке процессов. Убрать это можно только через stdin (механизм
-/// есть в `SecretData`), но `nmcli` пароль из stdin не читает.
+/// виден в списке процессов. Поэтому пароль Wi-Fi идёт не сюда, а в
+/// [`SecretData`] (stdin); пометка нужна только тем командам, которые stdin
+/// не принимают.
 ///
 /// Про `Clone`: он нужен архитектуре (`Action` и дерево клонируются целиком),
 /// поэтому `CmdArg::Secret(String)` технически клонируем вместе с командой.
@@ -109,11 +109,10 @@ impl std::fmt::Debug for CmdArg {
     }
 }
 
-/// Байты на stdin команды. Механизм готов и покрыт тестами, но пароль Wi-Fi
-/// пока уходит через `CmdArg::Secret`, то есть в `argv`: значение скрыто от
-/// журналов, статусов и `Debug`, но доступно тому, кто читает `argv` процесса
-/// (`/proc/<pid>/cmdline`, `ps`). Перевести на stdin мешает `nmcli`: пароль из
-/// stdin он не принимает. `Debug` здесь показывает длину.
+/// Байты на stdin команды: сюда уходит пароль Wi-Fi, чтобы его не увидел
+/// `ps` вместе с `/proc/<pid>/cmdline`. `nmcli` читает пароль из stdin с
+/// `--ask` (спрашивает через readline), обычные чтения вроде
+/// `nmcli device wifi list` stdin не трогают. `Debug` здесь показывает длину.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretData(Vec<u8>);
 
@@ -179,7 +178,11 @@ impl CommandSpec {
     }
 
     /// Секретный аргумент: в `argv` как есть, в логах — `<redacted>`.
-    /// Предпочтительнее stdin, но некоторые команды секрета иначе не берут.
+    ///
+    /// Сейчас таких команд нет: пароль Wi-Fi ушёл на stdin (`SecretData`), и
+    /// в `ps` его больше не видно. Пометка остаётся для команды, которая
+    /// секрет из stdin не берёт; тогда это единственный способ не вывалить
+    /// его в журнал — но помнить, что `argv` процесса читают все.
     pub fn secret_arg(mut self, value: &str) -> Self {
         self.args.push(CmdArg::Secret(value.to_string()));
         self
@@ -221,17 +224,16 @@ impl CommandSpec {
 
     /// Строка для журнала и статусов: секреты заменены на `<redacted>`,
     /// аргументы с пробелами — в кавычках, как в `log::command_line`.
+    ///
+    /// Прячется только помеченное (`CmdArg::Secret`, `SecretData`): угадывать
+    /// секрет по соседнему слову `password` нельзя — у команды может быть
+    /// другой ключ (`--psk`, `--token`), а ошибка стоит утечки в журнал.
     pub fn log_line(&self) -> String {
         let mut parts = vec![self.program.clone()];
-        let mut secret_next = false;
         for arg in &self.args {
-            // Совместимость со старым правилом журнала: значение после
-            // `password` прячется, даже если его забыли пометить секретом.
-            let text = if arg.is_secret() || secret_next || arg.value() == "password" {
-                secret_next = arg.value() == "password" && !arg.is_secret();
+            let text = if arg.is_secret() {
                 "<redacted>"
             } else {
-                secret_next = false;
                 arg.value()
             };
             parts.push(if text.contains(char::is_whitespace) {
@@ -367,9 +369,38 @@ impl CommandRunner for SystemCommandRunner {
     }
 }
 
+/// Выполнить команду и записать в журнал только отказ: строку берём у
+/// описания, где секреты уже заменены по типу.
+///
+/// `stderr` команды с секретом не пишется вовсе — `nmcli` умеет вернуть в
+/// сообщении сам пароль (`'%s' is not valid WPA PSK`), а журнал переживёт и
+/// сессию. У остальных команд поведение то же, что у `log::output`.
+///
+/// Таймаут берётся у описания: команда сама знает, сколько ей нужно
+/// (подключение к сети — секунды, чтение списка — нет).
+pub fn run_logged(spec: &CommandSpec) {
+    let runner = SystemCommandRunner::with_timeout(spec.timeout());
+    match runner.run(spec) {
+        Ok(output) if output.success() => {}
+        Ok(output) => {
+            let stderr = if spec.has_secrets() {
+                String::new()
+            } else {
+                format!(" stderr={}", output.stderr.trim())
+            };
+            log::warn(format!(
+                "command failed ({}) exit={:?}{stderr}",
+                spec.log_line(),
+                output.status
+            ));
+        }
+        Err(error) => log::warn(format!("command failed ({}): {error}", spec.log_line())),
+    }
+}
+
 /// Записывающий исполнитель для тестов: отдаёт ответы по сценарию и пишет
-/// только отредактированные строки — секрет из `argv` в записях не должен
-/// появиться ни разу. Реальных процессов не запускает.
+/// только отредактированные строки — секрета в записях не должно быть ни
+/// разу. Реальных процессов не запускает.
 pub struct ScriptedRunner {
     calls: std::cell::RefCell<Vec<String>>,
     script: std::cell::RefCell<VecDeque<Result<CommandOutput, CommandError>>>,
@@ -784,45 +815,67 @@ mod tests {
         assert!(!CommandSpec::new("true").has_secrets());
     }
 
-    /// Секреты не светятся ни в `Debug`, ни в строке журнала, но едут в argv.
+    /// Помеченный секрет не светится ни в `Debug`, ни в строке журнала — даже
+    /// если у команды нет слова `password`: прячет тип, а не догадка по слову.
     #[test]
-    fn secrets_are_redacted_everywhere_except_argv() {
-        let spec = CommandSpec::new("nmcli")
-            .arg("connect")
+    fn a_marked_secret_is_redacted_under_any_key() {
+        let spec = CommandSpec::new("vpn")
+            .arg("--psk")
             .secret_arg("s3cr3t-pw")
             .stdin(SecretData::from_str("s3cr3t-pw"));
         let debug = format!("{spec:?}");
         assert!(!debug.contains("s3cr3t-pw"), "секрет в Debug: {debug}");
         let line = spec.log_line();
         assert!(!line.contains("s3cr3t-pw"), "секрет в журнале: {line}");
-        assert!(line.contains("<redacted>"), "нет метки: {line}");
+        assert!(line.contains("--psk <redacted>"), "нет метки: {line}");
+        assert!(line.contains("<stdin redacted>"), "нет метки stdin: {line}");
         let (_, args) = spec.argv();
         assert!(
             args.contains(&"s3cr3t-pw".to_string()),
-            "секрет потерян из argv"
+            "исполнителю секрет не дошёл"
         );
     }
 
-    /// Старое правило журнала живо: значение после `password` прячется, даже
-    /// если его забыли пометить секретом.
+    /// Секрет на stdin в `argv` не попадает вовсе: так уходит пароль Wi-Fi,
+    /// и `ps` с `/proc/<pid>/cmdline` его не видят.
     #[test]
-    fn password_value_is_redacted_even_when_unmarked() {
-        let spec = CommandSpec::new("nmcli").arg("password").arg("oops");
+    fn a_stdin_secret_never_reaches_argv() {
+        let spec = CommandSpec::new("nmcli")
+            .arg("--ask")
+            .stdin(SecretData::from_str("тихийпароль"));
+        let (_, args) = spec.argv();
+        assert!(
+            !args.iter().any(|arg| arg.contains("тихийпароль")),
+            "секрет в argv: {args:?}"
+        );
         let line = spec.log_line();
-        assert!(!line.contains("oops"), "пароль в журнале: {line}");
-        assert!(line.contains("<redacted>"));
+        assert!(!line.contains("тихийпароль"), "секрет в журнале: {line}");
+        assert!(line.contains("<stdin redacted>"), "{line}");
+    }
+
+    /// Журнал правит по пометке, а не по слову: `password` в аргументах —
+    /// просто слово, зато помеченное прячется под любым ключом. Правило по
+    /// слову молча ломалось на первой же команде с другим ключом.
+    #[test]
+    fn the_journal_redacts_by_mark_not_by_word() {
+        let unmarked = CommandSpec::new("nmcli").arg("password").arg("oops");
+        assert_eq!(unmarked.log_line(), "nmcli password oops");
+
+        let marked = CommandSpec::new("vpn").arg("--token").secret_arg("oops");
+        assert_eq!(marked.log_line(), "vpn --token <redacted>");
     }
 
     /// Записывающий исполнитель пишет отредактированное и отдаёт по сценарию.
     #[test]
     fn scripted_runner_records_redacted_and_replays() {
         let runner = ScriptedRunner::new(vec![ok_output("vol=42 muted=0")]);
-        let spec = CommandSpec::new("wpctl").secret_arg("pw");
+        let spec = CommandSpec::new("wpctl").stdin(SecretData::from_str("pw"));
         let output = runner.run(&spec).expect("ответ по сценарию");
         assert!(output.success());
         assert_eq!(runner.call_count(), 1);
         let calls = runner.calls();
         assert!(!calls[0].contains("pw"), "секрет в записи: {:?}", calls);
+        assert!(calls[0].contains("<stdin redacted>"), "{:?}", calls);
     }
 
     /// Пустой сценарий — честная ошибка, а не паника и не успех.

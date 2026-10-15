@@ -184,12 +184,18 @@ impl Drop for Frame {
     }
 }
 
+/// Строка команды для журнала: программа и аргументы, аргументы с пробелами —
+/// в кавычках.
+///
+/// Секретов здесь нет и быть не должно: сюда попадают только команды чтения, а
+/// всё, что несёт секрет, собирается как `CommandSpec` — там секрет помечен
+/// типом (`SecretData`, `CmdArg::Secret`) и в строку журнала не попадает.
+/// Угадывать секрет по соседнему слову (`password`) нельзя: ключ у команды
+/// может быть любой, и правило молча ломается.
 fn command_line(program: &str, args: &[&str]) -> String {
     let mut parts = Vec::with_capacity(args.len() + 1);
     parts.push(program.to_string());
-    for (index, part) in args.iter().enumerate() {
-        let redacted = index > 0 && args[index - 1] == "password";
-        let part = if redacted { "<redacted>" } else { part };
+    for part in args {
         parts.push(if part.contains(char::is_whitespace) {
             format!("{part:?}")
         } else {
@@ -236,15 +242,13 @@ mod tests {
         status, trace_wanted,
     };
 
+    /// Аргументы с пробелами берутся в кавычки: строка журнала должна читаться
+    /// так же однозначно, как `argv`.
     #[test]
-    fn redacts_password_arguments() {
-        let line = command_line(
-            "nmcli",
-            &["dev", "wifi", "connect", "Cafe", "password", "secret"],
-        );
+    fn whitespace_arguments_are_quoted() {
+        let line = command_line("nmcli", &["dev", "wifi", "connect", "Дом принтер"]);
 
-        assert!(line.contains("<redacted>"));
-        assert!(!line.contains("secret"));
+        assert_eq!(line, "nmcli dev wifi connect \"Дом принтер\"");
     }
 
     /// Главный поток панели ждёт внешнюю команду синхронно: без предела
