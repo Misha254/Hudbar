@@ -183,8 +183,20 @@ mod tests {
         for pid in foreign {
             let dir = root.0.join(pid.to_string());
             std::fs::create_dir_all(&dir).expect("proc pid");
-            std::os::unix::fs::symlink("/usr/bin/kitty", dir.join("exe")).expect("foreign link");
+            std::os::unix::fs::symlink(foreign_binary(root), dir.join("exe"))
+                .expect("foreign link");
         }
+    }
+
+    /// Чужой бинарник: настоящий файл рядом с поддельным `/proc`. Ссылка на
+    /// несуществующий путь не годится: `exists` идёт по ссылке, и на машине
+    /// без программы (скажем, на раннере CI) живой pid выглядел бы мёртвым.
+    fn foreign_binary(dir: &TempDir) -> PathBuf {
+        let path = dir.join("kitty");
+        if !path.exists() {
+            std::fs::write(&path, b"binary").expect("foreign binary");
+        }
+        path
     }
 
     /// Наш бинарник: настоящий файл, на который будут указывать ссылки.

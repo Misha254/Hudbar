@@ -59,19 +59,28 @@ fn has_kitty_opencode() -> bool {
 fn has_steam() -> bool {
     has("steam")
 }
-fn has_wall() -> bool {
-    has("wall.sh")
+
+/// Программы обоев на машине: окно выбора бинарником и запасной `wall.sh`.
+/// Собирается снаружи — тест видит обе ветки, не имея ни одной программы.
+#[derive(Clone, Copy, Debug)]
+struct WallpaperTools {
+    picker: bool,
+    script: bool,
 }
-/// Окно выбора обоев бинарником. Пока его нет, пункт остаётся на `wall.sh`:
-/// старый скрипт никуда не девается и работает как запасной путь.
-fn has_wallpaper_picker() -> bool {
-    has("hud-wallpaper-rs")
-}
-/// Окно выбора обоев бинарником. Пока его нет, пункт остаётся на `wall.sh`:
-/// старый скрипт никуда не девается и работает как запасной путь.
-/// Виден ли пункт выбора обоев: окно установлено или есть запасной `wall.sh`.
-fn has_wallpaper_picker_or_script() -> bool {
-    has_wallpaper_picker() || has_wall()
+
+impl WallpaperTools {
+    /// Что стоит на машине.
+    fn detect() -> Self {
+        Self {
+            picker: has("hud-wallpaper-rs"),
+            script: has("wall.sh"),
+        }
+    }
+
+    /// Виден ли пункт выбора обоев: окно установлено или есть запасной скрипт.
+    fn chooses(&self) -> bool {
+        self.picker || self.script
+    }
 }
 
 /// Базовое имя файла текущих обоев из `~/.config/wallpaper`: показывается
@@ -438,6 +447,13 @@ fn order_section(lang: Language) -> Node {
 
 /// Раздел «Стиль»: тема, язык, обои и схема.
 fn style_section(lang: Language) -> Node {
+    style_section_with(lang, WallpaperTools::detect())
+}
+
+/// Раздел стиля. Обойные программы приходят аргументом: настоящие берутся из
+/// `PATH`, тесты подают свои, поэтому обе ветки видны без установленных
+/// программ.
+fn style_section_with(lang: Language, wallpaper: WallpaperTools) -> Node {
     let (title, kw) = match lang {
         Language::Ru => ("Стиль", &["style", "стиль"]),
         Language::En => ("Style", &["style", "стиль"]),
@@ -450,61 +466,77 @@ fn style_section(lang: Language) -> Node {
         Language::Ru => &THEME_RU,
         Language::En => &THEME_EN,
     };
-    Node::submenu(
-        settings_icons::STYLE,
+    let mut children = vec![
+        Node::choice(
+            settings_icons::THEME,
+            t("Тема", "Theme"),
+            theme_opts,
+            values::theme,
+            values::set_theme,
+        )
+        .search_as(&["theme", "тема"]),
+        Node::choice(
+            settings_icons::LANGUAGE,
+            t("Язык", "Language"),
+            &LANG_OPTS,
+            values::language,
+            values::set_language,
+        )
+        .search_as(&["language", "язык"]),
+    ];
+    if wallpaper.chooses() {
+        children.push(wallpaper_row(lang, wallpaper.picker));
+    }
+    if wallpaper.script {
+        children.push(random_wallpapers_row(lang));
+    }
+    children.push(
+        Node::choice(
+            settings_icons::SCHEME,
+            t("Схема matugen", "matugen scheme"),
+            &settings_ui::SCHEMES,
+            values::scheme_index,
+            values::set_scheme,
+        )
+        .search_as(&["scheme", "схема", "matugen"]),
+    );
+    Node::submenu(settings_icons::STYLE, title, children).search_as(kw)
+}
+
+/// Окно выбора обоев, если оно установлено, иначе прежний `wall.sh` с rofi:
+/// обе команды неинтерактивны для меню, уходят откреплённо и закрывают его.
+fn wallpaper_row(lang: Language, picker: bool) -> Node {
+    let title = match lang {
+        Language::Ru => "Выбрать обои…",
+        Language::En => "Choose wallpaper…",
+    };
+    Node::action(
+        settings_icons::PICTURE,
         title,
-        vec![
-            Node::choice(
-                settings_icons::THEME,
-                t("Тема", "Theme"),
-                theme_opts,
-                values::theme,
-                values::set_theme,
-            )
-            .search_as(&["theme", "тема"]),
-            Node::choice(
-                settings_icons::LANGUAGE,
-                t("Язык", "Language"),
-                &LANG_OPTS,
-                values::language,
-                values::set_language,
-            )
-            .search_as(&["language", "язык"]),
-            // Окно выбора обоев, если оно установлено, иначе прежний
-            // `wall.sh` с rofi: обе команды неинтерактивны для меню, уходят
-            // откреплённо и закрывают его.
-            Node::action(
-                settings_icons::PICTURE,
-                t("Выбрать обои…", "Choose wallpaper…"),
-                if has_wallpaper_picker() {
-                    Action::Spawn("hud-wallpaper-rs", &[])
-                } else {
-                    Action::Spawn("wall.sh", &[])
-                },
-            )
-            .when(has_wallpaper_picker_or_script)
-            .search_as(&["wallpaper", "обои", "choose", "выбрать"])
-            .with_value(current_wallpaper_label),
-            Node::action(
-                settings_icons::PICTURE,
-                t("Случайные обои", "Random wallpapers"),
-                // Дольше секунды: держим меню открытым, результат — статус
-                // «Применено» в подвале, а не молчаливый выход.
-                Action::Run("wall.sh", &["--random"]),
-            )
-            .when(has_wall)
-            .search_as(&["random", "случайные", "wallpaper", "обои"]),
-            Node::choice(
-                settings_icons::SCHEME,
-                t("Схема matugen", "matugen scheme"),
-                &settings_ui::SCHEMES,
-                values::scheme_index,
-                values::set_scheme,
-            )
-            .search_as(&["scheme", "схема", "matugen"]),
-        ],
+        if picker {
+            Action::Spawn("hud-wallpaper-rs", &[])
+        } else {
+            Action::Spawn("wall.sh", &[])
+        },
     )
-    .search_as(kw)
+    .search_as(&["wallpaper", "обои", "choose", "выбрать"])
+    .with_value(current_wallpaper_label)
+}
+
+/// Случайные обои: работу делает запасной `wall.sh`, без него строки нет.
+fn random_wallpapers_row(lang: Language) -> Node {
+    let title = match lang {
+        Language::Ru => "Случайные обои",
+        Language::En => "Random wallpapers",
+    };
+    Node::action(
+        settings_icons::PICTURE,
+        title,
+        // Дольше секунды: держим меню открытым, результат — статус
+        // «Применено» в подвале, а не молчаливый выход.
+        Action::Run("wall.sh", &["--random"]),
+    )
+    .search_as(&["random", "случайные", "wallpaper", "обои"])
 }
 
 /// Раздел уведомлений: системный DND и параметры dunst.
@@ -1492,6 +1524,9 @@ mod tests {
         );
     }
 
+    /// Проверка машины, а не кода: на чистом раннере ни `niri`, ни `wpctl`,
+    /// ни `nmcli` не стоят. Запускается руками: `cargo test -- --ignored`.
+    #[ignore = "нужны установленные программы машины"]
     #[test]
     fn every_external_command_is_installed() {
         use super::super::tree::NodeKind;
@@ -1551,51 +1586,51 @@ mod tests {
     }
 
     /// Пункт выбора обоев: окно бинарником, если оно установлено, иначе
-    /// прежний `wall.sh`. Оба варианта — `Spawn`, то есть с закрытием меню.
+    /// прежний `wall.sh`. Оба варианта — `Spawn`, то есть с закрытием меню, и
+    /// оба проверяются без установленных на машине программ.
     #[test]
     fn wallpaper_item_prefers_the_picker_and_falls_back_to_wall_script() {
-        fn picker_command() -> String {
-            let mut menu = Menu::new(tree_in(Language::Ru));
-            menu.move_sel(2);
-            menu.enter();
-            let title = "Выбрать обои…";
-            let item = menu
-                .frame()
-                .items
-                .into_iter()
-                .find(|item| item.title == title)
-                .expect("пункт выбора обоев");
-            match item.kind {
-                super::super::item::ItemKind::Action(action) => {
-                    assert!(action.closes_menu(), "окно обоев закрывает меню");
-                    action.describe()
-                }
-                other => panic!("пункт не действие: {other:?}"),
-            }
+        for (picker, expected) in [(true, "hud-wallpaper-rs"), (false, "wall.sh")] {
+            let node = wallpaper_row(Language::Ru, picker);
+            let super::super::tree::NodeKind::Action(action) = &node.kind else {
+                panic!("пункт не действие: {:?}", node.kind);
+            };
+            assert!(action.closes_menu(), "окно обоев закрывает меню");
+            assert_eq!(action.describe(), expected, "окно={picker}");
         }
-        let expected = if has_wallpaper_picker() {
-            "hud-wallpaper-rs"
-        } else {
-            "wall.sh"
-        };
-        assert_eq!(picker_command(), expected);
-        assert!(
-            has_wallpaper_picker_or_script(),
-            "пункт должен быть виден при любом из двух вариантов"
-        );
     }
 
+    /// Раздел стиля: строки обоев зависят от того, что стоит на машине, и
+    /// приходят флагами. Проверяются обе ветки — с программами и без.
     #[test]
     fn style_section_moves_values_with_choice() {
-        let mut menu = Menu::new(tree_in(Language::Ru));
-        menu.move_sel(2);
+        let tools = WallpaperTools {
+            picker: true,
+            script: true,
+        };
+        let mut menu = Menu::new(vec![style_section_with(Language::Ru, tools)]);
         assert_eq!(menu.enter(), Outcome::Pushed);
         let frame = menu.frame();
         let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
-        assert_eq!(titles[0], "Тема");
-        assert_eq!(titles[1], "Язык");
-        assert_eq!(titles[2], "Выбрать обои…");
-        assert_eq!(titles[3], "Случайные обои");
-        assert_eq!(titles[4], "Схема matugen");
+        assert_eq!(
+            titles,
+            [
+                "Тема",
+                "Язык",
+                "Выбрать обои…",
+                "Случайные обои",
+                "Схема matugen"
+            ]
+        );
+
+        let no_tools = WallpaperTools {
+            picker: false,
+            script: false,
+        };
+        let mut menu = Menu::new(vec![style_section_with(Language::Ru, no_tools)]);
+        assert_eq!(menu.enter(), Outcome::Pushed);
+        let frame = menu.frame();
+        let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
+        assert_eq!(titles, ["Тема", "Язык", "Схема matugen"]);
     }
 }
