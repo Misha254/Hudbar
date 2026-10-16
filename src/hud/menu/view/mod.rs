@@ -12,8 +12,8 @@
 //! Три правила, которые видно на снимках и которые поэтому вынесены в
 //! функции, а не размазаны по коду:
 //!
-//! * выбранная строка светлее карточки. `surface_hover` для этого не годится
-//!   — он темнее панели, и выделение проваливалось бы в фон;
+//! * выбранная строка залита акцентом целиком, а текст и иконка на ней —
+//!   тёмным `on_primary`: акцентом текст читался бы на акценте;
 //! * подсветка и полоса отступают от рамки карточки на `CARD_INSET`, иначе
 //!   заливка съедала бы hairline по краю;
 //! * по вертикали всё центрируется одним расчётом `center_band`, а базовая
@@ -45,10 +45,10 @@ pub use footer::{layout_hints, right_zone_width, zone_misses};
 pub use geometry::{
     CAPTION_GAP, CARD_ALPHA, CARD_INSET, CARD_W, CHEVRON_W, FOOTER_H, HEADER_H, ICON, MAX_ROWS,
     METER_H, METER_W, MIN_ROWS, PAD, ROW_H, ROW_H_SEARCH, SCRIM, SCROLLBAR_INSET, SCROLLBAR_W,
-    SEARCH_H, SEARCH_W, SEL_BAR, STATUS_DOT, THUMB_D, TOGGLE_D, VALUE_W, VOLUME_VALUE_W,
-    apply_card_alpha, blend, card_height, card_height_for, card_rect, center_band, highlight_rect,
-    layer_size, luminance, marker_rect, row_at, row_band, row_height, rows_for, rows_shown,
-    search_mode, selected_background,
+    SEARCH_H, SEARCH_W, STATUS_DOT, THUMB_D, TOGGLE_D, VALUE_W, VOLUME_VALUE_W, apply_card_alpha,
+    blend, card_height, card_height_for, card_rect, center_band, highlight_rect, layer_size,
+    luminance, row_at, row_band, row_height, rows_for, rows_shown, search_mode,
+    selected_background,
 };
 #[allow(unused_imports)]
 pub use header::{crumbs_rect, search_rect};
@@ -246,10 +246,16 @@ fn frame_h(view: &MenuView<'_>) -> f32 {
     view.pixmap.height() as f32 / SCALE
 }
 
-/// Кольцо вокруг выключенного тумблера: внешний круг цветом рамки, внутренний
-/// цветом карточки. Обводки окружности среди примитивов нет, а квадратный
-/// «кружок» выдавал бы тумблер за чекбокс.
-pub(crate) fn ring(view: &mut MenuView<'_>, rect: Rect, color: palette::Rgba) {
+/// Кольцо вокруг выключенного тумблера: внешний круг цветом обводки, внутренний
+/// круг — «дырка» кольца. Обводки окружности среди примитивов нет, а квадратный
+/// «кружок» выдавал бы тумблер за чекбокс. Дырка задаётся отдельно: на
+/// выбранной строке круг должен показывать фон самой строки, а не карточку.
+pub(crate) fn ring(
+    view: &mut MenuView<'_>,
+    rect: Rect,
+    color: palette::Rgba,
+    inner: palette::Rgba,
+) {
     view.disc(rect, color);
     let line = 1.0;
     view.disc(
@@ -259,7 +265,7 @@ pub(crate) fn ring(view: &mut MenuView<'_>, rect: Rect, color: palette::Rgba) {
             rect.w - line * 2.0,
             rect.h - line * 2.0,
         ),
-        view.ui.panel,
+        inner,
     );
 }
 

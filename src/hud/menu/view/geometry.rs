@@ -34,8 +34,6 @@ pub const SEARCH_W: f32 = 168.0;
 pub const ICON: f32 = 20.0;
 /// Отступ текста от края карточки.
 pub const PAD: f32 = spacing::LG;
-/// Толщина акцентной полосы выбранной строки.
-pub const SEL_BAR: f32 = 3.0;
 /// Размер кружка тумблера.
 pub const TOGGLE_D: f32 = 16.0;
 /// Диаметр миниатюры пикера.
@@ -148,13 +146,6 @@ pub fn luminance(color: palette::Rgba) -> f32 {
 /// от краёв карточки, чтобы hairline остался целым.
 pub fn highlight_rect(row: Rect) -> Rect {
     Rect::new(row.x + CARD_INSET, row.y, row.w - CARD_INSET * 2.0, row.h)
-}
-
-/// Прямоугольник акцентной полосы выбранной строки — та же подсветка, но
-/// полоса шириной `SEL_BAR` от её левого края.
-pub fn marker_rect(row: Rect) -> Rect {
-    let inner = highlight_rect(row);
-    Rect::new(inner.x, inner.y, SEL_BAR, inner.h)
 }
 
 /// Полоса высотой `height`, отцентрованная по вертикали внутри `rect`.

@@ -168,6 +168,10 @@ pub struct UiPalette {
     pub text: palette::Rgba,
     /// Второстепенный текст.
     pub muted: palette::Rgba,
+    /// Текст и иконка на акценте: выбранная строка, активная кнопка. Берётся
+    /// из палитры matugen, а не придумывается: на сплошной заливке акцента
+    /// только он и читается.
+    pub on_primary: palette::Rgba,
 
     // Производные роли. Не используются отрисовкой, но заданы здесь, чтобы
     // компоненты дизайн-системы не изобретали цвета заново.
@@ -253,6 +257,9 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             accent: palette::Rgba(0x79, 0xa7, 0xff, 255),
             text: palette::Rgba(0xe8, 0xea, 0xff, 255),
             muted: palette::Rgba(0x8d, 0x9a, 0xbd, 255),
+            // Текст на акценте Pixel: тот же тёмно-синий, что и база темы, —
+            // на светлом акценте 0x79a7ff читается он, а не вторая роль.
+            on_primary: palette::Rgba(0x0b, 0x10, 0x20, 255),
             surface: palette::Rgba(0, 0, 0, 0),
             surface_hover: palette::Rgba(0, 0, 0, 0),
             border_subtle: palette::Rgba(0, 0, 0, 0),
@@ -283,6 +290,9 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             // худший случай по десяти схемам в обоих режимах — 4.81:1. На
             // 0.61 было 4.54, на 0.58 было 4.09.
             muted: p.text.with_a(0.63),
+            // Роль matugen как есть: тёмная схема даёт тёмный текст на светлом
+            // акценте, светлая — светлый на тёмном.
+            on_primary: p.on_primary,
             surface: palette::Rgba(0, 0, 0, 0),
             surface_hover: palette::Rgba(0, 0, 0, 0),
             border_subtle: palette::Rgba(0, 0, 0, 0),
@@ -376,6 +386,9 @@ mod tests {
 
     /// Палитра схемы в виде, из которого делается `UiPalette`. Отдельная
     /// функция: новые проверки ролей не должны копировать сборку.
+    ///
+    /// `on_primary` у схем matugen — инверсия акцента: тёмная тема даёт тёмный
+    /// текст на светлом акценте тона 80, светлая — светлый на тёмном тона 40.
     fn model_palette(scheme: &str, light: bool) -> palette::Palette {
         let model = model(scheme, light);
         palette::Palette {
@@ -383,7 +396,11 @@ mod tests {
             text: model.text,
             primary: model.primary,
             secondary: model.secondary,
-            on_primary: palette::Rgba(0, 0, 0, 255),
+            on_primary: if light {
+                palette::Rgba(0xff, 0xff, 0xff, 255)
+            } else {
+                palette::Rgba(0, 0, 0, 255)
+            },
             error: palette::Rgba(255, 0, 0, 255),
         }
     }
@@ -447,12 +464,12 @@ mod tests {
     ///   в 3:1 от обоих концов — нужно минимум 9:1. Проверка дорожки на
     ///   контраст поэтому идёт по заливке: «заливка к дорожке» ниже.
     fn pairs(ui: &UiPalette) -> Vec<(&'static str, palette::Rgba, palette::Rgba, f32)> {
-        let selected = ui.selected_bg;
+        let accent = ui.accent;
         vec![
             ("название строки", ui.text, ui.panel, 4.5),
             ("иконка строки", ui.muted, ui.panel, 3.0),
-            ("выбранная строка: текст", ui.accent, selected, 4.5),
-            ("выбранная строка: иконка", ui.accent, selected, 3.0),
+            ("выбранная строка: текст", ui.on_primary, accent, 4.5),
+            ("выбранная строка: иконка", ui.on_primary, accent, 3.0),
             ("значение справа", ui.muted, ui.panel, 4.5),
             ("подпись пути", ui.muted, ui.panel, 4.5),
             ("подвал", ui.muted, ui.panel, 4.5),
@@ -462,7 +479,7 @@ mod tests {
             ("рамка поля поиска", ui.border_focus, ui.idle_panel, 3.0),
             ("крошка: префикс", ui.muted, ui.panel, 4.5),
             ("крошка: раздел", ui.accent, ui.panel, 4.5),
-            ("маркер выбранной строки", ui.accent, ui.panel, 3.0),
+            ("заливка выбранной строки", accent, ui.panel, 3.0),
             ("рамка карточки", ui.border, ui.panel, 3.0),
             ("полоса: дорожка", ui.border_subtle, ui.panel, 0.0),
             ("полоса: заливка к карточке", ui.muted, ui.panel, 3.0),
@@ -483,18 +500,7 @@ mod tests {
         let mut failures = Vec::new();
         for light in [false, true] {
             for scheme in MODEL_SCHEMES {
-                let model = model(scheme, light);
-                let ui = ui_palette(
-                    false,
-                    palette::Palette {
-                        base: model.base,
-                        text: model.text,
-                        primary: model.primary,
-                        secondary: model.secondary,
-                        on_primary: model.primary,
-                        error: model.text,
-                    },
-                );
+                let ui = ui_palette(false, model_palette(scheme, light));
                 for (name, front, back, need) in pairs(&ui) {
                     let ratio = contrast(front, back);
                     if ratio < need {
@@ -548,18 +554,7 @@ mod tests {
         let mut where_ = "";
         for light in [false, true] {
             for scheme in MODEL_SCHEMES {
-                let model = model(scheme, light);
-                let ui = ui_palette(
-                    false,
-                    palette::Palette {
-                        base: model.base,
-                        text: model.text,
-                        primary: model.primary,
-                        secondary: model.secondary,
-                        on_primary: model.primary,
-                        error: model.text,
-                    },
-                );
+                let ui = ui_palette(false, model_palette(scheme, light));
                 let value = contrast(ui.muted, ui.panel);
                 if value < worst {
                     worst = value;

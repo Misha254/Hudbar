@@ -10,7 +10,7 @@ use super::super::ui_tokens::spacing;
 use super::geometry::{
     CAPTION_GAP, CHEVRON_W, HEADER_H, ICON, MAX_ROWS, METER_H, METER_W, PAD, SCROLLBAR_INSET,
     SCROLLBAR_W, THUMB_D, TOGGLE_D, VALUE_W, VOLUME_VALUE_W, blend, center_band, highlight_rect,
-    marker_rect, row_band, rows_shown, selected_background,
+    row_band, rows_shown,
 };
 use super::{MenuView, RowsHighlight, ring};
 
@@ -74,8 +74,9 @@ pub(crate) fn selected_row(frame: &Frame) -> usize {
     frame.selected
 }
 
-/// Список строк: выбранная подсвечена и отмечена полосой, между строками
-/// hairline.
+/// Список строк: выбранная залита акцентом целиком, мышь подсвечивает строку
+/// под указателем. Разделителей между строками нет: список читается по
+/// подсветке и отступам, а не по линейкам.
 pub(crate) fn rows_view(
     view: &mut MenuView<'_>,
     card: Rect,
@@ -101,20 +102,6 @@ pub(crate) fn rows_view(
     }
     for (index, (position, item)) in start.iter().enumerate() {
         let rect = Rect::new(list.x, list.y + index as f32 * row_h, list.w, row_h);
-        // Разделитель рисуется над строкой, а не под ней: под последней
-        // строкой снизу уже подвал, а над первой лишней линии быть не
-        // должно — поэтому у первой видимой строки разделителя нет.
-        if index > 0 {
-            let line = Rect::new(rect.x + PAD, rect.y, rect.w - PAD * 2.0, 1.0);
-            fill_rect(
-                view.pixmap,
-                line.x * SCALE,
-                line.y * SCALE,
-                line.w * SCALE,
-                line.h * SCALE,
-                view.ui.border_subtle,
-            );
-        }
         // Насколько строка близка к едущей полосе: 1 — под полосой, 0 — мимо.
         // Без полосы близость равна обычному выбору, и цвета совпадают побитово.
         let near = match highlight.sliding {
@@ -160,13 +147,14 @@ pub(crate) fn rows_view(
     }
 }
 
-/// Подсветка выбранной строки целиком: заливка и акцентная полоса слева.
+/// Подсветка выбранной строки: сплошная заливка акцентом на всю строку.
 ///
 /// Отдельная функция нужна для скользящей полосы: она рисуется одна на весь
-/// список, а не внутри строки, и должна совпадать с прежней побитово.
+/// список, а не внутри строки. Левой полоски у подсветки нет — выбранная
+/// строка выделяется одной заливкой, а не рамкой изнутри.
 fn highlight_band(view: &mut MenuView<'_>, rect: Rect) {
-    // Подсветка и полоса отступают от краёв карточки на CARD_INSET:
-    // заливка от самого края ложилась бы на hairline рамки.
+    // Подсветка отступает от краёв карточки на CARD_INSET: заливка от самого
+    // края ложилась бы на hairline рамки.
     let inner = highlight_rect(rect);
     fill_rect(
         view.pixmap,
@@ -174,15 +162,6 @@ fn highlight_band(view: &mut MenuView<'_>, rect: Rect) {
         inner.y * SCALE,
         inner.w * SCALE,
         inner.h * SCALE,
-        selected_background(view.ui),
-    );
-    let marker = marker_rect(rect);
-    fill_rect(
-        view.pixmap,
-        marker.x * SCALE,
-        marker.y * SCALE,
-        marker.w * SCALE,
-        marker.h * SCALE,
         view.ui.accent,
     );
 }
@@ -209,9 +188,10 @@ pub struct RowState {
 fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: RowState) {
     if state.selected && state.paint_selected {
         highlight_band(view, rect);
-    } else if state.hover {
-        // Подложка под указателем — та же заливка без акцентной полосы и без
-        // смены цвета текста: мышь показывает, где кликнёт, но не выбирает.
+    } else if state.hover && !state.selected {
+        // Подложка под указателем — та же заливка без смены цвета текста: мышь
+        // показывает, где кликнёт, но не выбирает. Выбранная строка остаётся
+        // акцентом даже под курсором, поэтому hover на неё не наносится.
         let inner = highlight_rect(rect);
         fill_rect(
             view.pixmap,
@@ -224,11 +204,14 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
     }
     // Цвет текста и иконки смешивается с расстоянием до едущей полосы, а не
     // переключается сразу: строка, которую полоса сейчас проходит, проявляется
-    // постепенно. При `near` ровно 0 или 1 смешивание даёт прежние цвета
-    // побитово, поэтому кадр без анимации не меняется.
+    // постепенно. На сплошной заливке акцента выбранный текст тёмный —
+    // `on_primary`, а не акцент: акцентом он был бы невидим. При `near` ровно
+    // 0 или 1 смешивание даёт прежние цвета побитово.
     let near = state.near.clamp(0.0, 1.0);
-    let icon_color = blend(view.ui.muted, view.ui.accent, near);
-    let text_color = blend(view.ui.text, view.ui.accent, near);
+    let icon_color = blend(view.ui.muted, view.ui.on_primary, near);
+    let text_color = blend(view.ui.text, view.ui.on_primary, near);
+    // Второстепенный текст строки: подпись пути. На акценте — тоже тёмный.
+    let secondary_color = blend(view.ui.muted, view.ui.on_primary, near);
     let two_line = !item.single_line();
     let icon_x = rect.x + PAD;
     let label_x = icon_x + ICON + spacing::MD;
@@ -257,7 +240,7 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
             view.text_clipped(
                 caption,
                 view.scale.caption,
-                view.ui.muted,
+                secondary_color,
                 Rect::new(
                     band.x,
                     band.y + view.scale.label + CAPTION_GAP,
@@ -278,9 +261,9 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
         }
     }
     if let Some(level) = item.level {
-        meter(view, rect, label_rect, level, item.muted, state.selected);
+        meter(view, rect, label_rect, level, item.muted, near);
     }
-    indicator(view, rect, item, two_line, lang);
+    indicator(view, rect, item, two_line, lang, near);
 }
 
 /// Дорожка полосы: от края названия до места значения справа. `None`, если
@@ -333,15 +316,9 @@ pub(crate) fn meter_fill(track: Rect, level: u8) -> f32 {
 
 /// Полоса громкости: заполнение по уровню, у заглушенного устройства вместо
 /// заливки — приглушённая. Сама полоса рисуется всегда: иначе строка без
-/// выбора не сказала бы, где сейчас звук.
-fn meter(
-    view: &mut MenuView<'_>,
-    rect: Rect,
-    label_rect: Rect,
-    level: u8,
-    muted: bool,
-    selected: bool,
-) {
+/// выбора не сказала бы, где сейчас звук. На выбранной строке заливка
+/// тёмная `on_primary`: акцентом она растворялась бы в заливке строки.
+fn meter(view: &mut MenuView<'_>, rect: Rect, label_rect: Rect, level: u8, muted: bool, near: f32) {
     let band = center_band(
         meter_track(label_rect, rect.right()),
         view.scale.label * 2.0,
@@ -364,11 +341,8 @@ fn meter(
         // `border` — это линия рамки, и на 1.96:1 к карточке заливка читалась
         // как «звука нет» вместо «уровень такой». Мутит звук — цвет тот же,
         // состояние говорит подпись, чтобы уровень не терялся вместе с цветом.
-        let color = if muted || selected {
-            view.ui.accent
-        } else {
-            view.ui.muted
-        };
+        let base = if muted { view.ui.accent } else { view.ui.muted };
+        let color = blend(base, view.ui.on_primary, near);
         fill_round_rect(
             view.pixmap,
             track_rect.x * SCALE,
@@ -383,20 +357,37 @@ fn meter(
 
 /// Правая часть строки: круг тумблера, круглая миниатюра пикера, значение или
 /// шеврон подменю. Всё центрируется по той же оси, что и название.
-fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool, lang: Language) {
+///
+/// Вторичные элементы окрашены тем же смешением, что и текст строки: на
+/// выбранной строке они выходят тёмными `on_primary`, иначе серые стрелки и
+/// значения выцветают на заливке акцента.
+fn indicator(
+    view: &mut MenuView<'_>,
+    rect: Rect,
+    item: &Item,
+    two_line: bool,
+    lang: Language,
+    near: f32,
+) {
     let right = rect.right() - PAD;
+    let secondary = blend(view.ui.muted, view.ui.on_primary, near);
     if item.kind.is_toggle() {
         let dot = center_band(
             Rect::new(right - TOGGLE_D, rect.y, TOGGLE_D, rect.h),
             TOGGLE_D,
         );
         if item.value == strings::chrome(lang).on {
-            view.disc(dot, view.ui.accent);
+            view.disc(dot, blend(view.ui.accent, view.ui.on_primary, near));
         } else {
             // Кольцо выключенного тумблера — тоже носитель состояния, а не
             // отделка, и обязано отделяться от карточки. Смесь
             // `mix(base, border, 0.6)` давала 1.32–1.59:1.
-            ring(view, dot, view.ui.muted);
+            ring(
+                view,
+                dot,
+                secondary,
+                blend(view.ui.panel, view.ui.accent, near),
+            );
         }
         return;
     }
@@ -421,7 +412,7 @@ fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool, l
         view.glyph(
             settings_icons::CHEVRON,
             view.scale.caption,
-            view.ui.muted,
+            secondary,
             center_band(
                 Rect::new(right - CHEVRON_W, rect.y, CHEVRON_W, rect.h),
                 row_band(view),
@@ -429,12 +420,15 @@ fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool, l
         );
         return;
     }
-    let chevron = !item.value.is_empty() || item.kind.is_submenu();
+    // Шеврон означает «Enter откроет другой экран», а не «справа есть
+    // значение»: у Toggle, Choice, Number и Volume значение показывается на
+    // месте, и стрелка у них врала бы о поведении Enter.
+    let chevron = matches!(item.kind, ItemKind::Submenu | ItemKind::Leaf);
     if chevron {
         view.glyph(
             settings_icons::CHEVRON,
             view.scale.caption,
-            view.ui.muted,
+            secondary,
             center_band(
                 Rect::new(right - CHEVRON_W, rect.y, CHEVRON_W, rect.h),
                 row_band(view),
@@ -458,12 +452,6 @@ fn indicator(view: &mut MenuView<'_>, rect: Rect, item: &Item, two_line: bool, l
         // Значение - вторичная роль, поэтому кеглем подписи, а не названия: иначе
         // «Обычная» и «Тема» читались одного размера, и глаз не выбирал, где
         // название, а где его состояние.
-        view.text_clipped(
-            &item.value,
-            view.scale.caption,
-            view.ui.muted,
-            band,
-            Align::End,
-        );
+        view.text_clipped(&item.value, view.scale.caption, secondary, band, Align::End);
     }
 }

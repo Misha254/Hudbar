@@ -77,7 +77,7 @@ fn no_highlight_row_keeps_the_row_itself_painted() {
     let plain = render_card(&frame, false, None);
 
     let (ui, _) = theme(false, palette::Palette::default());
-    let want = selected_background(ui);
+    let want = ui.accent;
     for slot in [0.0f32, 2.0, 3.0, 5.0] {
         let got = pixel_in_row(&plain, &frame, slot);
         let selected = (slot - 3.0).abs() < f32::EPSILON;
@@ -96,7 +96,7 @@ fn no_highlight_row_keeps_the_row_itself_painted() {
 fn a_highlight_row_draws_at_the_given_position() {
     let frame = frame_with(8, 3);
     let (ui, _) = theme(false, palette::Palette::default());
-    let want = selected_background(ui);
+    let want = ui.accent;
     let lit = |pixmap: &tiny_skia::Pixmap, slot: f32| pixel_in_row(pixmap, &frame, slot) == want;
 
     let halfway = render_card(&frame, false, Some(1.5));
@@ -114,23 +114,24 @@ fn a_highlight_row_draws_at_the_given_position() {
 }
 
 /// Смешение цвета строки по близости к полосе: на концах даёт прежние цвета,
-/// в середине — промежуточный.
+/// в середине — промежуточный. Выбранный текст — тёмный `on_primary` на
+/// заливке акцента.
 #[test]
 fn the_row_color_follows_the_band_proximity() {
     let (ui, _) = theme(false, palette::Palette::default());
 
     assert_eq!(
-        mix(ui.text, ui.accent, 0.0),
+        mix(ui.text, ui.on_primary, 0.0),
         ui.text,
         "вне полосы — обычный"
     );
     assert_eq!(
-        mix(ui.text, ui.accent, 1.0),
-        ui.accent,
+        mix(ui.text, ui.on_primary, 1.0),
+        ui.on_primary,
         "под полосой — выбранный"
     );
 
-    let half = blend(ui.text, ui.accent, 0.5);
+    let half = blend(ui.text, ui.on_primary, 0.5);
     let distance = |a: palette::Rgba, b: palette::Rgba| {
         (0..3)
             .map(|i| (a.0 + i) as i32 - (b.0 + i) as i32)
@@ -138,13 +139,17 @@ fn the_row_color_follows_the_band_proximity() {
             .sum::<i32>()
     };
     assert!(
-        distance(half, ui.text) > 0 && distance(half, ui.accent) > 0,
+        distance(half, ui.text) > 0 && distance(half, ui.on_primary) > 0,
         "середина должна отличаться от обоих концов"
     );
     assert_eq!(
-        distance(blend(ui.text, ui.accent, 0.5), half),
+        distance(blend(ui.text, ui.on_primary, 0.5), half),
         0,
         "половина пути считается одинаково"
+    );
+    assert_ne!(
+        ui.on_primary, ui.accent,
+        "текст выбранной строки обязан отличаться от её заливки"
     );
 }
 
@@ -155,10 +160,10 @@ fn without_a_band_the_proximity_is_plain_selection() {
     let (ui, _) = theme(false, palette::Palette::default());
     let near = |selected: bool| usize::from(selected) as f32;
 
-    assert_eq!(blend(ui.text, ui.accent, near(true)), ui.accent);
-    assert_eq!(blend(ui.muted, ui.accent, near(true)), ui.accent);
-    assert_eq!(blend(ui.text, ui.accent, near(false)), ui.text);
-    assert_eq!(blend(ui.muted, ui.accent, near(false)), ui.muted);
+    assert_eq!(blend(ui.text, ui.on_primary, near(true)), ui.on_primary);
+    assert_eq!(blend(ui.muted, ui.on_primary, near(true)), ui.on_primary);
+    assert_eq!(blend(ui.text, ui.on_primary, near(false)), ui.text);
+    assert_eq!(blend(ui.muted, ui.on_primary, near(false)), ui.muted);
 }
 
 #[test]
@@ -195,7 +200,7 @@ fn only_the_row_under_the_band_lights_up() {
 fn the_sliding_band_leaves_the_previous_row() {
     let frame = frame_with(8, 3);
     let (ui, _) = theme(false, palette::Palette::default());
-    let want = selected_background(ui);
+    let want = ui.accent;
 
     let moving = render_card(&frame, false, Some(1.0));
 
@@ -207,23 +212,24 @@ fn the_sliding_band_leaves_the_previous_row() {
     );
 }
 
-/// Акцентная полоса слева едет вместе с подсветкой.
+/// Выбранная строка залита акцентом на всю ширину: слева не остаётся полоски
+/// поуже, справа заливка доходит до отступа рамки. Проверяется на скользящей
+/// полосе — она рисуется тем же `highlight_band`.
 #[test]
-fn the_marker_travels_with_the_band() {
+fn the_selected_row_is_filled_with_accent_from_edge_to_edge() {
     let frame = frame_with(8, 3);
     let (ui, _) = theme(false, palette::Palette::default());
-    let want = ui.accent;
     let moving = render_card(&frame, false, Some(2.0));
 
     let row_h = row_height(search_mode(&frame));
-    let y = HEADER_H + 2.0 * row_h + row_h / 2.0;
-    let x = CARD_INSET + 1.0;
-
-    assert_eq!(
-        at_pixel(&moving, x * SCALE, y * SCALE),
-        want,
-        "акцентная полоса должна стоять на едущей строке"
-    );
+    let y = (HEADER_H + 2.0 * row_h + row_h / 2.0) * SCALE;
+    for x in [CARD_INSET + 1.0, CARD_W / 2.0, CARD_W - CARD_INSET - 1.0] {
+        assert_eq!(
+            at_pixel(&moving, x * SCALE, y),
+            ui.accent,
+            "строка обязана быть акцентом на x={x}"
+        );
+    }
 }
 
 /// Пустой список не должен получать висящую подсветку.
@@ -583,11 +589,37 @@ fn hover_paints_only_the_row_under_the_pointer() {
         ui.panel,
         "соседняя строка не тронута"
     );
-    // Выбор и его полоса на месте: клик мышью не выбирает.
+    // Выбор на месте: клик мышью не выбирает, выбранная строка — акцент.
     assert_eq!(
         pixel_in_row(&hovered, &frame, 3.0),
-        selected_background(ui),
+        ui.accent,
         "выбранная строка осталась выбранной"
+    );
+}
+
+/// Мышь над выбранной строкой не превращает акцент в слабую подложку hover:
+/// выбор — одна заливка, курсор вторым выбором быть не может.
+#[test]
+fn hover_on_the_selected_row_keeps_the_accent() {
+    let frame = frame_with(8, 3);
+    let (ui, _) = theme(false, palette::Palette::default());
+    let plain = render_card_hover(&frame, false, None, None);
+    let hovered = render_card_hover(&frame, false, None, Some(3));
+
+    assert_eq!(
+        pixel_in_row(&hovered, &frame, 3.0),
+        ui.accent,
+        "выбранная строка под курсором остаётся акцентом"
+    );
+    assert_ne!(
+        pixel_in_row(&hovered, &frame, 3.0),
+        ui.hover_bg,
+        "hover на выбранной строке не должен заменять акцент"
+    );
+    assert_eq!(
+        plain.data(),
+        hovered.data(),
+        "поэтому кадр с мышью на выборе совпадает с кадром без неё"
     );
 }
 
@@ -610,9 +642,9 @@ fn the_hover_wash_has_no_transparent_edge() {
 fn hover_is_fainter_than_the_selected_row() {
     for pixel in [false, true] {
         let ui = palette_for(pixel);
-        assert_ne!(ui.hover_bg, ui.selected_bg);
+        assert_ne!(ui.hover_bg, ui.accent);
         assert!(
-            (luminance(ui.selected_bg) - luminance(ui.panel)).abs()
+            (luminance(ui.accent) - luminance(ui.panel)).abs()
                 > (luminance(ui.hover_bg) - luminance(ui.panel)).abs(),
             "pixel={pixel}: подсветка мыши должна быть слабее выбранной строки"
         );
@@ -624,12 +656,13 @@ fn hover_is_fainter_than_the_selected_row() {
 #[test]
 fn hover_does_not_move_the_sliding_band() {
     let frame = frame_with(8, 3);
+    let ui = palette_for(false);
     let moving = render_card_hover(&frame, false, Some(2.0), None);
     let moving_hover = render_card_hover(&frame, false, Some(2.0), Some(5));
 
     assert_eq!(
         pixel_in_row(&moving, &frame, 2.0),
-        selected_background(theme(false, palette::Palette::default()).0),
+        ui.accent,
         "полоса осталась на своей строке"
     );
     assert_ne!(
@@ -639,7 +672,7 @@ fn hover_does_not_move_the_sliding_band() {
     );
     assert_eq!(
         pixel_in_row(&moving_hover, &frame, 2.0),
-        selected_background(theme(false, palette::Palette::default()).0),
+        ui.accent,
         "фон под полосой не должен перекрываться подсветкой мыши"
     );
 }
@@ -1014,7 +1047,7 @@ fn card_rect_is_centered_for_both_modes() {
 fn selected_row_is_lighter_than_the_card() {
     for pixel in [false, true] {
         let ui = palette_for(pixel);
-        let selected = selected_background(ui);
+        let selected = ui.accent;
         assert!(
             luminance(selected) > luminance(ui.surface),
             "pixel={pixel}: фон выбранной строки {} не светлее карточки {}",
@@ -1028,7 +1061,7 @@ fn selected_row_is_lighter_than_the_card() {
     }
 }
 
-/// Подсветка и полоса не должны наезжать на hairline рамки карточки.
+/// Подсветка не должна наезжать на hairline рамки карточки.
 #[test]
 fn highlight_stays_inside_the_card_border() {
     let rect = card(8);
@@ -1044,21 +1077,8 @@ fn highlight_stays_inside_the_card_border() {
             inner.right() <= rect.right() - CARD_INSET,
             "подсветка перекрывает правую рамку"
         );
-        let marker = marker_rect(row);
-        assert!(marker.x >= rect.x + CARD_INSET);
-        assert_eq!(marker.w, SEL_BAR);
-        assert_eq!(marker.h, row.h, "полоса на всю высоту строки");
-        assert!(marker.right() <= inner.right(), "полоса шире подсветки");
+        assert!(inner.h > 0.0, "подсветка пустой быть не должна");
     }
-}
-
-#[test]
-fn marker_is_three_pixels_and_inset_by_one() {
-    let rect = card(6);
-    let row = Rect::new(rect.x, rect.y, rect.w, ROW_H);
-    let marker = marker_rect(row);
-    assert_eq!(marker.w, 3.0);
-    assert_eq!(marker.x, rect.x + 1.0);
 }
 
 #[test]
@@ -1109,10 +1129,9 @@ fn dimensions_stay_on_the_four_pixel_grid() {
             "{value} не кратно четырём: сетка разъедется"
         );
     }
-    // Отступ подсветки и полоса — единственные исключения: 1 px равна
-    // толщине hairline, а 3 px берутся из макета.
+    // Отступ подсветки — единственное исключение: 1 px равна толщине
+    // hairline, иначе заливка ложилась бы на рамку.
     assert_eq!(CARD_INSET, 1.0);
-    assert_eq!(SEL_BAR, 3.0);
 }
 
 /// Подсказки подвала: полные и короткие варианты должны существовать
