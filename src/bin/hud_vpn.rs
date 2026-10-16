@@ -70,8 +70,6 @@ mod config;
 #[path = "../hud/config_io.rs"]
 mod config_io;
 #[allow(dead_code)]
-#[path = "../hud/dunst.rs"]
-mod dunst;
 // Меню — отдельный процесс: у него нет `Shared.sys` панели, поэтому нужны
 // одноразовые читатели. Весь `data` с его потоками и DBus не подключается.
 #[path = "../hud/data/oneshot.rs"]
