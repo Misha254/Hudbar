@@ -475,9 +475,12 @@ fn parse_into(settings: &mut Settings, content: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ANIMATION_SPEED_DEFAULT, ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, FONT_SIZE_MAX, Language,
+        ANIMATION_SPEED_DEFAULT, ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, FONT_SIZE_MAX,
+        FONT_SIZE_MIN, HEIGHT_MAX, HEIGHT_MIN, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN, Language,
         MODULE_KEYS, Module, NotificationPosition, OSD_DURATION_DEFAULT_MS, OSD_DURATION_MAX_MS,
-        Settings, Zone, clamp_f, default_module_order, normalize_module_order, parse_into,
+        OSD_DURATION_MIN_MS, Settings, VPN_CONTROLLER_DEFAULT, VPN_TIMEOUT_DEFAULT_MS,
+        VPN_TIMEOUT_MAX_MS, VPN_TIMEOUT_MIN_MS, Zone, clamp_f, default_module_order,
+        normalize_module_order, parse_into,
     };
 
     #[test]
@@ -787,5 +790,188 @@ mod tests {
             clamp_f(100.0, ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX),
             ANIMATION_SPEED_MAX
         );
+    }
+
+    /// Схема `settings.json` лежит в `docs/settings.schema.json`: по ней редактор
+    /// проверяет файл, а этот тест держит её вместе с кодом. Ключи, диапазоны и
+    /// перечисления иначе разошлись бы молча: панель зажимала бы значение по
+    /// одному числу, а схема разрешала бы другое.
+    #[test]
+    fn the_settings_schema_matches_the_parser() {
+        let schema = schema();
+        let properties = schema["properties"].as_object().expect("секции схемы");
+
+        // Секции: ровно те, что читает `parse_into`, плюс ссылка на схему.
+        let mut sections: Vec<&str> = properties.keys().map(String::as_str).collect();
+        sections.sort_unstable();
+        assert_eq!(
+            sections,
+            [
+                "$schema",
+                "appearance",
+                "hudbar",
+                "language",
+                "module_order",
+                "notifications",
+                "osd",
+                "vpn"
+            ],
+            "секции схемы"
+        );
+
+        // Секция бара: высота, кнопка шестерёнки, анимации и все ключи модулей.
+        let hudbar = properties["hudbar"]["properties"]
+            .as_object()
+            .expect("секция hudbar");
+        let mut keys: Vec<&str> = hudbar.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        let mut expected: Vec<&str> = MODULE_KEYS.to_vec();
+        expected.extend(["animation_speed", "animations", "control_button", "height"]);
+        expected.sort_unstable();
+        assert_eq!(keys, expected, "ключи секции hudbar");
+
+        // Диапазоны — те же числа, что в коде: по ним зажимаются настройки,
+        // пришедшие из правки файла руками.
+        let range = |path: &[&str]| -> (i64, i64) {
+            let mut node = &schema;
+            for step in path {
+                node = &node[step];
+            }
+            (
+                node["minimum"].as_i64().expect("minimum"),
+                node["maximum"].as_i64().expect("maximum"),
+            )
+        };
+        assert_eq!(
+            range(&["properties", "hudbar", "properties", "height"]),
+            (HEIGHT_MIN as i64, HEIGHT_MAX as i64),
+            "высота бара"
+        );
+        assert_eq!(
+            range(&["properties", "notifications", "properties", "font_size"]),
+            (FONT_SIZE_MIN as i64, FONT_SIZE_MAX as i64),
+            "кегль уведомлений"
+        );
+        assert_eq!(
+            range(&["properties", "notifications", "properties", "line_height"]),
+            (LINE_HEIGHT_MIN as i64, LINE_HEIGHT_MAX as i64),
+            "межстрочный интервал"
+        );
+        assert_eq!(
+            range(&["properties", "osd", "properties", "duration_ms"]),
+            (OSD_DURATION_MIN_MS as i64, OSD_DURATION_MAX_MS as i64),
+            "длительность OSD"
+        );
+        assert_eq!(
+            range(&["properties", "vpn", "properties", "timeout_ms"]),
+            (VPN_TIMEOUT_MIN_MS as i64, VPN_TIMEOUT_MAX_MS as i64),
+            "таймаут контроллера"
+        );
+        let speed = &properties["hudbar"]["properties"]["animation_speed"];
+        assert_eq!(
+            (speed["minimum"].as_f64(), speed["maximum"].as_f64()),
+            (
+                Some(ANIMATION_SPEED_MIN as f64),
+                Some(ANIMATION_SPEED_MAX as f64)
+            ),
+            "множитель анимаций"
+        );
+
+        // Перечисления совпадают с кодом: язык, позиция уведомлений, модули.
+        assert_eq!(
+            strings(&properties["language"]["enum"]),
+            [Language::Ru.key(), Language::En.key()],
+            "языки"
+        );
+        assert_eq!(
+            strings(&properties["notifications"]["properties"]["position"]["enum"]),
+            NotificationPosition::ALL.map(NotificationPosition::key),
+            "позиции уведомлений"
+        );
+        assert_eq!(
+            strings(&properties["module_order"]["items"]["enum"]),
+            MODULE_KEYS,
+            "ключи модулей"
+        );
+
+        // Значения по умолчанию, у которых есть имя в коде, — те же: иначе
+        // отсутствие ключа и его явное значение давали бы разные настройки.
+        assert_eq!(
+            properties["vpn"]["properties"]["controller"]["default"].as_str(),
+            Some(VPN_CONTROLLER_DEFAULT),
+            "адрес контроллера"
+        );
+        assert_eq!(
+            properties["vpn"]["properties"]["timeout_ms"]["default"].as_i64(),
+            Some(VPN_TIMEOUT_DEFAULT_MS as i64),
+            "таймаут контроллера"
+        );
+        assert_eq!(
+            properties["osd"]["properties"]["duration_ms"]["default"].as_i64(),
+            Some(OSD_DURATION_DEFAULT_MS as i64),
+            "длительность OSD"
+        );
+        assert_eq!(
+            properties["hudbar"]["properties"]["animation_speed"]["default"].as_f64(),
+            Some(ANIMATION_SPEED_DEFAULT as f64),
+            "множитель анимаций"
+        );
+    }
+
+    /// Установочный файл — это записанные значения по умолчанию из схемы. Иначе
+    /// `default` в схеме и то, что получает новый пользователь, разошлись бы, и
+    /// схема врала бы про файл, который сама же описывает.
+    #[test]
+    fn the_installed_settings_match_the_schema_defaults() {
+        let schema = schema();
+        let installed: serde_json::Value =
+            serde_json::from_str(include_str!("../../config/hudbar/settings.json"))
+                .expect("установочный конфиг разбирается");
+
+        assert_eq!(
+            installed["$schema"].as_str(),
+            Some("./settings.schema.json"),
+            "файл и схема лежат рядом, поэтому ссылка относительная"
+        );
+        check_defaults(&schema, &installed, "");
+    }
+
+    /// Схема настроек как она лежит в репозитории.
+    fn schema() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../docs/settings.schema.json"))
+            .expect("схема настроек разбирается")
+    }
+
+    /// Строки перечисления в том же порядке.
+    fn strings(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_array()
+            .unwrap_or_else(|| panic!("не перечисление: {value}"))
+            .iter()
+            .map(|item| item.as_str().expect("строка в перечислении").to_string())
+            .collect()
+    }
+
+    /// Сверяет файл со схемой: каждый описанный ключ на месте и равен значению
+    /// по умолчанию, вложенные секции — так же.
+    fn check_defaults(schema: &serde_json::Value, file: &serde_json::Value, path: &str) {
+        let properties = schema["properties"].as_object().expect("свойства схемы");
+        let object = file
+            .as_object()
+            .unwrap_or_else(|| panic!("{path}: не объект: {file}"));
+        for (key, property) in properties {
+            if key == "$schema" {
+                continue;
+            }
+            let value = object
+                .get(key)
+                .unwrap_or_else(|| panic!("{path}{key}: нет в установочном файле"));
+            if let Some(default) = property.get("default") {
+                assert_eq!(value, default, "{path}{key}: значение по умолчанию");
+            }
+            if property["type"] == "object" {
+                check_defaults(property, value, &format!("{path}{key}."));
+            }
+        }
     }
 }

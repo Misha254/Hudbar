@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Misha254/Hudbar/docs/settings.schema.json",
+  "title": "Настройки HUDbar",
+  "description": "Файл ~/.config/hudbar/settings.json. Значения по умолчанию здесь — те, что ставит установщик (config/hudbar/settings.json): их сверяет тест в src/hud/settings.rs. Панель неизвестные ключи молча игнорирует, схема их запрещает — иначе опечатка в ключе выглядела бы как рабочая настройка, которая ничего не делает.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Ссылка на эту схему рядом с файлом: по ней редактор проверяет настройки и подсказывает ключи."
+    },
+    "language": {
+      "type": "string",
+      "enum": ["ru", "en"],
+      "default": "ru",
+      "description": "Язык подписей панели и её окон. Любое другое значение читается как ru."
+    },
+    "module_order": {
+      "type": "array",
+      "items": {
+        "enum": ["tray", "weather", "webcam", "clock", "recorder", "battery", "system", "audio", "network", "dnd"]
+      },
+      "default": ["tray", "weather", "webcam", "clock", "recorder", "battery", "system", "audio", "network", "dnd"],
+      "description": "Порядок чипов на баре. Переставлять можно только внутри зоны: tray слева, часы и погода в центре, остальное справа. Неизвестные ключи отбрасываются, пропущенные дописываются в конец."
+    },
+    "appearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Внешний вид окон: обычная тема из matugen или пиксельная.",
+      "properties": {
+        "theme": {
+          "type": "string",
+          "enum": ["normal", "pixel"],
+          "default": "pixel",
+          "description": "Какую тему рисуют панель и окна: normal — цвета из colors.css, pixel — пиксельные константы."
+        }
+      }
+    },
+    "hudbar": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Сам бар: высота, включённость чипов, кнопка Control Center и анимации.",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "minimum": 24,
+          "maximum": 48,
+          "default": 27,
+          "description": "Высота бара в пикселях: значение вне диапазона зажимается в 24..48."
+        },
+        "tray": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип системного трея."
+        },
+        "weather": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип погоды."
+        },
+        "webcam": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип камеры: подсвечивается, когда камерой пользуются."
+        },
+        "clock": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип часов и календаря."
+        },
+        "recorder": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип записи экрана."
+        },
+        "battery": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип батареи."
+        },
+        "system": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип системы: процессор, память, температура."
+        },
+        "audio": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип громкости и микрофона."
+        },
+        "network": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип сети: Wi-Fi, Bluetooth, VPN."
+        },
+        "dnd": {
+          "type": "boolean",
+          "default": true,
+          "description": "Чип режима «не беспокоить»."
+        },
+        "control_button": {
+          "type": "boolean",
+          "default": true,
+          "description": "Шестерёнка Control Center на баре. Выключать её нужно явно."
+        },
+        "animations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Анимации окон. Выключенные — это нулевые длительности, то есть значения сразу на своих местах."
+        },
+        "animation_speed": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 2.0,
+          "default": 1.0,
+          "description": "Множитель длительности анимаций: 2.0 — вдвое быстрее, значение зажимается в 0.5..2.0."
+        }
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Уведомления dunst: шрифт, межстрочный интервал и место появления. hud-setting переносит эти числа в dunstrc.",
+      "properties": {
+        "font_size": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 18,
+          "default": 13,
+          "description": "Кегль уведомлений: значение вне диапазона зажимается в 10..18."
+        },
+        "line_height": {
+          "type": "integer",
+          "minimum": 14,
+          "maximum": 28,
+          "default": 18,
+          "description": "Межстрочный интервал: значение вне диапазона зажимается в 14..28. Установщик ставит 18; если ключа в файле нет, панель берёт 15."
+        },
+        "position": {
+          "type": "string",
+          "enum": ["top-left", "top-right", "bottom-left", "bottom-right"],
+          "default": "top-right",
+          "description": "Место появления: dunst ждёт ровно эти строки в origin."
+        }
+      }
+    },
+    "osd": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Своё окно громкости и микрофона вместо уведомления dunst. Секция необязательна: старый файл без неё оставляет окно выключенным.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Показывать окно. По умолчанию выключено: окно создаёт и уничтожает слой layer-shell, и выключать этот риск должен пользователь."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 600,
+          "maximum": 4000,
+          "default": 1600,
+          "description": "Сколько миллисекунд висит окно: значение вне диапазона зажимается в 600..4000."
+        }
+      }
+    },
+    "vpn": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Контроллер Mihomo для VPN-окна. Секрета здесь нет и быть не должно: секрет читается из файла или окружения.",
+      "properties": {
+        "controller": {
+          "type": "string",
+          "default": "127.0.0.1:9090",
+          "description": "Адрес внешнего контроллера Mihomo (host:port)."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 5000,
+          "default": 1500,
+          "description": "Таймаут обращения к контроллеру: значение вне диапазона зажимается в 300..5000."
+        }
+      }
+    }
+  }
+}

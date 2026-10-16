@@ -476,4 +476,21 @@ mod tests {
         assert_eq!(config.language, Language::En);
         assert_eq!(config.to_settings().language, Language::En);
     }
+
+    /// Темы в схеме настроек — те же две, что знает код. Список живёт в двух
+    /// местах: здесь его проверяет `Theme::from_key`, в схеме — редактор.
+    #[test]
+    fn the_settings_schema_lists_both_themes() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../docs/settings.schema.json"))
+                .expect("схема настроек разбирается");
+        let listed: Vec<&str> = schema["properties"]["appearance"]["properties"]["theme"]["enum"]
+            .as_array()
+            .expect("перечисление тем")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+
+        assert_eq!(listed, [Theme::Normal.key(), Theme::Pixel.key()]);
+    }
 }
