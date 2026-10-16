@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Бинарник ищется так: HUDBAR_BIN_DIR, затем ~/.local/bin, затем PATH —
+# пакет ставит его в /usr/bin, и переменную для этого задавать не нужно.
 bin="${HUDBAR_BIN_DIR:-$HOME/.local/bin}/hud-yazibinds-rs"
+if [[ ! -x "$bin" ]]; then
+    bin="$(command -v hud-yazibinds-rs || true)"
+fi
+
+if [[ ! -x "$bin" ]]; then
+    echo "окно Yazi не установлено: нет hud-yazibinds-rs ни в ${HUDBAR_BIN_DIR:-$HOME/.local/bin}, ни в PATH" >&2
+    exit 1
+fi
 
 find_window_id() {
     niri msg windows 2>/dev/null | python3 -c '

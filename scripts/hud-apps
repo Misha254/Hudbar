@@ -4,10 +4,15 @@
 # здесь не нужен и невозможен: слой не виден в `niri msg windows`.
 set -euo pipefail
 
+# Бинарник ищется так: HUDBAR_BIN_DIR, затем ~/.local/bin, затем PATH —
+# пакет ставит его в /usr/bin, и переменную для этого задавать не нужно.
 bin="${HUDBAR_BIN_DIR:-$HOME/.local/bin}/hud-apps-rs"
+if [[ ! -x "$bin" ]]; then
+    bin="$(command -v hud-apps-rs || true)"
+fi
 
 if [[ ! -x "$bin" ]]; then
-    echo "лаунчер приложений не установлен: нет $bin" >&2
+    echo "лаунчер приложений не установлен: нет hud-apps-rs ни в ${HUDBAR_BIN_DIR:-$HOME/.local/bin}, ни в PATH" >&2
     exit 1
 fi
 

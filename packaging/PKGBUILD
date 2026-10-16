@@ -1,0 +1,86 @@
+# Maintainer: Misha254 <https://github.com/Misha254>
+#
+# Источник — сам git-тег, а не архив GitHub: архив GitHub собирается на лету, и
+# его контрольная сумма может измениться без единого изменения в коде. Тег
+# зафиксирован, поэтому сборка повторяема и без суммы.
+#
+# Лицензия в репозитории не объявлена, поэтому `custom`. Если она появится,
+# строку нужно заменить, а файл положить в /usr/share/licenses/hudbar/.
+
+pkgname=hudbar
+pkgver=0.11.0
+pkgrel=1
+pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев и VPN'
+arch=('x86_64')
+url='https://github.com/Misha254/Hudbar'
+license=('custom')
+depends=('dbus' 'gcc-libs' 'libxkbcommon' 'systemd-libs')
+makedepends=('cargo' 'git' 'rust')
+optdepends=(
+    'niri: рабочий стол, для которого панель и написана'
+    'networkmanager: чип сети, Wi-Fi и VPN (nmcli)'
+    'bluez-utils: состояние Bluetooth (bluetoothctl)'
+    'pipewire: громкость и микрофон (wpctl, pactl)'
+    'dunst: уведомления (dunstctl)'
+    'python: hud-setting, hud-theme и hud-migrate-settings'
+    'matugen: цвета интерфейса из обоев'
+    'kitty: терминальные приложения из лаунчера'
+    'yazi: окно файлового менеджера (hud-yazibinds)'
+)
+install="$pkgname.install"
+source=("$pkgname::git+$url.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+# Бинарники-окна и обёртки к ним: панель зовёт обёртки, обёртки — бинарники.
+_bins=(
+    hudbar
+    hud-menu-rs
+    hud-apps-rs
+    hud-keybinds-rs
+    hud-yazibinds-rs
+    hud-vpn-rs
+    hud-wallpaper-rs
+    hud-schemes-rs
+)
+_scripts=(
+    hud-menu
+    hud-apps
+    hud-keybinds
+    hud-yazibinds
+    hud-vpn
+    hud-wallpaper
+    hud-setting
+    hud-theme
+    hud-migrate-settings
+)
+_configs=(settings.json colors.css font)
+
+build() {
+    cd "$pkgname"
+    cargo build --release --locked --bins
+}
+
+package() {
+    cd "$pkgname"
+
+    for binary in "${_bins[@]}"; do
+        install -Dm755 "target/release/$binary" "$pkgdir/usr/bin/$binary"
+    done
+
+    for script in "${_scripts[@]}"; do
+        install -Dm755 "scripts/$script" "$pkgdir/usr/bin/$script"
+    done
+
+    # Установщик не трогает домашний каталог: файлы по умолчанию лежат рядом,
+    # а в ~/.config/hudbar их кладёт пользователь (см. hudbar.install).
+    for config in "${_configs[@]}"; do
+        install -Dm644 "config/hudbar/$config" "$pkgdir/usr/share/hudbar/$config"
+    done
+
+    # Схема лежит рядом с настройками: на неё ссылается ключ `$schema` в
+    # установочном файле, поэтому копируется вместе с остальными.
+    install -Dm644 docs/settings.schema.json "$pkgdir/usr/share/hudbar/settings.schema.json"
+
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgname/CHANGELOG.md"
+}

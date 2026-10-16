@@ -1,0 +1,31 @@
+# Сообщения пакета. Пользовательские настройки не тронуты: пакет кладёт только
+# файлы по умолчанию в /usr/share/hudbar, а домашний каталог остаётся за
+# пользователем.
+
+_install_hint() {
+    cat <<'EOF'
+Настройки по умолчанию лежат в /usr/share/hudbar. Скопировать их в домашний каталог:
+
+    mkdir -p ~/.config/hudbar
+    cp /usr/share/hudbar/{settings.json,settings.schema.json,colors.css,font} ~/.config/hudbar/
+
+Панель запускает композитор (niri: spawn-at-startup "hudbar"), а окна — обёртки
+hud-menu, hud-apps, hud-keybinds, hud-yazibinds, hud-vpn и hud-wallpaper.
+Бинарник ищется в HUDBAR_BIN_DIR, затем в ~/.local/bin, затем в PATH, поэтому
+отдельная переменная для пакетной установки не нужна.
+EOF
+}
+
+post_install() {
+    _install_hint
+}
+
+post_upgrade() {
+    _install_hint
+}
+
+pre_remove() {
+    cat <<'EOF'
+Свои настройки в ~/.config/hudbar пакет не трогает: удалить их нужно вручную.
+EOF
+}

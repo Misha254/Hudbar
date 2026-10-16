@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -97,13 +98,25 @@ def save_state(state: dict) -> None:
     write_atomic(state_path, json.dumps(state, indent=2) + "\n")
 
 
+def our_binary(name: str) -> str:
+    """Наш бинарник: HUDBAR_BIN_DIR, затем ~/.local/bin, затем PATH.
+
+    Пакет ставит бинарники в /usr/bin, и задавать переменную для этого не нужно.
+    """
+    directory = Path(os.environ.get("HUDBAR_BIN_DIR", home / ".local/bin"))
+    candidate = directory / name
+    if candidate.exists():
+        return str(candidate)
+    return shutil.which(name) or str(candidate)
+
+
 def restart_hudbar() -> None:
     subprocess.run(["pkill", "-TERM", "-x", "hudbar"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(30):
         if subprocess.run(["pgrep", "-x", "hudbar"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
             break
         time.sleep(0.1)
-    binary = Path(os.environ.get("HUD_BAR_BIN", home / ".local/bin/hudbar"))
+    binary = os.environ.get("HUD_BAR_BIN", our_binary("hudbar"))
     subprocess.Popen([str(binary)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
@@ -156,7 +169,7 @@ def main() -> int:
             restart_hudbar()
         return 0
     if command == "theme" and len(sys.argv) == 3 and sys.argv[2] in {"pixel", "normal"}:
-        subprocess.run([str(home / ".local/bin/hud-theme"), sys.argv[2]], check=True)
+        subprocess.run([our_binary("hud-theme"), sys.argv[2]], check=True)
         return 0
     if command == "hud-height" and len(sys.argv) == 3:
         state["hudbar"]["height"] = max(24, min(48, int(sys.argv[2])))
