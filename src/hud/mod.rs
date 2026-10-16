@@ -18,9 +18,6 @@ pub mod geom;
 // берёт отсюда и подсветку чипов, и выезд попапа.
 pub mod anim;
 pub mod data;
-// Точечная замена font/line_height/origin в dunst; подключит окно.
-#[allow(dead_code)]
-pub mod dunst;
 pub mod lock;
 pub mod log;
 // OSD громкости и микрофона: детектор изменений, окно рисует App.

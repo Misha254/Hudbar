@@ -46,9 +46,6 @@ mod config;
 #[path = "../hud/config_io.rs"]
 mod config_io;
 #[allow(dead_code)]
-#[path = "../hud/dunst.rs"]
-mod dunst;
-#[allow(dead_code)]
 #[path = "../hud/menu/instance.rs"]
 mod instance;
 #[allow(dead_code)]

@@ -31,7 +31,9 @@ Its leftover layout modules (`settings_ui`, `settings_view`, `settings_snapshot`
 `settings_widgets`, `ui_layout`) are gone too: the menu, wallpaper, VPN and schemes windows only
 ever used the drawing primitives, the `Rect` geometry and the font name. Those now live in
 `src/hud/canvas.rs`, `src/hud/geom.rs` and `ui_tokens::font_name`. The Wi-Fi, audio and Bluetooth
-stages it had covered are complete and live in the menu instead.
+stages it had covered are complete and live in the menu instead. `src/hud/dunst.rs`, the window's
+dunstrc patcher, is gone as well: `hud-setting` (`patch_dunst`) writes the same font, line-height
+and origin values into `dunst/dunstrc` and the matugen template, and it is the only writer left.
 
 ## Deprecated active routes
 
