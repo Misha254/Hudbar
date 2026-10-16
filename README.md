@@ -197,11 +197,16 @@ DND, воркспейсы, элементы трея.
 | Файл | Кто читает | Когда |
 | --- | --- | --- |
 | `settings.json` | `settings.rs`, `hud-theme` | при старте и изменении файла |
+| `settings.schema.json` | редактор по ключу `$schema` | при открытии настроек |
 | `colors.css` | `palette.rs` | каждый проход главного цикла |
 | `font` | `ui::configured_font` | один раз на старте |
 
-`settings.json` содержит секции `appearance`, `hudbar` и `notifications`. Установщик перед
-обновлением объединяет старые настройки и сохраняет backup; исходный файл
+`settings.json` содержит секции `appearance`, `hudbar`, `notifications`, `osd` и `vpn`; описание
+ключей, диапазонов и значений по умолчанию — в `docs/settings.schema.json`. Схема ложится рядом с
+настройками, а в установочном файле стоит ссылка `"$schema": "./settings.schema.json"`: редактор по
+ней проверяет файл и подсказывает ключи. Соответствие схемы коду держат тесты
+(`the_settings_schema_matches_the_parser`), а установочного файла — `the_installed_settings_match_the_schema_defaults`.
+Установщик перед обновлением объединяет старые настройки и сохраняет backup; исходный файл
 `~/.config/hud-settings/settings.json` оставляется без изменений: он читается как запасной
 вариант до 01.01.2027, дальше живёт только `hudbar/settings.json` (см. ROADMAP, F).
 

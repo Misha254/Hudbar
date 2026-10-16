@@ -16,7 +16,11 @@ The `CTL` chip in the bar opens the built-in control center. It provides quick a
 Bluetooth, DND, audio, microphone, wallpapers, power menu, and screen lock.
 
 All persistent HUD state is stored in `~/.config/hudbar/settings.json` under the `appearance`,
-`hudbar`, and `notifications` sections. The previous `~/.config/hud-settings/settings.json` file
+`hudbar`, `notifications`, `osd`, and `vpn` sections. Key names, ranges, and installer defaults are
+described by `docs/settings.schema.json`; the installer drops the schema next to the settings file,
+which points at it with a relative `$schema` key, so an editor validates and completes the file. Two
+tests keep the schema honest: one compares it with the parser (keys, ranges, enumerations), the other
+with the installed default file. The previous `~/.config/hud-settings/settings.json` file
 is read only as a fallback until 2027-01-01, and a script says so on stderr when it actually
 reads it. `hud-migrate-settings` merges it with any existing flat HUDbar settings, writes a backup
 before changing the canonical file, and leaves legacy files untouched. After 2027-01-01 the

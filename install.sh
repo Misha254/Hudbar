@@ -83,11 +83,11 @@ install_default_file() {
 log "building release binaries"
 run cargo build --release --bins --manifest-path "$ROOT_DIR/Cargo.toml"
 
-for binary in hudbar hud-menu-rs hud-apps-rs hud-keybinds-rs hud-yazibinds-rs hud-vpn-rs; do
+for binary in hudbar hud-menu-rs hud-apps-rs hud-keybinds-rs hud-yazibinds-rs hud-vpn-rs hud-wallpaper-rs hud-schemes-rs; do
     install_file "$ROOT_DIR/target/release/$binary" "$PREFIX/bin/$binary" 0755
 done
 
-for script in hud-menu hud-apps hud-keybinds hud-yazibinds hud-vpn hud-setting hud-theme; do
+for script in hud-menu hud-apps hud-keybinds hud-yazibinds hud-vpn hud-wallpaper hud-setting hud-theme; do
     install_file "$ROOT_DIR/scripts/$script" "$PREFIX/bin/$script" 0755
 done
 install_file "$ROOT_DIR/scripts/hud-migrate-settings" "$PREFIX/bin/hud-migrate-settings" 0755
@@ -99,6 +99,10 @@ else
 fi
 
 install_default_file "$ROOT_DIR/config/hudbar/settings.json" "$CONFIG_HOME/hudbar/settings.json"
+
+# Схема лежит рядом с настройками: на неё ссылается ключ `$schema` в
+# установочном файле, по ней редактор проверяет настройки.
+install_file "$ROOT_DIR/docs/settings.schema.json" "$CONFIG_HOME/hudbar/settings.schema.json"
 
 install_file "$ROOT_DIR/config/hudbar/colors.css" "$CONFIG_HOME/hudbar/colors.css"
 install_file "$ROOT_DIR/config/hudbar/font" "$CONFIG_HOME/hudbar/font"

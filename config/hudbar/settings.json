@@ -1,4 +1,5 @@
 {
+  "$schema": "./settings.schema.json",
   "language": "ru",
   "module_order": [
     "tray",
@@ -26,11 +27,22 @@
     "system": true,
     "audio": true,
     "network": true,
-    "dnd": true
+    "dnd": true,
+    "control_button": true,
+    "animations": true,
+    "animation_speed": 1.0
   },
   "notifications": {
-    "line_height": 18,
     "font_size": 13,
+    "line_height": 18,
     "position": "top-right"
+  },
+  "osd": {
+    "enabled": false,
+    "duration_ms": 1600
+  },
+  "vpn": {
+    "controller": "127.0.0.1:9090",
+    "timeout_ms": 1500
   }
 }
