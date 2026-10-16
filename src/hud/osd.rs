@@ -129,12 +129,6 @@ impl OsdDetector {
         }
         self.shown
     }
-
-    /// Жив ли оверлей прямо сейчас. Главный цикл держит по этому признаку
-    /// короткий интервал ожидания, иначе скрытие задерживалось бы на тик.
-    pub fn active(&self, now: Instant) -> bool {
-        self.shown.is_some_and(|shown| shown.visible(now))
-    }
 }
 
 impl Default for OsdDetector {
@@ -177,7 +171,6 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(detector.poll(quiet(), now, default_duration()), None);
-        assert!(!detector.active(now));
     }
 
     #[test]
@@ -277,7 +270,6 @@ mod tests {
             None,
             "на границе срока оверлей скрывается"
         );
-        assert!(!detector.active(at(now, 100 + 1600)));
     }
 
     #[test]
@@ -297,7 +289,6 @@ mod tests {
             .expect("новое изменение после паузы снова показывает оверлей");
 
         assert_eq!(shown.value, 20);
-        assert!(detector.active(late));
     }
 
     #[test]
@@ -317,7 +308,6 @@ mod tests {
             .expect("возврат к прежнему значению — тоже изменение");
 
         assert_eq!(shown.value, 40);
-        assert!(detector.active(late));
     }
 
     #[test]
@@ -329,26 +319,6 @@ mod tests {
         assert_eq!(
             detector.poll(stamp(65, false, 70, false), at(now, 100), Duration::ZERO),
             None
-        );
-        assert!(!detector.active(at(now, 100)));
-    }
-
-    #[test]
-    fn active_follows_the_deadline_without_polling() {
-        let mut detector = OsdDetector::new();
-        let now = Instant::now();
-        detector.poll(quiet(), now, default_duration());
-        detector.poll(
-            stamp(65, false, 70, false),
-            at(now, 100),
-            default_duration(),
-        );
-
-        assert!(detector.active(at(now, 100)));
-        assert!(detector.active(at(now, 1699)));
-        assert!(
-            !detector.active(at(now, 1700)),
-            "признак живого оверлера обязан выключиться на границе"
         );
     }
 
