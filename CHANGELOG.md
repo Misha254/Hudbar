@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.11.1] - 2026-10-16
 
 ### Changed
 - `menu/state.rs` (2562 строк) разделён по зонам модели в подкаталог `menu/state/`:
