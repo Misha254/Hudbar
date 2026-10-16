@@ -55,6 +55,7 @@ fn create_panel(
 fn main() {
     let hud_settings = hud::settings::load();
     let mut settings_stamp = hud::settings::modified();
+    let mut palette_stamp = hud::palette::modified();
     // Один момент на весь App: анимации считаются от него, а не от собственных
     // вызовов `Instant::now()` — иначе разные значения читались бы в разные
     // микро instants и кадр дёргался бы.
@@ -162,12 +163,16 @@ fn main() {
                 app.shared.dirty.store(true, Ordering::Relaxed);
             }
         }
-        let now = chrono::Local::now().format("%a, %d %b %H:%M").to_string();
+        // Один вызов `Local::now()` на оба формата: часы на баре и секунды
+        // в панели — одна и та же секунда, а раньше на каждый проход цикла
+        // приходилось два чтения системных часов и два форматирования.
+        let now_local = chrono::Local::now();
+        let now = now_local.format("%a, %d %b %H:%M").to_string();
         if now != app.clock {
             app.clock = now;
             app.shared.dirty.store(true, Ordering::Relaxed);
         }
-        let secs = chrono::Local::now().format("%H:%M:%S").to_string();
+        let secs = now_local.format("%H:%M:%S").to_string();
         if secs != app.clock_secs {
             app.clock_secs = secs;
             if app
@@ -178,10 +183,19 @@ fn main() {
                 app.shared.dirty.store(true, Ordering::Relaxed);
             }
         }
-        let pal = hud::palette::load();
-        if pal != app.palette {
-            app.palette = pal;
-            app.shared.dirty.store(true, Ordering::Relaxed);
+        // Палитра перечитывается только при изменении mtime `colors.css`.
+        // Полный разбор на каждом проходе цикла — на десятки stat'ов в секунду
+        // во время анимаций — заменён stat'ом, образец тот же, что у настроек.
+        // matugen перезаписывает файл и обновляет mtime, поэтому подхват
+        // новых цветов по-прежнему без перезапуска.
+        let current_palette_stamp = hud::palette::modified();
+        if current_palette_stamp != palette_stamp {
+            let pal = hud::palette::load();
+            if pal != app.palette {
+                app.palette = pal;
+                app.shared.dirty.store(true, Ordering::Relaxed);
+            }
+            palette_stamp = current_palette_stamp;
         }
 
         let _ = event_queue.flush();

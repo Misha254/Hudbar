@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rgba(pub u8, pub u8, pub u8, pub u8);
@@ -45,12 +46,29 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
 }
 
+fn path() -> PathBuf {
+    home().join(".config/hudbar/colors.css")
+}
+
 pub fn load() -> Palette {
-    let Ok(content) = std::fs::read_to_string(home().join(".config/hudbar/colors.css")) else {
+    let Ok(content) = std::fs::read_to_string(path()) else {
         return Palette::default();
     };
 
     parse(&content)
+}
+
+/// Момент последней правки `colors.css`. Прежде палитра полностью читалась и
+/// разбиралась на каждом проходе главного цикла — десятки раз в секунду во
+/// время анимаций. Теперь цикл сверяет только mtime (stat) и читает файл лишь
+/// при изменении: matugen перезаписывает файл целиком и обновляет mtime,
+/// поэтому подхват новых цветов не меняется. Один и тот же образец, что и у
+/// `settings::modified()`.
+/// Вызов — только в `main.rs` панели; окна подключают `palette.rs` через
+/// `#[path]` и этот метод у себя не зовут.
+#[allow(dead_code)]
+pub fn modified() -> Option<SystemTime> {
+    std::fs::metadata(path()).ok()?.modified().ok()
 }
 
 fn parse(content: &str) -> Palette {
