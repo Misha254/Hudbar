@@ -1,0 +1,28 @@
+pkgbase = hudbar
+	pkgdesc = Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев и VPN
+	pkgver = 0.11.0
+	pkgrel = 1
+	url = https://github.com/Misha254/Hudbar
+	install = hudbar.install
+	arch = x86_64
+	license = custom
+	makedepends = cargo
+	makedepends = git
+	makedepends = rust
+	depends = dbus
+	depends = gcc-libs
+	depends = libxkbcommon
+	depends = systemd-libs
+	optdepends = niri: рабочий стол, для которого панель и написана
+	optdepends = networkmanager: чип сети, Wi-Fi и VPN (nmcli)
+	optdepends = bluez-utils: состояние Bluetooth (bluetoothctl)
+	optdepends = pipewire: громкость и микрофон (wpctl, pactl)
+	optdepends = dunst: уведомления (dunstctl)
+	optdepends = python: hud-setting, hud-theme и hud-migrate-settings
+	optdepends = matugen: цвета интерфейса из обоев
+	optdepends = kitty: терминальные приложения из лаунчера
+	optdepends = yazi: окно файлового менеджера (hud-yazibinds)
+	source = hudbar::git+https://github.com/Misha254/Hudbar.git#tag=v0.11.0
+	sha256sums = SKIP
+
+pkgname = hudbar

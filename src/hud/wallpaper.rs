@@ -201,7 +201,7 @@ pub fn apply_then_open_schemes(file: &str, scheme: &str) {
         return;
     };
     let wall_sh = home.join(".local/bin/wall.sh");
-    let schemes_bin = home.join(".local/bin/hud-schemes-rs");
+    let schemes_bin = schemes_binary(std::env::var_os("HUDBAR_BIN_DIR"), &home);
 
     // Аргументы идут позиционно, а не склейкой в строку: путь к обоям может
     // содержать пробелы и кавычки, и shell не должен его разбирать.
@@ -223,5 +223,52 @@ pub fn apply_then_open_schemes(file: &str, scheme: &str) {
 
     if let Err(error) = result {
         super::log::warn(format!("смена не запущена: {error}"));
+    }
+}
+
+/// Где лежит окно схем: `HUDBAR_BIN_DIR`, затем `~/.local/bin`, затем `PATH`.
+///
+/// Правило вынесено сюда целиком, а не двумя строками на месте запуска: его
+/// проверяет тест, а окно схем ставится и пакетом в `/usr/bin` — тогда
+/// переменную окружения задавать не нужно, и имя ищется в `PATH`.
+fn schemes_binary(
+    configured: Option<std::ffi::OsString>,
+    home: &std::path::Path,
+) -> std::ffi::OsString {
+    let directory = configured
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/bin"));
+    let candidate = directory.join("hud-schemes-rs");
+    if candidate.is_file() {
+        return candidate.into_os_string();
+    }
+    std::ffi::OsString::from("hud-schemes-rs")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::schemes_binary;
+
+    #[test]
+    fn schemes_binary_prefers_the_configured_directory_and_falls_back_to_path() {
+        let directory = std::env::temp_dir().join(format!("hudbar-schemes-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("hud-schemes-rs"), b"").unwrap();
+
+        assert_eq!(
+            schemes_binary(
+                Some(directory.clone().into_os_string()),
+                std::path::Path::new("/nonexistent")
+            ),
+            directory.join("hud-schemes-rs").into_os_string(),
+            "настроенный каталог важнее PATH"
+        );
+        assert_eq!(
+            schemes_binary(None, std::path::Path::new("/nonexistent")),
+            std::ffi::OsString::from("hud-schemes-rs"),
+            "нет файла рядом с настройками — имя ищется в PATH"
+        );
+
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }
