@@ -34,6 +34,8 @@ const FRAME_WINDOW: Duration = Duration::from_secs(1);
 /// пережил бы все полезные строки.
 const MAX_BYTES: u64 = 256 * 1024;
 
+/// Каталог журнала: `XDG_STATE_HOME`, а без него — `~/.local/state`.
+#[cfg(not(test))]
 fn path() -> PathBuf {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
@@ -41,6 +43,29 @@ fn path() -> PathBuf {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state")
         });
     base.join("hudbar.log")
+}
+
+/// Каталог журнала в тестовой сборке: свой у каждого процесса прогона.
+#[cfg(test)]
+fn journal_dir() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("hudbar-test-log-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        dir
+    })
+}
+
+/// Путь журнала в тестах — не настоящий.
+///
+/// Строки «команда не ответила» из прогона принадлежат прогону: настоящий
+/// журнал читают, чтобы понять, что было перед сбоем панели, и ложный след там
+/// дороже пустого места. Заодно прогон перестал требовать прав на
+/// `~/.local/state` и не зависит от `$XDG_STATE_HOME` — в CI его ради этого и
+/// подменяли.
+#[cfg(test)]
+fn path() -> PathBuf {
+    journal_dir().join("hudbar.log")
 }
 
 /// Файл прошлого журнала: `hudbar.log` → `hudbar.log.1`. Хранится один:
@@ -238,8 +263,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_BUDGET, MAX_BYTES, SlowFrames, TIMEOUT, backup_path, command_line, output, rotate,
-        status, trace_wanted,
+        FRAME_BUDGET, MAX_BYTES, SlowFrames, TIMEOUT, backup_path, command_line, journal_dir,
+        output, rotate, status, trace_wanted, warn,
     };
 
     /// Аргументы с пробелами берутся в кавычки: строка журнала должна читаться
@@ -291,6 +316,31 @@ mod tests {
             backup_path(Path::new("/tmp/hudbar.log")),
             PathBuf::from("/tmp/hudbar.log.1")
         );
+    }
+
+    /// Прогон пишет в свой журнал, а не в настоящий: ложное «команда не
+    /// ответила» в журнале панели читается как след сбоя.
+    #[test]
+    fn a_test_run_writes_to_its_own_journal() {
+        let path = super::path();
+
+        assert!(
+            journal_dir()
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("hudbar-test-log-")),
+            "каталог тестового журнала: {:?}",
+            journal_dir()
+        );
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "журнал теста: {path:?}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        warn("строка из теста");
+        let text = std::fs::read_to_string(&path).expect("журнал теста");
+
+        assert!(text.contains("строка из теста"), "журнал: {text}");
     }
 
     /// Каталог под файл журнала: имя своё у каждого теста, иначе тесты,
