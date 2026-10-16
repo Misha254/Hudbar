@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [master]
+    # Тег запускает прогон ради релизной сборки: без этой строки job
+    # `release-build` с условием `refs/tags/v` не срабатывал никогда, и тег
+    # никто не проверял — только ветки.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
