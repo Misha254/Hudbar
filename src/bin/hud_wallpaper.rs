@@ -740,25 +740,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
 
     let palette = palette::load();
     let pixmap = wallpaper::view::render(&state, pixel, palette, settings::Language::Ru);
-    write_png(&pixmap, out)
-}
-
-/// Запись пикселей в png, имя файла задаётся в out.
-fn write_png(pixmap: &tiny_skia::Pixmap, out: &str) -> Result<(), String> {
-    let mut encoder = png::Encoder::new(
-        std::fs::File::create(Path::new(out)).map_err(|e| format!("no file: {e}"))?,
-        pixmap.width(),
-        pixmap.height(),
-    );
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut png_writer = encoder
-        .write_header()
-        .map_err(|e| format!("png header: {e}"))?;
-    png_writer
-        .write_image_data(pixmap.data())
-        .map_err(|e| format!("png data: {e}"))?;
-    Ok(())
+    canvas::write_png(&pixmap, Path::new(out))
 }
 
 /// Живой цикл: один экземпляр, слой, ввод, перерисовка.
