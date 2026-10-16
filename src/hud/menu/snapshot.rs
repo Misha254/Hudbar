@@ -12,6 +12,7 @@
 //! кадра взят у оверлея меню в niri: 1200x800, этого хватает, чтобы увидеть
 //! и карточку, и поле вокруг неё.
 
+use super::super::canvas::write_png;
 use super::super::geom::Rect;
 use super::super::palette;
 use super::super::settings_icons;
@@ -265,21 +266,6 @@ fn backdrop(pixmap: &mut tiny_skia::Pixmap, ui: super::super::ui_tokens::UiPalet
         step = if step > 40.0 { 14.0 } else { 38.0 };
     }
     let _ = ui;
-}
-
-/// Запись буфера в PNG. Буфер непрозрачный, поэтому альфа идёт как есть.
-pub fn write_png(pixmap: &tiny_skia::Pixmap, path: &std::path::Path) -> Result<(), String> {
-    let file = std::fs::File::create(path)
-        .map_err(|error| format!("не создался {}: {error}", path.display()))?;
-    let writer = std::io::BufWriter::new(file);
-    let mut encoder = png::Encoder::new(writer, pixmap.width(), pixmap.height());
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut png = encoder
-        .write_header()
-        .map_err(|error| format!("PNG: {error}"))?;
-    png.write_image_data(pixmap.data())
-        .map_err(|error| format!("PNG: {error}"))
 }
 
 /// Разбор `--snapshot <state> <out.png> [--theme normal|pixel]`.

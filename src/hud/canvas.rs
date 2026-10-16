@@ -1,9 +1,9 @@
-//! Рисование по пиксельной карте: примитивы и контекст виджета.
+//! Рисование по пиксельной карте: примитивы, контекст виджета и запись холста.
 //!
 //! Всё это лежало в `settings_view` и `settings_widgets` — остатках снятого
 //! окна настроек, — хотя пользовались ими живые окна: меню, обои, приложения.
 //! Здесь только то, что действительно вызывается: четыре примитива, контекст
-//! рисования и «таблетка» статуса.
+//! рисования, «таблетка» статуса и запись снимка в PNG.
 
 use super::geom::Rect;
 use super::palette;
@@ -123,6 +123,25 @@ pub fn stroke_rect(
     fill_rect(pixmap, x + w - width, y, width, h, color);
 }
 
+/// Запись холста в PNG — одна на все снимки: меню, приложения и окно обоев.
+///
+/// Копий было три, и различались они только текстом ошибок; теперь «не создался
+/// файл» читается одинаково, где бы снимок ни писался. Буфер непрозрачный,
+/// поэтому альфа идёт как есть.
+pub fn write_png(pixmap: &tiny_skia::Pixmap, path: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::create(path)
+        .map_err(|error| format!("не создался {}: {error}", path.display()))?;
+    let writer = std::io::BufWriter::new(file);
+    let mut encoder = png::Encoder::new(writer, pixmap.width(), pixmap.height());
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut png = encoder
+        .write_header()
+        .map_err(|error| format!("PNG: {error}"))?;
+    png.write_image_data(pixmap.data())
+        .map_err(|error| format!("PNG: {error}"))
+}
+
 /// Роли «таблетки».
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BadgeKind {
@@ -237,5 +256,31 @@ mod tests {
                 "виды различаются: pixel={pixel}"
             );
         }
+    }
+
+    /// Снимок читается обратно: запись кладёт RGBA как есть, и тем же форматом
+    /// живут миниатюры обоев.
+    #[test]
+    fn a_written_png_reads_back_as_the_same_pixels() {
+        let dir = std::env::temp_dir().join(format!("hudbar-canvas-png-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("каталог теста");
+        let path = dir.join("frame.png");
+
+        let mut pixmap = tiny_skia::Pixmap::new(3, 2).expect("буфер");
+        pixmap.fill(Rgba(0x12, 0x34, 0x56, 255).to_tiny());
+        write_png(&pixmap, &path).expect("запись png");
+
+        let bytes = std::fs::read(&path).expect("файл снимка");
+        let reader = png::Decoder::new(std::io::Cursor::new(&bytes))
+            .read_info()
+            .expect("заголовок png");
+        let mut reader = reader;
+        let mut buf = vec![0; reader.output_buffer_size().expect("размер кадра")];
+        let info = reader.next_frame(&mut buf).expect("кадр png");
+
+        assert_eq!((info.width, info.height), (3, 2));
+        assert_eq!(buf.as_slice(), pixmap.data(), "пиксели те же");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -11,6 +11,7 @@
 
 use std::path::Path;
 
+use super::super::canvas::write_png;
 use super::super::menu::view::RowsHighlight;
 use super::super::palette::{self, Palette};
 use super::super::settings::Language;
@@ -42,7 +43,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         Some(other) => return Err(format!("неизвестная тема: {other}")),
     };
     let model = scene(mode)?;
-    write_png(&render(&model, pixel, palette::load()), out)
+    write_png(&render(&model, pixel, palette::load()), Path::new(out))
 }
 
 /// Состояние для кадра. Список — настоящий: снимок должен показывать, что
@@ -114,24 +115,6 @@ pub fn render(model: &Model, pixel: bool, base: Palette) -> tiny_skia::Pixmap {
     pixmap
 }
 
-/// Запись кадра в PNG.
-pub fn write_png(pixmap: &tiny_skia::Pixmap, out: &str) -> Result<(), String> {
-    let mut encoder = png::Encoder::new(
-        std::fs::File::create(Path::new(out)).map_err(|error| format!("нет файла: {error}"))?,
-        pixmap.width(),
-        pixmap.height(),
-    );
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder
-        .write_header()
-        .map_err(|error| format!("заголовок png: {error}"))?;
-    writer
-        .write_image_data(pixmap.data())
-        .map_err(|error| format!("данные png: {error}"))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,7 +178,7 @@ mod tests {
         let file =
             std::env::temp_dir().join(format!("hud-apps-snapshot-{}.png", std::process::id()));
         let pixmap = render(&model(), false, palette::Palette::default());
-        write_png(&pixmap, file.to_str().expect("utf-8")).expect("запись png");
+        write_png(&pixmap, &file).expect("запись png");
         let written = std::fs::metadata(&file).expect("файл снимка");
         assert!(written.len() > 0);
         let _ = std::fs::remove_file(&file);
