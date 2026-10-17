@@ -427,6 +427,13 @@ impl App {
         if self.settings.battery
             && let Some(pct) = sys.battery_pct
         {
+            // Число вместо процента — остаток в ватт-часах: абсолютная
+            // ёмкость, а не доля. Уровень заряда показывает иконка. Если
+            // батарея не сообщает энергию — остаётся процент.
+            let value = sys
+                .battery_wh
+                .map(|wh| format!("{wh:.1} Wh"))
+                .unwrap_or_else(|| format!("{pct}%"));
             let (text, color, bg, with_icon) = if pixel {
                 (
                     "BAT".to_string(),
@@ -436,18 +443,18 @@ impl App {
                 )
             } else if sys.charging {
                 (
-                    format!("{I_PLUG}{}{pct}%", self.icon_gap()),
+                    format!("{I_PLUG}{}{value}", self.icon_gap()),
                     p.text,
                     chip_bg,
                     false,
                 )
             } else if pct <= 15 {
                 let (color, bg) = low_battery_style(p, chip_bg);
-                (format!("{pct}%"), color, bg, true)
+                (value, color, bg, true)
             } else if pct <= 30 {
-                (format!("{pct}%"), p.text.with_a(0.75), chip_bg, true)
+                (value, p.text.with_a(0.75), chip_bg, true)
             } else {
-                (format!("{pct}%"), p.text, chip_bg, true)
+                (value, p.text, chip_bg, true)
             };
             let mut c = Cell::new(text, color);
             c.pad_l = if pixel { 2.0 } else { 0.0 };

@@ -10,10 +10,11 @@ pub(super) fn read_trim(p: &Path) -> String {
         .unwrap_or_default()
 }
 
-pub(super) fn battery() -> (Option<u8>, bool, bool) {
+pub(super) fn battery() -> (Option<u8>, bool, bool, Option<f32>) {
     let mut pct = None;
     let mut charging = false;
     let mut ac = false;
+    let mut watts = None;
     if let Ok(rd) = fs::read_dir("/sys/class/power_supply") {
         for e in rd.flatten() {
             let p = e.path();
@@ -21,6 +22,7 @@ pub(super) fn battery() -> (Option<u8>, bool, bool) {
                 "Battery" => {
                     if pct.is_none() {
                         pct = read_trim(&p.join("capacity")).parse().ok();
+                        watts = battery_wh(&p);
                     }
                     let st = read_trim(&p.join("status"));
                     if st == "Charging" || st == "Full" {
@@ -34,7 +36,23 @@ pub(super) fn battery() -> (Option<u8>, bool, bool) {
             }
         }
     }
-    (pct, charging, ac)
+    (pct, charging, ac, watts)
+}
+
+/// Остаток батареи в ватт-часах. Два источника: `energy_now` в µWh, а без
+/// него `charge_now` (µAh) умножить на `voltage_now` (µV): микроампер-часы
+/// и микровольты дают 1e-12 ватт-часов на единицу произведения. Ноль и
+/// отсутствие файлов означают «данных нет».
+fn battery_wh(p: &Path) -> Option<f32> {
+    if let Some(uwh) = read_trim(&p.join("energy_now")).parse::<f64>().ok()
+        && uwh > 0.0
+    {
+        return Some((uwh / 1e6) as f32);
+    }
+    let c = read_trim(&p.join("charge_now")).parse::<f64>().ok()?;
+    let v = read_trim(&p.join("voltage_now")).parse::<f64>().ok()?;
+    let wh = c * v * 1e-12;
+    (wh > 0.0).then_some(wh as f32)
 }
 
 pub(super) fn bat_time_now() -> Option<String> {

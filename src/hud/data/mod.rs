@@ -97,6 +97,7 @@ pub struct WeatherData {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Sys {
     pub battery_pct: Option<u8>,
+    pub battery_wh: Option<f32>,
     pub charging: bool,
     pub ac_online: bool,
     pub bat_time: Option<String>,
@@ -274,8 +275,9 @@ fn sys_loop(shared: Arc<Shared>) {
                     }
                 };
             }
-            if let Some(((bat_pct, charging, ac), bat_time)) = bat {
+            if let Some(((bat_pct, charging, ac, bat_wh), bat_time)) = bat {
                 upd!(battery_pct, bat_pct);
+                upd!(battery_wh, bat_wh);
                 upd!(charging, charging);
                 upd!(ac_online, ac);
                 upd!(bat_time, bat_time);
