@@ -325,95 +325,151 @@ fn apps_section(lang: Language) -> Node {
     .search_as(kw)
 }
 
-/// Раздел «Панель»: тумблеры модулей, геометрия (высота, шестерёнка), OSD и
-/// анимации парами, порядок модулей последним.
+/// Раздел «Панель». В группах: сам экран держит пять входов, а не 17 строк.
+/// Поиск по-прежнему находит конкретные строки — листья пусть и на глубине
+/// два, но в индексе.
 fn panel_section(lang: Language) -> Node {
     let (title, kw) = match lang {
         Language::Ru => ("Панель", &["panel", "панель"]),
         Language::En => ("Panel", &["panel", "панель"]),
     };
+    let children = vec![
+        modules_group(lang),
+        look_group(lang),
+        osd_group(lang),
+        animations_group(lang),
+        order_section(lang),
+    ];
+    Node::submenu(settings_icons::PANEL_MONITOR, title, children).search_as(kw)
+}
+
+/// Группа тумблеров модулей: что вообще живёт на панели.
+fn modules_group(lang: Language) -> Node {
+    let (title, kw) = match lang {
+        Language::Ru => ("Модули", &["modules", "модули"]),
+        Language::En => ("Modules", &["modules", "модули"]),
+    };
+    let children: Vec<Node> = Module::ALL
+        .into_iter()
+        .map(|module| module_row(module, lang))
+        .collect();
+    Node::submenu(settings_icons::TH_LARGE, title, children).search_as(kw)
+}
+
+/// Группа вида панели: высота и шестерёнка Control Center.
+fn look_group(lang: Language) -> Node {
     let t = |ru: &'static str, en: &'static str| match lang {
         Language::Ru => ru,
         Language::En => en,
     };
-    let mut children: Vec<Node> = Module::ALL
-        .into_iter()
-        .map(|module| module_row(module, lang))
-        .collect();
-    children.push(
-        Node::number(
-            settings_icons::PANEL,
-            t("Высота", "Height"),
-            24.0,
-            48.0,
-            1.0,
-            " px",
-            values::height,
-            values::set_height,
-        )
-        .search_as(&["height", "высота"]),
-    );
-    children.push(
-        Node::toggle(
-            settings_icons::CONTROLS,
-            "Control Center",
-            values::control_button,
-            values::set_control_button,
-        )
-        .search_as(&["control", "control center", "шестерёнка"]),
-    );
-    // OSD — парой: поведение и срок держать рядом, а не через список.
-    children.push(
-        Node::toggle(
-            settings_icons::SOUND,
-            t("OSD громкости", "Volume OSD"),
-            values::osd,
-            values::set_osd,
-        )
-        .search_as(&["osd", "громкость", "volume"]),
-    );
-    children.push(
-        Node::number(
-            settings_icons::NOTIFICATIONS,
-            t("Срок OSD", "OSD duration"),
-            OSD_DURATION_MIN_MS as f32,
-            OSD_DURATION_MAX_MS as f32,
-            100.0,
-            " ms",
-            values::osd_duration,
-            values::set_osd_duration,
-        )
-        .search_as(&["osd", "срок", "длительность"]),
-    );
-    // Анимации: панель читает файл на каждом тике и применяет сразу, окна
-    // берут настройки при старте — это сказано в подписи строки.
-    children.push(
-        Node::toggle(
-            settings_icons::APPEARANCE,
-            t("Анимации", "Animations"),
-            values::animations,
-            values::set_animations,
-        )
-        .search_as(&["animation", "animations", "анимации"]),
-    );
-    children.push(
-        Node::number(
-            settings_icons::STYLE,
-            t(
-                "Скорость анимаций (окна — при запуске)",
-                "Animation speed (windows on next start)",
-            ),
-            ANIMATION_SPEED_MIN,
-            ANIMATION_SPEED_MAX,
-            0.25,
-            "×",
-            values::animation_speed,
-            values::set_animation_speed,
-        )
-        .search_as(&["animation", "speed", "анимации", "скорость"]),
-    );
-    children.push(order_section(lang));
-    Node::submenu(settings_icons::PANEL_MONITOR, title, children).search_as(kw)
+    let (title, kw) = match lang {
+        Language::Ru => ("Вид панели", &["look", "вид"]),
+        Language::En => ("Bar look", &["look", "вид"]),
+    };
+    Node::submenu(
+        settings_icons::PANEL,
+        title,
+        vec![
+            Node::number(
+                settings_icons::PANEL,
+                t("Высота", "Height"),
+                24.0,
+                48.0,
+                1.0,
+                " px",
+                values::height,
+                values::set_height,
+            )
+            .search_as(&["height", "высота"]),
+            Node::toggle(
+                settings_icons::CONTROLS,
+                "Control Center",
+                values::control_button,
+                values::set_control_button,
+            )
+            .search_as(&["control", "control center", "шестерёнка"]),
+        ],
+    )
+    .search_as(kw)
+}
+
+/// Группа OSD: поведение и срок сдвоены, настройка одна без соседа выглядела
+/// как забытое.
+fn osd_group(lang: Language) -> Node {
+    let t = |ru: &'static str, en: &'static str| match lang {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    let (title, kw) = match lang {
+        Language::Ru => ("OSD", &["osd", "осд"]),
+        Language::En => ("OSD", &["osd", "осд"]),
+    };
+    Node::submenu(
+        settings_icons::NOTIFICATIONS,
+        title,
+        vec![
+            Node::toggle(
+                settings_icons::SOUND,
+                t("OSD громкости", "Volume OSD"),
+                values::osd,
+                values::set_osd,
+            )
+            .search_as(&["osd", "громкость", "volume"]),
+            Node::number(
+                settings_icons::NOTIFICATIONS,
+                t("Срок OSD", "OSD duration"),
+                OSD_DURATION_MIN_MS as f32,
+                OSD_DURATION_MAX_MS as f32,
+                100.0,
+                " ms",
+                values::osd_duration,
+                values::set_osd_duration,
+            )
+            .search_as(&["osd", "срок", "длительность"]),
+        ],
+    )
+    .search_as(kw)
+}
+
+/// Группа анимаций: панель читает файл на каждом тике и применяет сразу,
+/// окна берут настройки при старте — это сказано в подписи строки.
+fn animations_group(lang: Language) -> Node {
+    let t = |ru: &'static str, en: &'static str| match lang {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    let (title, kw) = match lang {
+        Language::Ru => ("Анимации", &["animations", "анимации"]),
+        Language::En => ("Animations", &["animations", "анимации"]),
+    };
+    Node::submenu(
+        settings_icons::APPEARANCE,
+        title,
+        vec![
+            Node::toggle(
+                settings_icons::APPEARANCE,
+                t("Анимации", "Animations"),
+                values::animations,
+                values::set_animations,
+            )
+            .search_as(&["animation", "animations", "анимации"]),
+            Node::number(
+                settings_icons::STYLE,
+                t(
+                    "Скорость анимаций (окна — при запуске)",
+                    "Animation speed (windows on next start)",
+                ),
+                ANIMATION_SPEED_MIN,
+                ANIMATION_SPEED_MAX,
+                0.25,
+                "×",
+                values::animation_speed,
+                values::set_animation_speed,
+            )
+            .search_as(&["animation", "speed", "анимации", "скорость"]),
+        ],
+    )
+    .search_as(kw)
 }
 
 /// Подраздел порядка модулей: `Enter` опускает модуль на одну позицию в
@@ -738,6 +794,12 @@ fn has_udisksctl() -> bool {
     has("lsblk") && has("udisksctl")
 }
 
+/// niri или udisks гарантируют хотя бы одну строку в «Устройствах»: сама
+/// группа без содержимого не показывается вовсе.
+fn has_devices_menu() -> bool {
+    has_niri() || has_udisksctl()
+}
+
 /// Раздел системы: живые переключатели и быстрые скрипты.
 fn system_section(lang: Language) -> Node {
     let (title, kw) = match lang {
@@ -758,41 +820,8 @@ fn system_section(lang: Language) -> Node {
         .with_id("system/audio")
         .when(has_audio)
         .search_as(&["audio", "sound", "звук", "volume", "громкость", "микрофон"]),
-        Node::dynamic(
-            settings_icons::NETWORK,
-            t("Wi-Fi", "Wi-Fi"),
-            ProviderKey::WIFI,
-        )
-        .with_id("system/wifi")
-        .when(has_nmcli)
-        .search_as(&["wifi", "вайфай", "сеть"]),
-        Node::dynamic(
-            settings_icons::BLUETOOTH,
-            t("Bluetooth", "Bluetooth"),
-            ProviderKey::BLUETOOTH,
-        )
-        .with_id("system/bluetooth")
-        .when(has_bluetoothctl)
-        .search_as(&["bluetooth", "блютуз", "bt"]),
-        Node::dynamic(
-            settings_icons::PANEL_MONITOR,
-            t("Дисплеи", "Displays"),
-            ProviderKey::OUTPUTS,
-        )
-        .with_id("system/displays")
-        .when(has_niri)
-        .search_as(&["displays", "дисплеи", "monitors", "мониторы", "screens"]),
-        Node::dynamic(
-            settings_icons::BATTERY,
-            t("Устройства", "Storage"),
-            ProviderKey::STORAGE,
-        )
-        .with_id("system/storage")
-        .when(has_udisksctl)
-        .search_as(&["storage", "диски", "накопители", "disks", "флешка"]),
-        Node::dynamic(settings_icons::NETWORK, t("VPN", "VPN"), ProviderKey::VPN)
-            .with_id("system/vpn")
-            .search_as(&["vpn", "прокси", "proxy", "mihomo"]),
+        connections_group(lang),
+        devices_group(lang),
         Node::toggle(
             settings_icons::DOT,
             t("Кофе-мод", "Coffee mode"),
@@ -815,6 +844,82 @@ fn system_section(lang: Language) -> Node {
     // вовсе, и пустую строку в разделе показывать нечего.
     children.extend(control_node(lang));
     Node::submenu(settings_icons::SYSTEM, title, children).search_as(kw)
+}
+
+/// Группа связи: Wi-Fi, Bluetooth и VPN собраны под одним входом, чтобы
+/// раздел «Система» не превратился в простыню.
+fn connections_group(lang: Language) -> Node {
+    let t = |ru: &'static str, en: &'static str| match lang {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    let (title, kw) = match lang {
+        Language::Ru => ("Связь", &["connection", "связь", "сеть"]),
+        Language::En => ("Connections", &["connection", "связь", "сеть"]),
+    };
+    Node::submenu(
+        settings_icons::NETWORK,
+        title,
+        vec![
+            Node::dynamic(
+                settings_icons::NETWORK,
+                t("Wi-Fi", "Wi-Fi"),
+                ProviderKey::WIFI,
+            )
+            .with_id("system/wifi")
+            .when(has_nmcli)
+            .search_as(&["wifi", "вайфай", "сеть"]),
+            Node::dynamic(
+                settings_icons::BLUETOOTH,
+                t("Bluetooth", "Bluetooth"),
+                ProviderKey::BLUETOOTH,
+            )
+            .with_id("system/bluetooth")
+            .when(has_bluetoothctl)
+            .search_as(&["bluetooth", "блютуз", "bt"]),
+            Node::dynamic(settings_icons::NETWORK, t("VPN", "VPN"), ProviderKey::VPN)
+                .with_id("system/vpn")
+                .search_as(&["vpn", "прокси", "proxy", "mihomo"]),
+        ],
+    )
+    .search_as(kw)
+}
+
+/// Группа устройств: дисплеи и накопители. niri или udisks гарантируют хотя
+/// бы одну строку — без содержимого группа не показывается вовсе.
+fn devices_group(lang: Language) -> Node {
+    let t = |ru: &'static str, en: &'static str| match lang {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    let (title, kw) = match lang {
+        Language::Ru => ("Устройства", &["devices", "устройства"]),
+        Language::En => ("Devices", &["devices", "устройства"]),
+    };
+    Node::submenu(
+        settings_icons::PANEL_MONITOR,
+        title,
+        vec![
+            Node::dynamic(
+                settings_icons::PANEL_MONITOR,
+                t("Дисплеи", "Displays"),
+                ProviderKey::OUTPUTS,
+            )
+            .with_id("system/displays")
+            .when(has_niri)
+            .search_as(&["displays", "дисплеи", "monitors", "мониторы", "screens"]),
+            Node::dynamic(
+                settings_icons::BATTERY,
+                t("Устройства", "Storage"),
+                ProviderKey::STORAGE,
+            )
+            .with_id("system/storage")
+            .when(has_udisksctl)
+            .search_as(&["storage", "диски", "накопители", "disks", "флешка"]),
+        ],
+    )
+    .when(has_devices_menu)
+    .search_as(kw)
 }
 
 /// Быстрый доступ к конфигам: тот же список, что был в `control.sh` на rofi,
@@ -1145,6 +1250,23 @@ mod tests {
         }
     }
 
+    /// Поиск строки по идентификатору: у прямых детей или внутри групп
+    /// глубиной один — Wi-Fi, Bluetooth и прочие сейчас живут в подменю
+    /// «Связь» и «Устройства».
+    fn find_by_id<'a>(children: &'a [Node], id: &str) -> &'a Node {
+        for node in children {
+            if node.identity() == id {
+                return node;
+            }
+            if let Some(kids) = node.children()
+                && let Some(found) = kids.iter().find(|inner| inner.identity() == id)
+            {
+                return found;
+            }
+        }
+        panic!("нет строки {id}");
+    }
+
     /// Раздел «Звук» — динамический вход с ключом AUDIO и устойчивой
     /// личностью: по ней путь и курсор восстанавливаются после пересборки
     /// дерева. Проверка на дереве, а не на видимости: наличие wpctl/pactl
@@ -1207,10 +1329,7 @@ mod tests {
                 .find(|node| node.identity() == "Система" || node.identity() == "System")
                 .expect("раздел «Система»");
             let children = system.children().expect("у раздела есть дети");
-            let wifi = children
-                .iter()
-                .find(|node| node.identity() == "system/wifi")
-                .expect("вход в «Wi-Fi»");
+            let wifi = find_by_id(children, "system/wifi");
             assert!(
                 matches!(wifi.kind, super::super::tree::NodeKind::Dynamic { key } if key == ProviderKey::WIFI),
                 "вход динамический и с ключом WIFI"
@@ -1242,10 +1361,7 @@ mod tests {
                 .find(|node| node.identity() == "Система" || node.identity() == "System")
                 .expect("раздел «Система»");
             let children = system.children().expect("у раздела есть дети");
-            let bluetooth = children
-                .iter()
-                .find(|node| node.identity() == "system/bluetooth")
-                .expect("вход в «Bluetooth»");
+            let bluetooth = find_by_id(children, "system/bluetooth");
             assert!(
                 matches!(bluetooth.kind, super::super::tree::NodeKind::Dynamic { key } if key == ProviderKey::BLUETOOTH),
                 "вход динамический и с ключом BLUETOOTH"
@@ -1268,10 +1384,7 @@ mod tests {
                 .find(|node| node.identity() == "Система" || node.identity() == "System")
                 .expect("раздел «Система»");
             let children = system.children().expect("у раздела есть дети");
-            let displays = children
-                .iter()
-                .find(|node| node.identity() == "system/displays")
-                .expect("вход в «Дисплеи»");
+            let displays = find_by_id(children, "system/displays");
             assert!(
                 matches!(displays.kind, super::super::tree::NodeKind::Dynamic { key } if key == ProviderKey::OUTPUTS),
                 "вход динамический и с ключом OUTPUTS"
@@ -1302,10 +1415,7 @@ mod tests {
                 .find(|node| node.identity() == "Система" || node.identity() == "System")
                 .expect("раздел «Система»");
             let children = system.children().expect("у раздела есть дети");
-            let storage = children
-                .iter()
-                .find(|node| node.identity() == "system/storage")
-                .expect("вход в «Устройства»");
+            let storage = find_by_id(children, "system/storage");
             assert!(
                 matches!(storage.kind, super::super::tree::NodeKind::Dynamic { key } if key == ProviderKey::STORAGE),
                 "вход динамический и с ключом STORAGE"
