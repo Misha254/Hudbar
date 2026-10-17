@@ -292,6 +292,7 @@ mod tests {
 pub enum Hit {
     WifiChip,
     BtChip,
+    SystemChip,
     ControlChip,
     ClockChip,
     WeatherChip,

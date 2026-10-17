@@ -488,16 +488,19 @@ impl App {
                 cpu.pad_l = 2.0;
                 cpu.pad_r = 2.0;
                 cpu.bar = Some(sys.cpu_pct);
+                cpu.hit = Some(Hit::SystemChip);
                 let mut ram = Cell::new("RAM".to_string(), p.text);
                 ram.pad_l = 2.0;
                 ram.pad_r = 2.0;
                 ram.bar = Some(sys.mem_pct);
+                ram.hit = Some(Hit::SystemChip);
                 let mut cells = vec![cpu];
                 if let Some(t) = sys.temp_c {
                     let mut temp = Cell::new("TEMP".to_string(), p.text);
                     temp.pad_l = 2.0;
                     temp.pad_r = 2.0;
                     temp.bar = Some(t.clamp(0, 100) as u8);
+                    temp.hit = Some(Hit::SystemChip);
                     cells.push(temp);
                 }
                 cells.push(ram);
@@ -507,16 +510,18 @@ impl App {
                     format!("{I_CPU}{}{}%", self.icon_gap(), sys.cpu_pct),
                     p.text,
                 )];
+                cells[0].hit = Some(Hit::SystemChip);
                 if let Some(t) = sys.temp_c {
-                    cells.push(Cell::new(
-                        format!("{I_TEMP}{}{t}\u{b0}C", self.icon_gap()),
-                        p.text,
-                    ));
+                    let mut temp =
+                        Cell::new(format!("{I_TEMP}{}{t}\u{b0}C", self.icon_gap()), p.text);
+                    temp.hit = Some(Hit::SystemChip);
+                    cells.push(temp);
                 }
                 let mut ram = Cell::new(format!("{:.2}GiB", sys.mem_used_gib), p.text);
                 ram.pad_l = 2.0;
                 ram.pad_r = 0.0;
                 ram.ram = true;
+                ram.hit = Some(Hit::SystemChip);
                 cells.push(ram);
                 cells
             };

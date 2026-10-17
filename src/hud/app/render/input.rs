@@ -58,6 +58,18 @@ impl App {
         match hit {
             Some(Hit::WifiChip) => self.toggle_panel(PanelKind::Wifi, qh),
             Some(Hit::BtChip) => self.toggle_panel(PanelKind::Bt, qh),
+            Some(Hit::SystemChip) => {
+                // Чип системы открывает btop: мониторинги в терминале, а не
+                // отдельном окне панели. Без kitty или btop — промах мимо.
+                if crate::hud::data::oneshot::program_exists("btop")
+                    && crate::hud::data::oneshot::program_exists("kitty")
+                {
+                    crate::hud::actions::spawn_with_args(
+                        "kitty",
+                        &["--class", "btop", "-e", "btop"],
+                    );
+                }
+            }
             Some(Hit::ControlChip) => self.toggle_panel(PanelKind::Control, qh),
             Some(Hit::ClockChip) => self.toggle_panel(PanelKind::Clock, qh),
             Some(Hit::WeatherChip) => self.toggle_panel(PanelKind::Weather, qh),
