@@ -191,20 +191,15 @@ pub struct UiPalette {
     pub picker_thumb: palette::Rgba,
     /// Подложка строки под указателем мыши.
     pub hover_bg: palette::Rgba,
-    /// Фон выбранной строки.
-    pub selected_bg: palette::Rgba,
     /// Плитка на месте иконки, которой нет. Отдельная роль: у неё свой порог
     /// (3:1 — это графика) и своя альфа. Приглушённый текст на карточке даёт
     /// 4.5:1 и на строке читался бы как значок, которого не существует.
     pub placeholder: palette::Rgba,
 }
 
-/// Доля акцента в фоне строки под указателем: вчетверо слабее выбранной.
+/// Доля акцента в фоне строки под указателем: слабый намёк, который не читается
+/// вторым выделением — выбранная строка теперь сплошной акцент.
 pub const HOVER_MIX: f32 = 0.07;
-
-/// Доля акцента в фоне выбранной строки. Малая: фон должен наметиться, а не
-/// стать второй подсветкой. Значение снято с макета — там оно 0.15–0.17.
-pub const SELECTED_MIX: f32 = 0.14;
 
 /// Альфа плитки-заглушки на месте отсутствующей иконки.
 ///
@@ -237,7 +232,6 @@ fn extend(base: UiPalette) -> UiPalette {
         // но вчетверо слабее. Отдельная роль, чтобы её нельзя было спутать с
         // выделением выбором.
         hover_bg: mix(base.panel, base.accent, HOVER_MIX),
-        selected_bg: mix(base.panel, base.accent, SELECTED_MIX),
         placeholder: base.text.with_a(PLACEHOLDER_ALPHA),
         ..base
     }
@@ -268,7 +262,6 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             text_disabled: palette::Rgba(0, 0, 0, 0),
             picker_thumb: palette::Rgba(0, 0, 0, 0),
             hover_bg: palette::Rgba(0, 0, 0, 0),
-            selected_bg: palette::Rgba(0, 0, 0, 0),
             // В Pixel заглушка идёт ступенями и без полутонов, но альфа та же,
             // что и в обычной теме: проверка контраста одна на обе темы.
             placeholder: palette::Rgba(0xe8, 0xea, 0xff, 255).with_a(PLACEHOLDER_ALPHA),
@@ -301,7 +294,6 @@ pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
             text_disabled: palette::Rgba(0, 0, 0, 0),
             picker_thumb: palette::Rgba(0, 0, 0, 0),
             hover_bg: palette::Rgba(0, 0, 0, 0),
-            selected_bg: palette::Rgba(0, 0, 0, 0),
             placeholder: palette::Rgba(0, 0, 0, 0),
         }
     };

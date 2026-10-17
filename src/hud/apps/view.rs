@@ -9,7 +9,7 @@
 //! приложения. Заглушка на её месте — кружок: он означает «иконка ещё едет»
 //! и не выдаётся ни за букву, ни за значок категории.
 
-use super::super::menu::view::{RowsHighlight, selected_background};
+use super::super::menu::view::RowsHighlight;
 use super::icons::{self, Loader};
 use super::model::{Model, Row};
 
@@ -49,8 +49,6 @@ pub const SEARCH_W: f32 = 168.0;
 pub const PAD: f32 = spacing::LG;
 /// Отступ подсветки строки от края карточки.
 pub const CARD_INSET: f32 = 1.0;
-/// Акцентная полоса слева у выбранной строки.
-pub const SEL_BAR: f32 = 3.0;
 /// Ползунок прокрутки.
 pub const SCROLLBAR_W: f32 = 2.0;
 pub const SCROLLBAR_INSET: f32 = PAD / 2.0;
@@ -121,8 +119,7 @@ fn center_band(rect: Rect, height: f32) -> Rect {
     Rect::new(rect.x, rect.y + (rect.h - height) / 2.0, rect.w, height)
 }
 
-/// Подсветка выбранной строки: заливка и акцентная полоса слева, обе от краёв
-/// карточки.
+/// Подсветка выбранной строки: сплошная заливка акцентом — та же, что в меню.
 fn highlight_band(view: &mut AppsView<'_>, rect: Rect) {
     let inner = Rect::new(
         rect.x + CARD_INSET,
@@ -135,14 +132,6 @@ fn highlight_band(view: &mut AppsView<'_>, rect: Rect) {
         inner.x * SCALE,
         inner.y * SCALE,
         inner.w * SCALE,
-        inner.h * SCALE,
-        selected_background(view.ui),
-    );
-    fill_rect(
-        view.pixmap,
-        inner.x * SCALE,
-        inner.y * SCALE,
-        SEL_BAR * SCALE,
         inner.h * SCALE,
         view.ui.accent,
     );
@@ -326,16 +315,6 @@ fn rows_view(
     }
     for (slot, row) in visible.iter().enumerate() {
         let rect = Rect::new(list.x, list.y + slot as f32 * ROW_H, list.w, ROW_H);
-        if slot > 0 {
-            fill_rect(
-                view.pixmap,
-                (rect.x + PAD) * SCALE,
-                rect.y * SCALE,
-                (rect.w - PAD * 2.0) * SCALE,
-                SCALE,
-                view.ui.border_subtle,
-            );
-        }
         let absolute = model.top() + slot;
         match row {
             Row::Section(title) => section_row(view, rect, title),
@@ -356,7 +335,7 @@ fn rows_view(
                     show_pin(model, absolute, is_selected),
                     is_selected && highlight.sliding.is_none(),
                     near,
-                    absolute == highlight.hover.unwrap_or(usize::MAX),
+                    !is_selected && absolute == highlight.hover.unwrap_or(usize::MAX),
                 );
             }
         }
@@ -427,11 +406,12 @@ fn app_row(
     near: f32,
     hover: bool,
 ) {
+    // Подложка под указателем — та же заливка без смены цвета текста: мышь
+    // показывает, где кликнёт, но не выбирает. Выбранная строка всегда
+    // акцентом — даже под курсором и при едущей полосе.
     if selected {
         highlight_band(view, rect);
     } else if hover {
-        // Подложка под указателем — та же заливка без полосы и без смены цвета
-        // текста: мышь показывает, где кликнёт, но не выбирает.
         let inner = Rect::new(
             rect.x + CARD_INSET,
             rect.y,
@@ -448,9 +428,10 @@ fn app_row(
         );
     }
     // Цвет текста смешивается с близостью к едущей полосе: строка, которую полоса
-    // сейчас проходит, проявляется постепенно.
+    // сейчас проходит, проявляется постепенно. Выбранный текст — тёмный
+    // `on_primary`: акцентом он не читался бы на заливке акцента.
     let near = near.clamp(0.0, 1.0);
-    let text_color = blend(view.ui.text, view.ui.accent, near);
+    let text_color = blend(view.ui.text, view.ui.on_primary, near);
     let icon_rect = center_band(Rect::new(rect.x + PAD, rect.y, ICON, rect.h), ICON);
     let mark_w = if pinned { 16.0 + spacing::SM } else { 0.0 };
     let label = Rect::new(
@@ -478,7 +459,7 @@ fn app_row(
             view.pixmap,
             settings_icons::PIN,
             view.scale.caption,
-            blend(view.ui.muted, view.ui.accent, near),
+            blend(view.ui.muted, view.ui.on_primary, near),
             center_band(
                 Rect::new(rect.right() - PAD - 16.0, rect.y, 16.0, rect.h),
                 view.scale.label * 2.0,
@@ -488,11 +469,11 @@ fn app_row(
     }
 }
 
-/// Потолок смешения заглушки с акцентом.
+/// Потолок смешения заглушки с цветом текста на акценте.
 ///
-/// Плитка идёт к акценту вместе с текстом строки, но не больше: на полной
-/// смеси она становилась белой плиткой и читалась как значок, которого нет, —
-/// то есть выдавала себя за то, чего не случилось.
+/// Плитка идёт к тому же цвету, что и текст строки, но не дальше: на полном
+/// смешении она становилась белой плиткой и читалась как значок, которого нет,
+/// — то есть выдавала себя за то, чего не случилось.
 const PLACEHOLDER_MIX: f32 = 0.35;
 
 /// Потолок зафиксирован намертво: это требование из L1, а не вкусовое число, и
@@ -513,7 +494,7 @@ fn placeholder(view: &mut AppsView<'_>, rect: Rect, near: f32, failed: bool) {
     // В Pixel полутонов быть не должно: смешение идёт ступенями, а плитка —
     // единственное, что на строке не пиксельное. Поэтому там смесь нулевая.
     let share = placeholder_share(view.pixel, near);
-    let color = blend(view.ui.placeholder, view.ui.accent, share);
+    let color = blend(view.ui.placeholder, view.ui.on_primary, share);
     fill_round_rect(
         view.pixmap,
         rect.x * SCALE,
@@ -530,7 +511,7 @@ fn placeholder(view: &mut AppsView<'_>, rect: Rect, near: f32, failed: bool) {
             view.pixmap,
             glyph,
             view.scale.caption,
-            blend(view.ui.muted, view.ui.accent, share),
+            blend(view.ui.muted, view.ui.on_primary, share),
             rect,
             Align::Center,
         );

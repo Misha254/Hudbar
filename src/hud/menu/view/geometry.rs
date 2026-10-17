@@ -2,7 +2,7 @@ use super::super::geom::Rect;
 use super::super::palette;
 use super::super::state::Frame;
 use super::super::text::SCALE;
-use super::super::ui_tokens::{UiPalette, spacing};
+use super::super::ui_tokens::spacing;
 use super::MenuView;
 use super::secret::SECRET_ROWS;
 
@@ -128,12 +128,6 @@ pub fn layer_size(count: usize, search: bool) -> (u32, u32) {
     let width = CARD_W.round().max(1.0) as u32;
     let height = card_height_for(rows, search).round().max(1.0) as u32;
     (width, height)
-}
-
-/// Фон выбранной строки: смесь поверхности с акцентом. Проверено на обеих
-/// темах — `luminance` результата выше, чем у самой карточки.
-pub fn selected_background(ui: UiPalette) -> palette::Rgba {
-    ui.selected_bg
 }
 
 /// Относительная яркость цвета: 0 — чёрный, 1 — белый. Нужна тесту «фон
