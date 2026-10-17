@@ -325,7 +325,8 @@ fn apps_section(lang: Language) -> Node {
     .search_as(kw)
 }
 
-/// Раздел «Панель»: модули, высота, Control Center и порядок.
+/// Раздел «Панель»: тумблеры модулей, геометрия (высота, шестерёнка), OSD и
+/// анимации парами, порядок модулей последним.
 fn panel_section(lang: Language) -> Node {
     let (title, kw) = match lang {
         Language::Ru => ("Панель", &["panel", "панель"]),
@@ -361,6 +362,7 @@ fn panel_section(lang: Language) -> Node {
         )
         .search_as(&["control", "control center", "шестерёнка"]),
     );
+    // OSD — парой: поведение и срок держать рядом, а не через список.
     children.push(
         Node::toggle(
             settings_icons::SOUND,
@@ -369,6 +371,19 @@ fn panel_section(lang: Language) -> Node {
             values::set_osd,
         )
         .search_as(&["osd", "громкость", "volume"]),
+    );
+    children.push(
+        Node::number(
+            settings_icons::NOTIFICATIONS,
+            t("Срок OSD", "OSD duration"),
+            OSD_DURATION_MIN_MS as f32,
+            OSD_DURATION_MAX_MS as f32,
+            100.0,
+            " ms",
+            values::osd_duration,
+            values::set_osd_duration,
+        )
+        .search_as(&["osd", "срок", "длительность"]),
     );
     // Анимации: панель читает файл на каждом тике и применяет сразу, окна
     // берут настройки при старте — это сказано в подписи строки.
@@ -396,19 +411,6 @@ fn panel_section(lang: Language) -> Node {
             values::set_animation_speed,
         )
         .search_as(&["animation", "speed", "анимации", "скорость"]),
-    );
-    children.push(
-        Node::number(
-            settings_icons::NOTIFICATIONS,
-            t("Срок OSD", "OSD duration"),
-            OSD_DURATION_MIN_MS as f32,
-            OSD_DURATION_MAX_MS as f32,
-            100.0,
-            " ms",
-            values::osd_duration,
-            values::set_osd_duration,
-        )
-        .search_as(&["osd", "срок", "длительность"]),
     );
     children.push(order_section(lang));
     Node::submenu(settings_icons::PANEL_MONITOR, title, children).search_as(kw)
