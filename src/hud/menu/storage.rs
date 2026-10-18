@@ -441,10 +441,15 @@ fn disk_submenu(lang: Language, disk: &Disk) -> Node {
 
 /// Строки раздела «Устройства» из готового снимка.
 pub fn build_nodes(snapshot: &StorageSnapshot, lang: Language) -> Vec<Node> {
-    let mut rows = vec![status_row(lang, snapshot)];
-    if let Block::Ready(list) = &snapshot.disks {
-        rows.extend(list.iter().map(|disk| disk_submenu(lang, disk)));
-    }
+    // Статусная строка нужна только там, где диски за себя не говорят:
+    // пока чтение идёт, при ошибке или с пустым списком. Готовый список
+    // рисует диски напрямую — счётчик «дисков: N» не кликабелен и мешает.
+    let mut rows = match &snapshot.disks {
+        Block::Ready(list) if !list.is_empty() => {
+            list.iter().map(|disk| disk_submenu(lang, disk)).collect()
+        }
+        _ => vec![status_row(lang, snapshot)],
+    };
     rows.push(
         Node::action(
             settings_icons::UP,
@@ -645,7 +650,15 @@ mod tests {
             disks: Block::Ready(parse_disks(LSBLK).expect("список разобран")),
         };
         let nodes = build_nodes(&snapshot, Language::Ru);
-        assert_eq!(nodes[0].title, "дисков: 2");
+        assert!(
+            nodes.iter().all(|node| node.identity() != "storage/status"),
+            "готовый список без некликабельного счётчика: {:?}",
+            nodes.iter().map(|n| n.title.as_str()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            nodes.first().map(|node| node.title.as_str()),
+            Some("KINGSTON SA400S37480G · 447.1 ГиБ · sata")
+        );
         let by_id = |id: &str| {
             nodes
                 .iter()
@@ -672,6 +685,18 @@ mod tests {
         assert!(
             !children.contains(&"storage/disk/dev/sda/eject"),
             "внутренний диск не извлекается: {children:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_list_still_explains_itself() {
+        let snapshot = StorageSnapshot {
+            disks: Block::Ready(Vec::new()),
+        };
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        assert_eq!(
+            nodes.first().map(|node| node.title.as_str()),
+            Some("Нет накопителей")
         );
     }
 
