@@ -839,6 +839,7 @@ fn system_section(lang: Language) -> Node {
         .with_id("system/power-profile")
         .when(has_power_profile)
         .search_as(&["power", "питание", "профиль", "battery"]),
+        super::sysinfo::section(lang),
     ];
     // Панель управления дописывается отдельно: целей может не оказаться
     // вовсе, и пустую строку в разделе показывать нечего.

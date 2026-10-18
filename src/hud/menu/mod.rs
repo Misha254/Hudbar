@@ -39,6 +39,9 @@ pub mod snapshot;
 pub mod state;
 #[allow(dead_code)]
 pub mod storage;
+/// Паспорт машины в меню: строки-справки из /proc и /sys, без команд.
+#[allow(dead_code)]
+pub mod sysinfo;
 #[allow(dead_code)]
 pub mod system;
 #[allow(dead_code)]
