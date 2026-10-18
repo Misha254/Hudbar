@@ -383,7 +383,7 @@ fn status_row(lang: Language, snapshot: &StorageSnapshot) -> Node {
             format!("{word}: {}", list.len())
         }
     };
-    Node::info(settings_icons::BATTERY, &text).with_id(id)
+    Node::info(settings_icons::HARD_DRIVE, &text).with_id(id)
 }
 
 /// Подменю одного накопителя: разделы, их точки монтирования и кнопки.
@@ -436,7 +436,7 @@ fn disk_submenu(lang: Language, disk: &Disk) -> Node {
         );
     }
 
-    Node::submenu(settings_icons::BATTERY, &disk.title(), children).with_id(&disk.row_id())
+    Node::submenu(settings_icons::HARD_DRIVE, &disk.title(), children).with_id(&disk.row_id())
 }
 
 /// Строки раздела «Устройства» из готового снимка.
