@@ -406,37 +406,6 @@ impl App {
         }
     }
 
-    pub fn draw_segment_bar(
-        &self,
-        pixmap: &mut tiny_skia::Pixmap,
-        x: f32,
-        y: f32,
-        h: f32,
-        pct: u8,
-        _color: palette::Rgba,
-    ) {
-        let k = SCALE;
-        let sw = PIXEL_SEGMENT_W * k;
-        let gap = PIXEL_SEGMENT_GAP * k;
-        let sh = PIXEL_SEGMENT_H * k;
-        let total_h = PIXEL_SEGMENT_COUNT as f32 * sh + (PIXEL_SEGMENT_COUNT as f32 - 1.0) * gap;
-        let y0 = y + (h - total_h) / 2.0;
-        let filled = ((pct.min(100) as f32 / 100.0) * PIXEL_SEGMENT_COUNT as f32).round() as usize;
-        for i in 0..PIXEL_SEGMENT_COUNT {
-            let sy = y0 + i as f32 * (sh + gap);
-            let color = if i >= PIXEL_SEGMENT_COUNT - filled {
-                if pct <= 15 {
-                    PIXEL_WARNING
-                } else {
-                    PIXEL_ACTIVE
-                }
-            } else {
-                PIXEL_MUTED.with_a(0.38)
-            };
-            fill_rect(pixmap, x, sy, sw, sh, color);
-        }
-    }
-
     pub fn draw_battery(
         &mut self,
         pixmap: &mut tiny_skia::Pixmap,
@@ -450,35 +419,7 @@ impl App {
         let bw = 17.0 * k;
         let bh = 10.0 * k;
         let y0 = y + (h - bh) / 2.0;
-        if self.pixel_mode() {
-            let m = 1.0 * k;
-            let inner_w = bw - 2.0 * m;
-            let level = (inner_w * (pct.min(100) as f32 / 100.0)).max(inner_w.min(2.0 * m));
-            let ih = bh - 2.0 * m;
-            fill_rect(pixmap, x, y0, bw, bh, PIXEL_MUTED);
-            fill_rect(pixmap, x + m, y0 + m, inner_w, ih, PIXEL_PANEL_ALT);
-            fill_rect(
-                pixmap,
-                x + m,
-                y0 + m,
-                level.min(inner_w),
-                ih,
-                if pct <= 15 {
-                    PIXEL_WARNING
-                } else {
-                    PIXEL_ACTIVE
-                },
-            );
-            fill_rect(
-                pixmap,
-                x + bw + 1.0 * k,
-                y0 + bh * 0.3,
-                2.0 * k,
-                bh * 0.4,
-                PIXEL_MUTED,
-            );
-            return;
-        }
+        let _ = pct;
         fill_round_rect(pixmap, x, y0, bw, bh, 3.0 * k, color.with_a(0.28));
         let m = 1.6 * k;
         let inner_w = bw - 2.0 * m;

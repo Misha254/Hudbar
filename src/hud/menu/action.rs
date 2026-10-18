@@ -406,13 +406,6 @@ pub struct SystemRunner;
 
 impl Runner for SystemRunner {
     fn save(&self, patch: &Patch) -> Result<(), String> {
-        // Тема пишется вместе с файлом шрифта: иначе JSON сказал бы «pixel»,
-        // а painter остался бы на обычном шрифте.
-        if let Patch::Theme(theme) = patch {
-            return super::super::config_io::apply_theme(*theme)
-                .map(|_| ())
-                .map_err(|error| error.to_string());
-        }
         super::super::config_io::apply_patch(patch)
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -532,7 +525,6 @@ impl Runner for RecordingRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::config::Theme;
     use super::*;
 
     /// Каждое действие должно мапиться ровно на свою команду. Проверяется
@@ -601,15 +593,6 @@ mod tests {
             );
             assert_eq!(runner.calls().len(), 1, "{action:?} зовёт один раз");
         }
-    }
-
-    #[test]
-    fn patch_is_written_through_config_io() {
-        let runner = RecordingRunner::default();
-        Action::Patch(Patch::Theme(Theme::Pixel))
-            .perform_with(&runner)
-            .expect("тема записана");
-        assert_eq!(runner.calls(), vec!["save тема: pixel".to_string()]);
     }
 
     #[test]

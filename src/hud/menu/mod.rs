@@ -206,8 +206,6 @@ pub mod strings {
 pub mod fake {
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    /// Индекс темы: 0 — обычная, 1 — Pixel.
-    pub static THEME: AtomicU32 = AtomicU32::new(0);
     /// Индекс языка: 0 — русский, 1 — английский.
     pub static LANGUAGE: AtomicU32 = AtomicU32::new(0);
     /// Высота панели в пикселях.
@@ -223,27 +221,15 @@ pub mod fake {
 
     /// Индекс схемы matugen.
     pub static SCHEME: AtomicU32 = AtomicU32::new(0);
-    /// Индекс шрифта интерфейса.
-    pub static FONT: AtomicU32 = AtomicU32::new(0);
 
-    pub const THEME_NAMES: [&str; 2] = ["Обычная", "Pixel"];
     pub const LANGUAGE_NAMES: [&str; 2] = ["Русский", "English"];
     pub const SCHEME_NAMES: [&str; 2] = ["tonal-spot", "vibrant"];
-    pub const FONT_NAMES: [&str; 2] = ["JetBrainsMono", "Minecraft Rus"];
     pub const WALLPAPERS: [&str; 4] = [
         "anime/103.png",
         "pixelart/light/city.png",
         "nature/forest-01.jpg",
         "renders/01.jpg",
     ];
-
-    pub fn theme() -> usize {
-        THEME.load(Ordering::Relaxed) as usize
-    }
-
-    pub fn set_theme(index: usize) {
-        THEME.store(index as u32, Ordering::Relaxed);
-    }
 
     pub fn language() -> usize {
         LANGUAGE.load(Ordering::Relaxed) as usize
@@ -295,14 +281,6 @@ pub mod fake {
 
     pub fn set_scheme(index: usize) {
         SCHEME.store(index as u32, Ordering::Relaxed);
-    }
-
-    pub fn font() -> usize {
-        FONT.load(Ordering::Relaxed) as usize
-    }
-
-    pub fn set_font(index: usize) {
-        FONT.store(index as u32, Ordering::Relaxed);
     }
 }
 
@@ -363,13 +341,6 @@ pub fn demo_tree() -> Vec<Node> {
             "Стиль",
             vec![
                 Node::choice(
-                    settings_icons::THEME,
-                    "Тема",
-                    &fake::THEME_NAMES,
-                    fake::theme,
-                    fake::set_theme,
-                ),
-                Node::choice(
                     settings_icons::LANGUAGE,
                     "Язык",
                     &fake::LANGUAGE_NAMES,
@@ -383,13 +354,6 @@ pub fn demo_tree() -> Vec<Node> {
                     &fake::SCHEME_NAMES,
                     fake::scheme,
                     fake::set_scheme,
-                ),
-                Node::choice(
-                    settings_icons::FONT_ICON,
-                    "Шрифт",
-                    &fake::FONT_NAMES,
-                    fake::font,
-                    fake::set_font,
                 ),
             ],
         ),
@@ -628,24 +592,23 @@ mod tests {
     }
 
     #[test]
-    fn style_section_shows_five_rows_with_values() {
+    fn style_section_shows_three_rows_with_values() {
         let mut menu = demo_menu();
         menu.move_sel(2);
         assert_eq!(menu.enter(), Outcome::Pushed);
         let frame = menu.frame();
-        assert_eq!(frame.items.len(), 5);
+        assert_eq!(frame.items.len(), 3);
         assert_eq!(
             frame
                 .items
                 .iter()
                 .map(|item| item.title.as_str())
                 .collect::<Vec<_>>(),
-            ["Тема", "Язык", "Обои", "Схема matugen", "Шрифт"]
+            ["Язык", "Обои", "Схема matugen"]
         );
-        assert_eq!(frame.items[0].value, "Обычная");
-        assert_eq!(frame.items[1].value, "Русский");
+        assert_eq!(frame.items[0].value, "Русский");
         assert_eq!(
-            frame.items[2].value, "",
+            frame.items[1].value, "",
             "у обоев вместо значения миниатюра"
         );
     }
@@ -720,18 +683,12 @@ mod tests {
     fn fake_values_move_with_their_setters() {
         fake::set_height(31.0);
         assert_eq!(fake::height(), 31.0);
-        fake::set_theme(1);
-        assert_eq!(fake::theme(), 1);
         fake::set_dnd(false);
         assert!(!fake::dnd());
         fake::set_scheme(1);
         assert_eq!(fake::scheme(), 1);
-        fake::set_font(1);
-        assert_eq!(fake::font(), 1);
         fake::set_scheme(0);
-        fake::set_font(0);
         fake::set_dnd(true);
-        fake::set_theme(0);
         fake::set_height(27.0);
     }
 }

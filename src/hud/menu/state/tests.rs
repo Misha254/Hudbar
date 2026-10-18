@@ -15,10 +15,16 @@ fn tree() -> Vec<Node> {
         Node::submenu(
             "style",
             "Стиль",
-            vec![
-                Node::choice("theme", "Тема", &["Обычная", "Pixel"], || 0, |_| {}),
-                Node::number("height", "Высота", 20.0, 48.0, 1.0, "px", || 27.0, |_| {}),
-            ],
+            vec![Node::number(
+                "height",
+                "Высота",
+                20.0,
+                48.0,
+                1.0,
+                "px",
+                || 27.0,
+                |_| {},
+            )],
         ),
         Node::toggle("dnd", "Не беспокоить", || true, |_| {}),
     ]
@@ -54,7 +60,7 @@ fn enter_pushes_a_level_and_back_pops_it() {
     assert_eq!(menu.depth(), 1);
     assert_eq!(menu.opened_submenu(), Some("Стиль"));
     assert_eq!(menu.trail(), vec!["HUD", "Стиль"]);
-    assert_eq!(titles(&menu), ["Тема", "Высота"]);
+    assert_eq!(titles(&menu), ["Высота"]);
 
     assert_eq!(menu.back(), Outcome::Popped);
     assert_eq!(menu.depth(), 0);
@@ -83,22 +89,24 @@ fn each_level_keeps_its_own_query_and_selection() {
     let mut menu = menu();
     menu.move_sel(1);
     menu.enter();
-    menu.type_char('т');
-    assert_eq!(menu.query(), "т");
+    menu.type_char('в');
+    assert_eq!(menu.query(), "в");
     menu.back();
     assert_eq!(menu.query(), "", "запрос не должен утекать между уровнями");
 }
 
 #[test]
 fn root_search_spans_all_leaves_and_shows_the_path() {
+    // Запрос должен находить листья из разных веток: терминал из «Приложений»
+    // и высоту из «Стиля» — путь листа показывается в подписи.
     let mut menu = menu();
-    for ch in "тем".chars() {
+    for ch in "тер".chars() {
         menu.type_char(ch);
     }
     let frame = menu.frame();
     assert_eq!(frame.items.len(), 1);
-    assert_eq!(frame.items[0].title, "Тема");
-    assert_eq!(frame.items[0].caption.as_deref(), Some("Стиль ›"));
+    assert_eq!(frame.items[0].title, "Терминал");
+    assert_eq!(frame.items[0].caption.as_deref(), Some("Приложения ›"));
     assert_eq!(frame.total, 1);
 }
 
@@ -111,7 +119,7 @@ fn root_search_finds_leaves_from_other_branches() {
     let frame = menu.frame();
     assert_eq!(frame.items.len(), 1);
     assert_eq!(frame.items[0].title, "Высота");
-    assert_eq!(frame.items[0].origin, Origin { depth: 0, index: 2 });
+    assert_eq!(frame.items[0].origin, Origin { depth: 0, index: 1 });
 }
 
 #[test]
@@ -119,11 +127,11 @@ fn search_inside_a_level_stays_inside_that_level() {
     let mut menu = menu();
     menu.move_sel(1);
     menu.enter();
-    for ch in "тем".chars() {
+    for ch in "выс".chars() {
         menu.type_char(ch);
     }
-    assert_eq!(menu.query(), "тем");
-    assert_eq!(titles(&menu), ["Тема"], "поиск уровня не лезет в корень");
+    assert_eq!(menu.query(), "выс");
+    assert_eq!(titles(&menu), ["Высота"], "поиск уровня не лезет в корень");
 
     menu.back();
     assert_eq!(titles(&menu), ["Приложения", "Стиль", "Не беспокоить"]);
@@ -132,7 +140,7 @@ fn search_inside_a_level_stays_inside_that_level() {
 #[test]
 fn clearing_the_root_query_restores_the_sections() {
     let mut menu = menu();
-    for ch in "тем".chars() {
+    for ch in "выс".chars() {
         menu.type_char(ch);
     }
     assert_eq!(menu.frame().items.len(), 1);
@@ -167,13 +175,13 @@ fn backspace_shrinks_the_query_and_the_result() {
 #[test]
 fn enter_on_a_search_result_opens_its_own_level() {
     let mut menu = menu();
-    for ch in "тем".chars() {
+    for ch in "выс".chars() {
         menu.type_char(ch);
     }
     assert_eq!(menu.enter(), Outcome::Pushed);
     assert_eq!(menu.depth(), 1);
     assert_eq!(menu.opened_submenu(), Some("Стиль"));
-    assert_eq!(titles(&menu), ["Тема", "Высота"]);
+    assert_eq!(titles(&menu), ["Высота"]);
     assert_eq!(
         menu.current().list.selected(),
         0,
@@ -460,7 +468,7 @@ fn nudge_moves_only_the_module_order_row() {
 #[test]
 fn back_from_the_root_clears_the_status() {
     let mut menu = menu();
-    menu.set_status(Status::Applied("тема: pixel".to_string()));
+    menu.set_status(Status::Applied("высота: 30".to_string()));
     assert!(menu.status().is_some());
     assert_eq!(menu.back(), Outcome::Closed);
     assert!(menu.status().is_none());
@@ -491,7 +499,7 @@ fn validate_catches_broken_trees() {
 
 #[test]
 fn control_count_sees_leaves_only() {
-    assert_eq!(control_count(&tree()), 4);
+    assert_eq!(control_count(&tree()), 3);
 }
 
 #[test]
@@ -1328,7 +1336,7 @@ fn dynamic_states_render_with_the_plain_card_renderer() {
             assert!(menu.apply_dynamic(key, generation, result));
         }
         menu.set_page(10);
-        let pixmap = render_menu_card(&menu, false);
+        let pixmap = render_menu_card(&menu);
         assert!(pixmap.width() > 0 && pixmap.height() > 0);
     }
 }

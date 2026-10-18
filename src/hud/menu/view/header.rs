@@ -101,7 +101,7 @@ fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
         rect.y * SCALE,
         rect.w * SCALE,
         rect.h * SCALE,
-        radius(view.pixel, radii::SM) * SCALE,
+        radius(radii::SM) * SCALE,
         view.ui.idle_panel,
     );
     stroke_rect(

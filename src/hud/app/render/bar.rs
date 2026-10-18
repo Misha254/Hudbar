@@ -53,9 +53,6 @@ impl App {
             if c.bat.is_some() {
                 w += BAT_ICON_W * k;
             }
-            if c.bar.is_some() {
-                w += PIXEL_SEGMENT_W * k;
-            }
             if c.ram {
                 w += RAM_ICON_W * k;
             }
@@ -77,18 +74,7 @@ impl App {
         let k = SCALE;
         let p = self.bar_palette();
         let w = self.group_width(g);
-        if self.pixel_mode() {
-            draw_pixel_frame(
-                pixmap,
-                x,
-                y,
-                w,
-                height,
-                PIXEL_PANEL,
-                PIXEL_BORDER,
-                PIXEL_HIGHLIGHT,
-            );
-        } else if let Some((_, _, bg)) = g.chip {
+        if let Some((_, _, bg)) = g.chip {
             fill_rect(pixmap, x, y, w, height, bg);
         }
         let mut cx = x + g.chip.map(|(pl, _, _)| pl * k).unwrap_or(0.0);
@@ -96,12 +82,7 @@ impl App {
             let iw = if c.bat.is_some() { BAT_ICON_W * k } else { 0.0 };
             let ram_w = if c.ram { RAM_ICON_W * k } else { 0.0 };
             let text_w = self.text_width(&c.text, c.size);
-            let bar_w = if c.bar.is_some() {
-                PIXEL_SEGMENT_W * k
-            } else {
-                0.0
-            };
-            let cw = (c.pad_l + c.pad_r) * k + text_w + iw + ram_w + bar_w;
+            let cw = (c.pad_l + c.pad_r) * k + text_w + iw + ram_w;
             let text_x = cx + iw + ram_w + c.pad_l * k;
             if let Some(bg) = c.bg {
                 fill_rect(pixmap, cx, y, cw, height, bg);
@@ -109,32 +90,7 @@ impl App {
             if let Some(h) = c.hit {
                 let t = self.hover_alpha(h);
                 if t > 0.001 {
-                    if self.pixel_mode() {
-                        let theme = self.theme();
-                        let (hx, hw, hy, hh) = if theme.full_hover
-                            && matches!(
-                                h,
-                                Hit::VolChip | Hit::MicChip | Hit::ClockChip | Hit::WeatherChip
-                            ) {
-                            (cx, cw, y, height)
-                        } else {
-                            let side = 16.0 * k;
-                            let extra = if matches!(h, Hit::WifiChip) {
-                                theme.wifi_extra * k
-                            } else {
-                                0.0
-                            };
-                            (
-                                text_x + text_w / 2.0 - side / 2.0,
-                                side + extra,
-                                y + (height - side) / 2.0,
-                                side,
-                            )
-                        };
-                        draw_pixel_outline(pixmap, hx, hy, hw, hh, p.primary.with_a(t));
-                    } else {
-                        fill_rect(pixmap, cx, y, cw, height, p.primary.with_a(0.22 * t));
-                    }
+                    fill_rect(pixmap, cx, y, cw, height, p.primary.with_a(0.22 * t));
                 }
             }
             if let Some(pct) = c.bat {
@@ -157,9 +113,6 @@ impl App {
             }
             let lh = self.height as f32;
             self.draw_text(pixmap, &c.text, c.size, c.color, text_x, 0.0, lh);
-            if let Some(pct) = c.bar {
-                self.draw_segment_bar(pixmap, text_x + text_w + 2.0 * k, y, height, pct, c.color);
-            }
             if let Some(hit) = c.hit {
                 self.regions.push((
                     hit,
@@ -185,104 +138,47 @@ impl App {
         let width = self.width as f32 * k;
         let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
 
-        let pixel = self.pixel_mode();
-        if pixel {
-            pixmap.fill(PIXEL_BASE.to_tiny());
-            draw_pixel_frame(
-                pixmap,
-                0.0,
-                0.0,
-                width,
-                h,
-                PIXEL_PANEL_ALT,
-                PIXEL_BORDER,
-                PIXEL_HIGHLIGHT,
-            );
-        } else {
-            pixmap.fill(p.base.with_a(0.9).to_tiny());
-        }
+        pixmap.fill(p.base.with_a(0.8).to_tiny());
 
         let theme = self.theme();
         let chip_y = theme.chip_inset * k;
         let chip_h = h - theme.chip_inset * 2.0 * k;
         let gap = theme.chip_gap * k;
-        let chip_bg = if pixel {
-            PIXEL_PANEL
-        } else {
-            p.secondary.with_a(0.1)
-        };
+        let chip_bg = p.secondary.with_a(0.1);
 
         let mut lx = 0.0;
-        if pixel {
-            lx = 2.0 * k;
-            for (i, ws) in sys.workspaces.iter().enumerate() {
-                let label = ws.name.clone().unwrap_or_else(|| ws.idx.to_string());
-                let tw = self.text_width(&label, SIZE);
-                let w = (tw + 10.0 * k).max(20.0 * k);
-                let (fill, border, text, highlight) = if ws.focused {
-                    (PIXEL_ACTIVE, PIXEL_ACTIVE, PIXEL_ACTIVE_TEXT, PIXEL_ACTIVE)
-                } else if ws.urgent {
-                    (PIXEL_PANEL, PIXEL_WARNING, PIXEL_WARNING, PIXEL_WARNING)
+
+        let mut ws_cells: Vec<Cell> = Vec::new();
+        for (i, ws) in sys.workspaces.iter().enumerate() {
+            let label = ws.name.clone().unwrap_or_else(|| ws.idx.to_string());
+            if ws.focused {
+                let mut c = Cell::new(label, p.on_primary);
+                c.pad_l = 6.0;
+                c.pad_r = 6.0;
+                c.bg = Some(p.primary);
+                c.hit = Some(Hit::Workspace(i));
+                ws_cells.push(c);
+            } else {
+                let color = if ws.urgent {
+                    p.error
                 } else if ws.has_windows {
-                    (PIXEL_PANEL, PIXEL_BORDER, PIXEL_TEXT, PIXEL_HIGHLIGHT)
+                    p.text
                 } else {
-                    (PIXEL_PANEL_ALT, PIXEL_BORDER, PIXEL_MUTED, PIXEL_BORDER)
+                    p.text.with_a(0.4)
                 };
-                draw_pixel_frame(pixmap, lx, chip_y, w, chip_h, fill, border, highlight);
-                self.draw_text(
-                    pixmap,
-                    &label,
-                    SIZE,
-                    text,
-                    lx + (w - tw) / 2.0,
-                    0.0,
-                    self.height as f32,
-                );
-                self.regions.push((
-                    Hit::Workspace(i),
-                    Rect {
-                        x: lx / k,
-                        y: chip_y / k,
-                        w: w / k,
-                        h: chip_h / k,
-                    },
-                ));
-                lx += w + 2.0 * k;
+                let mut c = Cell::new(label, color);
+                c.pad_l = 6.0;
+                c.pad_r = 6.0;
+                c.hit = Some(Hit::Workspace(i));
+                ws_cells.push(c);
             }
-            lx = (lx - 2.0 * k).max(0.0);
-        } else {
-            let mut ws_cells: Vec<Cell> = Vec::new();
-            for (i, ws) in sys.workspaces.iter().enumerate() {
-                let label = ws.name.clone().unwrap_or_else(|| ws.idx.to_string());
-                if ws.focused {
-                    let mut c = Cell::new(label, p.on_primary);
-                    c.pad_l = 6.0;
-                    c.pad_r = 6.0;
-                    c.bg = Some(p.primary);
-                    c.hit = Some(Hit::Workspace(i));
-                    ws_cells.push(c);
-                } else {
-                    let color = if ws.urgent {
-                        p.error
-                    } else if ws.has_windows {
-                        p.text
-                    } else {
-                        p.text.with_a(0.4)
-                    };
-                    let mut c = Cell::new(label, color);
-                    c.pad_l = 6.0;
-                    c.pad_r = 6.0;
-                    c.hit = Some(Hit::Workspace(i));
-                    ws_cells.push(c);
-                }
-            }
-            if !ws_cells.is_empty() {
-                let g = Group {
-                    cells: ws_cells,
-                    chip: Some((5.0, 5.0, chip_bg)),
-                };
-                lx = self.draw_group(pixmap, &g, 0.0, chip_y, chip_h);
-            }
+        }
+        if !ws_cells.is_empty() {
+            let g = Group {
+                cells: ws_cells,
+                chip: Some((5.0, 5.0, chip_bg)),
+            };
+            lx = self.draw_group(pixmap, &g, 0.0, chip_y, chip_h);
         }
 
         let tray_items: Vec<tray::TrayItem> =
@@ -295,20 +191,7 @@ impl App {
                 + tray_items.len() as f32 * icon_s
                 + ispace * (tray_items.len() - 1) as f32;
             let tx = lx + gap;
-            if pixel {
-                draw_pixel_frame(
-                    pixmap,
-                    tx,
-                    chip_y,
-                    total,
-                    chip_h,
-                    PIXEL_PANEL,
-                    PIXEL_BORDER,
-                    PIXEL_HIGHLIGHT,
-                );
-            } else {
-                fill_rect(pixmap, tx, chip_y, total, chip_h, chip_bg);
-            }
+            fill_rect(pixmap, tx, chip_y, total, chip_h, chip_bg);
             let mut cx = tx + tpad;
             let iy = chip_y + (chip_h - icon_s) / 2.0;
             for (i, item) in tray_items.iter().enumerate() {
@@ -325,11 +208,7 @@ impl App {
                     );
                 }
                 if let Some(icon) = &item.icon {
-                    if pixel {
-                        blit_argb_nearest(pixmap, icon, cx, iy, icon_s / k);
-                    } else {
-                        blit_argb(pixmap, icon, cx, iy, icon_s / k);
-                    }
+                    blit_argb(pixmap, icon, cx, iy, icon_s / k);
                 }
                 let rw = icon_s
                     + if i + 1 == tray_items.len() {
@@ -434,14 +313,7 @@ impl App {
                 .battery_wh
                 .map(|wh| format!("{wh:.1} Wh"))
                 .unwrap_or_else(|| format!("{pct}%"));
-            let (text, color, bg, with_icon) = if pixel {
-                (
-                    "BAT".to_string(),
-                    if pct <= 15 { p.error } else { p.text },
-                    chip_bg,
-                    true,
-                )
-            } else if sys.charging {
+            let (text, color, bg, with_icon) = if sys.charging {
                 (
                     format!("{I_PLUG}{}{value}", self.icon_gap()),
                     p.text,
@@ -457,8 +329,6 @@ impl App {
                 (value, p.text, chip_bg, true)
             };
             let mut c = Cell::new(text, color);
-            c.pad_l = if pixel { 2.0 } else { 0.0 };
-            c.pad_r = if pixel { 2.0 } else { 0.0 };
             if with_icon {
                 c.bat = Some(pct);
             }
@@ -483,48 +353,22 @@ impl App {
         }
 
         if self.settings.system {
-            let cells = if pixel {
-                let mut cpu = Cell::new("CPU".to_string(), p.text);
-                cpu.pad_l = 2.0;
-                cpu.pad_r = 2.0;
-                cpu.bar = Some(sys.cpu_pct);
-                cpu.hit = Some(Hit::SystemChip);
-                let mut ram = Cell::new("RAM".to_string(), p.text);
-                ram.pad_l = 2.0;
-                ram.pad_r = 2.0;
-                ram.bar = Some(sys.mem_pct);
-                ram.hit = Some(Hit::SystemChip);
-                let mut cells = vec![cpu];
-                if let Some(t) = sys.temp_c {
-                    let mut temp = Cell::new("TEMP".to_string(), p.text);
-                    temp.pad_l = 2.0;
-                    temp.pad_r = 2.0;
-                    temp.bar = Some(t.clamp(0, 100) as u8);
-                    temp.hit = Some(Hit::SystemChip);
-                    cells.push(temp);
-                }
-                cells.push(ram);
-                cells
-            } else {
-                let mut cells: Vec<Cell> = vec![Cell::new(
-                    format!("{I_CPU}{}{}%", self.icon_gap(), sys.cpu_pct),
-                    p.text,
-                )];
-                cells[0].hit = Some(Hit::SystemChip);
-                if let Some(t) = sys.temp_c {
-                    let mut temp =
-                        Cell::new(format!("{I_TEMP}{}{t}\u{b0}C", self.icon_gap()), p.text);
-                    temp.hit = Some(Hit::SystemChip);
-                    cells.push(temp);
-                }
-                let mut ram = Cell::new(format!("{:.2}GiB", sys.mem_used_gib), p.text);
-                ram.pad_l = 2.0;
-                ram.pad_r = 0.0;
-                ram.ram = true;
-                ram.hit = Some(Hit::SystemChip);
-                cells.push(ram);
-                cells
-            };
+            let mut cells: Vec<Cell> = vec![Cell::new(
+                format!("{I_CPU}{}{}%", self.icon_gap(), sys.cpu_pct),
+                p.text,
+            )];
+            cells[0].hit = Some(Hit::SystemChip);
+            if let Some(t) = sys.temp_c {
+                let mut temp = Cell::new(format!("{I_TEMP}{}{t}\u{b0}C", self.icon_gap()), p.text);
+                temp.hit = Some(Hit::SystemChip);
+                cells.push(temp);
+            }
+            let mut ram = Cell::new(format!("{:.2}GiB", sys.mem_used_gib), p.text);
+            ram.pad_l = 2.0;
+            ram.pad_r = 0.0;
+            ram.ram = true;
+            ram.hit = Some(Hit::SystemChip);
+            cells.push(ram);
             right.push(Slot {
                 order: self.settings.order_index("system"),
                 group: Group {

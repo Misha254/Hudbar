@@ -21,7 +21,7 @@ use smithay_client_toolkit::{
 };
 use wayland_client::{Dispatch, QueueHandle, protocol::wl_surface};
 
-use super::anim::{self, AnimSettings, PIXEL_ANIM_STEPS, Tween};
+use super::anim::{self, AnimSettings, Tween};
 
 /// Длительность проявления окна.
 pub const OPEN_DURATION: std::time::Duration = std::time::Duration::from_millis(120);
@@ -49,12 +49,8 @@ pub fn fade(pixmap: &mut tiny_skia::Pixmap, alpha: f32) {
 
 /// Проявление с учётом темы: в Pixel-теме значение идёт ступенями, полупрозрачной
 /// рамки в пиксельной графике быть не должно.
-pub fn openness_steps(openness: f32, pixel: bool) -> f32 {
-    if pixel {
-        anim::quantize(openness, PIXEL_ANIM_STEPS)
-    } else {
-        openness.clamp(0.0, 1.0)
-    }
+pub fn openness_steps(openness: f32) -> f32 {
+    openness.clamp(0.0, 1.0)
 }
 
 /// Контекст живого слоя: та же поверхность на весь цикл, пул буферов и
@@ -85,9 +81,9 @@ impl Context {
         self.dirty = true;
     }
 
-    /// Текущая степень проявления с учётом темы.
-    pub fn openness_now(&self, now: std::time::Instant, pixel: bool) -> f32 {
-        openness_steps(self.openness.value(now), pixel)
+    /// Текущая степень проявления.
+    pub fn openness_now(&self, now: std::time::Instant) -> f32 {
+        openness_steps(self.openness.value(now))
     }
 
     /// Идёт ли проявление. Пока идёт, цикл обязан ставить dirty и просыпаться
@@ -142,9 +138,8 @@ impl Context {
 
 #[cfg(test)]
 mod tests {
-    use super::anim::{ease_out_cubic, quantize};
+    use super::anim::ease_out_cubic;
     use super::*;
-    use crate::anim::PIXEL_ANIM_STEPS;
 
     fn base() -> std::time::Instant {
         static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -156,38 +151,20 @@ mod tests {
     }
 
     #[test]
-    fn the_normal_theme_keeps_the_whole_range() {
+    fn openness_steps_keeps_the_whole_range() {
         for step in 0..=10 {
             let openness = step as f32 / 10.0;
             assert!(
-                (openness_steps(openness, false) - openness).abs() < 1e-6,
-                "обычная тема не должна квантовать"
+                (openness_steps(openness) - openness).abs() < 1e-6,
+                "прогресс не должен квантоваться"
             );
         }
-    }
-
-    #[test]
-    fn the_pixel_theme_snaps_to_the_shared_steps() {
-        let want = quantize(0.6, PIXEL_ANIM_STEPS);
-        assert!((openness_steps(0.6, true) - want).abs() < 1e-6);
-        for step in 0..=PIXEL_ANIM_STEPS {
-            let value = step as f32 / PIXEL_ANIM_STEPS as f32;
-            assert!(
-                (openness_steps(value, true) - value).abs() < 1e-6,
-                "ступень {step} должна быть точной"
-            );
-        }
-        // Полупрозрачных значений между ступенями не остаётся.
-        assert!((openness_steps(0.4, true) - 0.5).abs() < 1e-6);
-        assert!((openness_steps(0.1, true) - 0.0).abs() < 1e-6);
     }
 
     #[test]
     fn openness_steps_clamps_the_progress() {
-        assert!((openness_steps(1.5, false) - 1.0).abs() < 1e-6);
-        assert!((openness_steps(-0.5, false) - 0.0).abs() < 1e-6);
-        assert!((openness_steps(1.5, true) - 1.0).abs() < 1e-6);
-        assert!((openness_steps(-0.5, true) - 0.0).abs() < 1e-6);
+        assert!((openness_steps(1.2) - 1.0).abs() < 1e-6);
+        assert!((openness_steps(-0.3) - 0.0).abs() < 1e-6);
     }
 
     #[test]

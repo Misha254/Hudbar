@@ -22,7 +22,7 @@ optdepends=(
     'bluez-utils: состояние Bluetooth (bluetoothctl)'
     'pipewire: громкость и микрофон (wpctl, pactl)'
     'dunst: уведомления (dunstctl)'
-    'python: hud-setting, hud-theme и hud-migrate-settings'
+    'python: hud-setting и hud-migrate-settings'
     'matugen: цвета интерфейса из обоев'
     'kitty: терминальные приложения из лаунчера'
     'yazi: окно файлового менеджера (hud-yazibinds)'
@@ -50,7 +50,6 @@ _scripts=(
     hud-vpn
     hud-wallpaper
     hud-setting
-    hud-theme
     hud-migrate-settings
 )
 _configs=(settings.json colors.css font)

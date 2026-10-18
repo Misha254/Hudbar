@@ -157,7 +157,6 @@ pub struct Ctx<'a> {
     pub painter: &'a mut TextPainter,
     pub palette: UiPalette,
     pub scale: TypeScale,
-    pub pixel: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -169,7 +168,7 @@ impl<'a> Ctx<'a> {
             rect.y * SCALE,
             rect.w * SCALE,
             rect.h * SCALE,
-            radius(self.pixel, token) * SCALE,
+            radius(token) * SCALE,
             color,
         );
     }
@@ -224,16 +223,15 @@ mod tests {
     use super::*;
 
     /// Кадр с одной «таблеткой» на чёрном фоне.
-    fn draw(kind: BadgeKind, pixel: bool) -> tiny_skia::Pixmap {
+    fn draw(kind: BadgeKind) -> tiny_skia::Pixmap {
         let mut pixmap = tiny_skia::Pixmap::new(120, 40).expect("буфер");
         pixmap.fill(Rgba(0, 0, 0, 255).to_tiny());
-        let mut painter = TextPainter::new(&font_name(pixel));
+        let mut painter = TextPainter::new(&font_name());
         let mut ctx = Ctx {
             pixmap: &mut pixmap,
             painter: &mut painter,
-            palette: ui_palette(pixel, Palette::default()),
-            scale: type_scale(pixel),
-            pixel,
+            palette: ui_palette(Palette::default()),
+            scale: type_scale(),
         };
         badge(&mut ctx, Rect::new(4.0, 4.0, 100.0, 28.0), "ГОТОВО", kind);
         pixmap
@@ -244,8 +242,8 @@ mod tests {
     #[test]
     fn badge_paints_in_both_themes_and_kinds() {
         for pixel in [false, true] {
-            let accent = draw(BadgeKind::Accent, pixel);
-            let neutral = draw(BadgeKind::Neutral, pixel);
+            let accent = draw(BadgeKind::Accent);
+            let neutral = draw(BadgeKind::Neutral);
             assert!(
                 accent.data().iter().any(|byte| *byte != 0),
                 "таблетка нарисована: pixel={pixel}"

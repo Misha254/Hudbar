@@ -8,7 +8,7 @@ The material is nocturnal graphite with a faint blue-violet cast. Cool periwinkl
 
 Typography is monospaced, but its rhythm is editorial: compact labels, clear section titles, and numbers that read like instrument values. Essential words only. Status is communicated through position, shape, and contrast as much as through text, making the interface equally at home under a pointer or a keyboard focus ring.
 
-Normal and Pixel are two finishes applied to one architecture. Normal favors softened contrast and calmer surfaces; Pixel sharpens corners, edges, and typographic character. Neither changes the information hierarchy. Every control, transition, and alignment should feel meticulously crafted, the product of patient refinement and deep expertise rather than ornament added after the fact.
+One finish is applied to one architecture: softened contrast, calm surfaces, and careful typographic character. The look does not change the information hierarchy. Every control, transition, and alignment should feel meticulously crafted, the product of patient refinement and deep expertise rather than ornament added after the fact.
 
 ## Concept
 
@@ -21,7 +21,7 @@ The interface is a small observatory for the desktop: a stable frame around syst
 - Top identity/status strip, page title and short contextual caption.
 - Main content uses compact grouped surfaces, not a grid of oversized cards.
 - Footer keeps keyboard hints visible; pointer targets remain generous.
-- One shared component structure supports Normal and Pixel finishes.
+- One shared component structure supports one finish.
 
 ## Interaction Direction
 
@@ -54,5 +54,5 @@ The interface is a small observatory for the desktop: a stable frame around syst
 
 - No charts, graphs, decorative sci-fi reticles, or fake telemetry.
 - No multiple competing accent colors.
-- No two separate layouts for Normal and Pixel.
+- No duplicate layouts.
 - No implementation changes before the visual direction is approved.

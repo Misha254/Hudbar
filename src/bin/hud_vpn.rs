@@ -180,7 +180,6 @@ struct MenuApp {
     palette: palette::Palette,
     /// Пиксельная ли тема сейчас: от неё зависят шрифт и скругления.
     /// Берётся из `settings.json` при старте и после каждой смены темы.
-    pixel: bool,
     /// Меню открыли сразу на разделе: `Esc` с него закрывает, а не возвращает
     /// на корень, до которого пользователь не доходил.
     direct: bool,
@@ -364,11 +363,6 @@ impl MenuApp {
     /// Смена языка перестраивает дерево: заголовки хранятся в нём.
     fn sync_theme_lang(&mut self) {
         let current = settings::load();
-        let pixel = current.theme.as_deref() == Some("pixel");
-        if pixel != self.pixel {
-            self.pixel = pixel;
-            self.painter = TextPainter::new(&ui_tokens::font_name(pixel));
-        }
         if current.language != self.menu.lang() {
             self.menu.set_lang(current.language);
         }
@@ -428,7 +422,7 @@ impl MenuApp {
         // Степень проявления окна на текущий момент. Считается один раз на
         // кадр и уходит в общий множитель альфы.
         let now = std::time::Instant::now();
-        let openness = self.ctx.openness_now(now, self.pixel);
+        let openness = self.ctx.openness_now(now);
         let frame_now = self.menu.frame();
         debug_log(&format!(
             "слоев: {} строк: {} выбрано: {} top: {} первая: {:?}",
@@ -446,7 +440,7 @@ impl MenuApp {
             now,
             self.ctx.anim,
         );
-        let highlight_row = self.highlight.row(now, self.pixel);
+        let highlight_row = self.highlight.row(now);
         // Первый кадр рисуется сразу после нашего `set_size`: ждать configure
         // нельзя, иначе меню мигнёт пустым прямо после открытия.
         if self.ctx.width == 0 || self.ctx.height == 0 {
@@ -464,14 +458,13 @@ impl MenuApp {
         // правило слоя размывает то, что под карточкой.
         pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
         let frame = self.menu.frame();
-        let (ui, scale) = view::theme(self.pixel, self.palette);
+        let (ui, scale) = view::theme(self.palette);
         let mut window = MenuView {
             pixmap: &mut pixmap,
             painter: &mut self.painter,
             icons: &mut self.icons,
             ui,
             scale,
-            pixel: self.pixel,
         };
         let card = view::render_window(
             &mut window,
@@ -880,7 +873,6 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
     // композитор убивает клиента прямо на старте. Дерево настоящее, язык и
     // тема — из `settings.json`.
     let lang = settings::load().language;
-    let pixel = settings::load().theme.as_deref() == Some("pixel");
     let user_anim = settings::load().animations;
     // На энергосбережении анимации гаснут сами, настройку не трогаем.
     let anim_on = user_anim && power_profile::anim_allowed();
@@ -929,12 +921,11 @@ fn event_loop(pid_file: &std::path::Path) -> Result<(), String> {
         keyboard: None,
         mods: Modifiers::default(),
         repeat: Repeat::default(),
-        painter: TextPainter::new(&ui_tokens::font_name(pixel)),
+        painter: TextPainter::new(&ui_tokens::font_name()),
         icons: TextPainter::new(settings_icons::FONT),
         menu,
         highlight: menu::highlight::Highlight::new(started),
         palette: palette::load(),
-        pixel,
         scroll_acc: 0.0,
         direct,
         exit: Arc::new(AtomicBool::new(false)),

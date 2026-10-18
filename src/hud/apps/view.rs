@@ -53,7 +53,7 @@ pub const CARD_INSET: f32 = 1.0;
 pub const SCROLLBAR_W: f32 = 2.0;
 pub const SCROLLBAR_INSET: f32 = PAD / 2.0;
 /// Прозрачность карточки: сквозь неё должен быть виден рабочий стол.
-pub const CARD_ALPHA: f32 = 0.9;
+pub const CARD_ALPHA: f32 = 0.8;
 /// Горизонтальный отступ между значками строки и текстом.
 const GAP: f32 = spacing::MD;
 
@@ -66,7 +66,6 @@ pub struct AppsView<'a> {
     pub icons: &'a mut TextPainter,
     pub ui: UiPalette,
     pub scale: TypeScale,
-    pub pixel: bool,
 }
 
 /// Сколько строк рисуется при таком количестве строк в модели.
@@ -165,7 +164,7 @@ fn card(view: &mut AppsView<'_>, rect: Rect) {
         rect.y * SCALE,
         rect.w * SCALE,
         rect.h * SCALE,
-        radius(view.pixel, radii::LG) * SCALE,
+        radius(radii::LG) * SCALE,
         view.ui.panel,
     );
     stroke_rect(
@@ -210,7 +209,7 @@ fn search(view: &mut AppsView<'_>, header: Rect, model: &Model) {
         rect.y * SCALE,
         rect.w * SCALE,
         rect.h * SCALE,
-        radius(view.pixel, radii::SM) * SCALE,
+        radius(radii::SM) * SCALE,
         view.ui.idle_panel,
     );
     stroke_rect(
@@ -493,7 +492,7 @@ const _: () = assert!(
 fn placeholder(view: &mut AppsView<'_>, rect: Rect, near: f32, failed: bool) {
     // В Pixel полутонов быть не должно: смешение идёт ступенями, а плитка —
     // единственное, что на строке не пиксельное. Поэтому там смесь нулевая.
-    let share = placeholder_share(view.pixel, near);
+    let share = placeholder_share(near);
     let color = blend(view.ui.placeholder, view.ui.on_primary, share);
     fill_round_rect(
         view.pixmap,
@@ -501,7 +500,7 @@ fn placeholder(view: &mut AppsView<'_>, rect: Rect, near: f32, failed: bool) {
         rect.y * SCALE,
         rect.w * SCALE,
         rect.h * SCALE,
-        radius(view.pixel, radii::SM) * SCALE,
+        radius(radii::SM) * SCALE,
         color,
     );
     // Глиф только у провала: он отвечает на вопрос «иконки не будет», а пока
@@ -527,13 +526,9 @@ pub fn placeholder_glyph(failed: bool) -> Option<&'static str> {
     failed.then_some(settings_icons::APPS)
 }
 
-/// Доля акцента в заглушке: не больше потолка и ровно нулевая в Pixel.
-pub fn placeholder_share(pixel: bool, near: f32) -> f32 {
-    if pixel {
-        0.0
-    } else {
-        near.clamp(0.0, 1.0) * PLACEHOLDER_MIX
-    }
+/// Доля акцента в заглушке: не больше потолка.
+pub fn placeholder_share(near: f32) -> f32 {
+    near.clamp(0.0, 1.0) * PLACEHOLDER_MIX
 }
 
 /// Полоса прокрутки у правого края списка. Показывается только когда список
@@ -790,8 +785,8 @@ fn blend(a: Rgba, b: Rgba, t: f32) -> Rgba {
 }
 
 /// Палитра и шрифт окна под текущую тему.
-pub fn theme(pixel: bool, base: palette::Palette) -> (UiPalette, TypeScale) {
-    (ui_palette(pixel, base), type_scale(pixel))
+pub fn theme(base: palette::Palette) -> (UiPalette, TypeScale) {
+    (ui_palette(base), type_scale())
 }
 
 #[cfg(test)]
@@ -899,7 +894,7 @@ mod tests {
     /// нет — окно начало бы прятать половину подсказок по умолчанию.
     #[test]
     fn the_full_hint_level_fits_the_card_in_both_languages() {
-        let mut view = view_for(false);
+        let mut view = view_for();
         for lang in [Language::Ru, Language::En] {
             let levels = hint_levels(lang);
             let full = hints_width(&mut view, levels[0]);
@@ -920,7 +915,7 @@ mod tests {
     /// обрезаются многоточием.
     #[test]
     fn the_hints_shrink_instead_of_being_cut() {
-        let mut view = view_for(false);
+        let mut view = view_for();
         let levels = hint_levels(Language::Ru);
         let medium = hints_width(&mut view, levels[1]);
         let tight = medium + 1.0;
@@ -947,7 +942,7 @@ mod tests {
     /// приложения в статусе место сужает один раз, но не наезжает.
     #[test]
     fn the_right_zone_is_reserved_for_the_samples() {
-        let mut view = view_for(false);
+        let mut view = view_for();
         let model = two_sections();
         let zone = right_zone_width(&mut view, &model);
         for sample in ["выбрано 45 из 45", "выбрано 100 из 100"] {
@@ -970,7 +965,7 @@ mod tests {
     /// бы на подсказки или обрезал их.
     #[test]
     fn a_long_status_shrinks_the_hints_instead_of_overlapping() {
-        let mut view = view_for(false);
+        let mut view = view_for();
         let mut model = two_sections();
         model.set_status("Откреплено: An Anime Game Launcher".to_string());
         let zone = right_zone_width(&mut view, &model);
@@ -993,7 +988,7 @@ mod tests {
     /// показывается. Обе новые подсказки на месте.
     #[test]
     fn the_footer_shows_the_new_hints_at_card_width() {
-        let mut view = view_for(false);
+        let mut view = view_for();
         let model = two_sections();
         let zone = right_zone_width(&mut view, &model);
         let available = CARD_W - PAD * 2.0 - zone - spacing::LG;
@@ -1017,26 +1012,14 @@ mod tests {
     /// становилась белой и читалась как значок, которого нет.
     #[test]
     fn the_placeholder_never_reaches_the_accent() {
-        assert_eq!(placeholder_share(false, 1.0), PLACEHOLDER_MIX);
-        assert_eq!(placeholder_share(false, 0.5), 0.175);
-        assert_eq!(placeholder_share(false, 0.0), 0.0);
+        assert_eq!(placeholder_share(1.0), PLACEHOLDER_MIX);
+        assert_eq!(placeholder_share(0.5), 0.175);
+        assert_eq!(placeholder_share(0.0), 0.0);
         assert_eq!(
-            placeholder_share(false, 2.0),
+            placeholder_share(2.0),
             0.35,
             "смешение не выходит за потолок"
         );
-    }
-
-    /// В Pixel полутонов быть не должно: смешение там нулевое.
-    #[test]
-    fn the_pixel_placeholder_has_no_half_tones() {
-        for near in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            assert_eq!(
-                placeholder_share(true, near),
-                0.0,
-                "Pixel: смешения нет ни при каком расстоянии до полосы"
-            );
-        }
     }
 
     /// Провал и ожидание рисуются по-разному: глиф появляется только когда
@@ -1051,7 +1034,7 @@ mod tests {
     /// идёт по всем модельным схемам в тестах `ui_tokens`.
     #[test]
     fn the_placeholder_keeps_the_graphic_threshold_on_the_default_scheme() {
-        let ui = ui_palette(false, palette::Palette::default());
+        let ui = ui_palette(palette::Palette::default());
         let ratio = crate::ui_tokens::contrast(ui.placeholder, ui.panel);
         assert!(ratio >= 3.0, "заглушка к карточке: {ratio}");
     }
@@ -1231,26 +1214,24 @@ mod tests {
     }
 
     /// Вид для измерения подсказок: окно не нужно, нужен только painter.
-    fn view_for(pixel: bool) -> AppsView<'static> {
+    fn view_for() -> AppsView<'static> {
         // `TextPainter` живёт в куче и переживает создание вида: владеть им
         // внутри структуры, которая возвращается, нельзя, поэтому вид берёт
         //painter по ссылке на «вытекшую» память — под тест это безопасно, но
         // написано явно.
-        let painter: &'static mut TextPainter = Box::leak(Box::new(TextPainter::new(
-            &crate::ui_tokens::font_name(pixel),
-        )));
+        let painter: &'static mut TextPainter =
+            Box::leak(Box::new(TextPainter::new(&crate::ui_tokens::font_name())));
         let icons: &'static mut TextPainter =
             Box::leak(Box::new(TextPainter::new(settings_icons::FONT)));
         let pixmap: &'static mut tiny_skia::Pixmap =
             Box::leak(Box::new(tiny_skia::Pixmap::new(1, 1).expect("буфер")));
-        let (ui, scale) = theme(pixel, palette::Palette::default());
+        let (ui, scale) = theme(palette::Palette::default());
         AppsView {
             pixmap,
             painter,
             icons,
             ui,
             scale,
-            pixel,
         }
     }
 }

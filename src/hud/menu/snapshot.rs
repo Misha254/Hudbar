@@ -6,7 +6,7 @@
 //! только данными.
 //!
 //! Запуск:
-//!   hud-menu-rs --snapshot <root|style|search|empty> <out.png> [--theme normal|pixel]
+//!   hud-menu-rs --snapshot <root|style|search|empty> <out.png>
 //!
 //! Кадр — вся поверхность оверлея, с затемнением вокруг карточки. Размер
 //! кадра взят у оверлея меню в niri: 1200x800, этого хватает, чтобы увидеть
@@ -129,21 +129,21 @@ pub fn subject_menu(subject: Subject) -> Menu {
 
 /// Кадр окна: карточка от нуля, полупрозрачная, вокруг ничего. Снимается
 /// тем же кодом, что и живое окно, — иначе они разойдутся.
-pub fn render_window_subject(subject: Subject, pixel: bool) -> tiny_skia::Pixmap {
+pub fn render_window_subject(subject: Subject) -> tiny_skia::Pixmap {
     let menu = subject_menu(subject);
-    render_menu_card(&menu, pixel)
+    render_menu_card(&menu)
 }
 
 /// Карточка произвольного меню тем же кодом, что и живое окно.
-pub fn render_menu_card(menu: &Menu, pixel: bool) -> tiny_skia::Pixmap {
+pub fn render_menu_card(menu: &Menu) -> tiny_skia::Pixmap {
     let frame = menu.frame();
     let card_w = view::CARD_W;
     let card_h = view::card_height_for(frame.items.len(), view::search_mode(&frame));
-    let (ui, scale) = view::theme(pixel, palette::Palette::default());
+    let (ui, scale) = view::theme(palette::Palette::default());
     let mut pixmap =
         tiny_skia::Pixmap::new((card_w * SCALE) as u32, (card_h * SCALE) as u32).expect("pixmap");
     pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
-    let mut painter = TextPainter::new(&font_name(pixel));
+    let mut painter = TextPainter::new(&font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut window = MenuView {
         pixmap: &mut pixmap,
@@ -151,7 +151,6 @@ pub fn render_menu_card(menu: &Menu, pixel: bool) -> tiny_skia::Pixmap {
         icons: &mut icons,
         ui,
         scale,
-        pixel,
     };
     let card = view::render_window(&mut window, &frame, view::RowsHighlight::none());
     view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
@@ -161,12 +160,12 @@ pub fn render_menu_card(menu: &Menu, pixel: bool) -> tiny_skia::Pixmap {
 /// Кадр состояния: подложка, затемнение и карточка.
 /// Рисует произвольный кадр: снимкам и тестам отрисовки ввода пароля.
 /// Кадр приходит снаружи, поэтому тот же путь годен и для режима секрета.
-pub fn render_frame(frame: &Frame, pixel: bool) -> tiny_skia::Pixmap {
-    let (ui, scale) = view::theme(pixel, palette::Palette::default());
+pub fn render_frame(frame: &Frame) -> tiny_skia::Pixmap {
+    let (ui, scale) = view::theme(palette::Palette::default());
     let mut pixmap =
         tiny_skia::Pixmap::new((FRAME_W * SCALE) as u32, (FRAME_H * SCALE) as u32).expect("pixmap");
     backdrop(&mut pixmap, ui);
-    let mut painter = TextPainter::new(&font_name(pixel));
+    let mut painter = TextPainter::new(&font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut menu_view = MenuView {
         pixmap: &mut pixmap,
@@ -174,13 +173,12 @@ pub fn render_frame(frame: &Frame, pixel: bool) -> tiny_skia::Pixmap {
         icons: &mut icons,
         ui,
         scale,
-        pixel,
     };
     view::render(&mut menu_view, frame);
     pixmap
 }
 
-pub fn render_subject(subject: Subject, pixel: bool) -> tiny_skia::Pixmap {
+pub fn render_subject(subject: Subject) -> tiny_skia::Pixmap {
     let menu = subject_menu(subject);
     let mut frame = menu.frame();
     if subject == Subject::Search {
@@ -188,11 +186,11 @@ pub fn render_subject(subject: Subject, pixel: bool) -> tiny_skia::Pixmap {
         // снимок показывает и режим статуса, где счётчика нет.
         frame.status = Some(Status::Applied(strings::STATUS_APPLIED.to_string()));
     }
-    let (ui, scale) = view::theme(pixel, palette::Palette::default());
+    let (ui, scale) = view::theme(palette::Palette::default());
     let mut pixmap =
         tiny_skia::Pixmap::new((FRAME_W * SCALE) as u32, (FRAME_H * SCALE) as u32).expect("pixmap");
     backdrop(&mut pixmap, ui);
-    let mut painter = TextPainter::new(&font_name(pixel));
+    let mut painter = TextPainter::new(&font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut menu_view = MenuView {
         pixmap: &mut pixmap,
@@ -200,7 +198,6 @@ pub fn render_subject(subject: Subject, pixel: bool) -> tiny_skia::Pixmap {
         icons: &mut icons,
         ui,
         scale,
-        pixel,
     };
     view::render(&mut menu_view, &frame);
     pixmap
@@ -268,52 +265,34 @@ fn backdrop(pixmap: &mut tiny_skia::Pixmap, ui: super::super::ui_tokens::UiPalet
     let _ = ui;
 }
 
-/// Разбор `--snapshot <state> <out.png> [--theme normal|pixel]`.
+/// Разбор `--snapshot <state> <out.png>`.
 pub fn run(args: &[String]) -> Result<(), String> {
     let mut subject: Option<Subject> = None;
     let mut out: Option<&str> = None;
-    let mut pixel = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--theme" => {
-                let theme = args
-                    .get(i + 1)
-                    .ok_or("--theme требует значения: normal или pixel")?;
-                pixel = match theme.as_str() {
-                    "pixel" => true,
-                    "normal" => false,
-                    other => return Err(format!("тема не понята: {other}")),
-                };
-                i += 2;
-            }
-            value => {
-                if subject.is_none() {
-                    subject = Some(Subject::from_key(value).ok_or(format!(
-                        "состояние не понято: {value}. Доступны: {}, window",
-                        hint()
-                    ))?);
-                } else if out.is_none() {
-                    out = Some(value);
-                } else {
-                    return Err(format!("лишний аргумент: {value}"));
-                }
-                i += 1;
-            }
+    for value in args {
+        let value = value.as_str();
+        if subject.is_none() {
+            subject = Some(Subject::from_key(value).ok_or(format!(
+                "состояние не понято: {value}. Доступны: {}, window",
+                hint()
+            ))?);
+        } else if out.is_none() {
+            out = Some(value);
+        } else {
+            return Err(format!("лишний аргумент: {value}"));
         }
     }
     let subject = subject.ok_or(format!("нужно состояние: {}", hint()))?;
     let out = out.ok_or("нужен путь к PNG")?;
     let pixmap = if subject == Subject::Window {
-        render_window_subject(subject, pixel)
+        render_window_subject(subject)
     } else {
-        render_subject(subject, pixel)
+        render_subject(subject)
     };
     write_png(&pixmap, std::path::Path::new(out))?;
     println!(
-        "{} {} {}x{} → {out}",
+        "{} {}x{} → {out}",
         subject.label(),
-        if pixel { "pixel" } else { "normal" },
         pixmap.width(),
         pixmap.height()
     );
@@ -331,8 +310,8 @@ pub fn hint() -> String {
 
 /// Состояние для галереи иконок: все глифы меню в одном кадре. Снимок
 /// нужен, чтобы увидеть «тофу» глазами, а не только по таблице кодпойнтов.
-pub fn render_icons(pixel: bool) -> tiny_skia::Pixmap {
-    let (ui, scale) = view::theme(pixel, palette::Palette::default());
+pub fn render_icons() -> tiny_skia::Pixmap {
+    let (ui, scale) = view::theme(palette::Palette::default());
     let columns = 4;
     let cell_w = 220.0;
     let cell_h = 64.0;
@@ -341,7 +320,7 @@ pub fn render_icons(pixel: bool) -> tiny_skia::Pixmap {
     let height = ((140.0 + rows as f32 * cell_h) * SCALE) as u32;
     let mut pixmap = tiny_skia::Pixmap::new(width, height).expect("pixmap");
     pixmap.fill(ui.base.to_tiny());
-    let mut painter = TextPainter::new(&font_name(pixel));
+    let mut painter = TextPainter::new(&font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
     let title = Rect::new(24.0, 20.0, 400.0, 32.0);
     painter.paint(
@@ -391,17 +370,14 @@ fn spacing_gap() -> f32 {
 pub fn render_all(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
     let mut written = Vec::new();
     for subject in Subject::ALL {
-        for pixel in [false, true] {
-            let theme = if pixel { "pixel" } else { "normal" };
-            let path = directory.join(format!("menu-{}-{}.png", subject.key(), theme));
-            let pixmap = if subject == Subject::Window {
-                render_window_subject(subject, pixel)
-            } else {
-                render_subject(subject, pixel)
-            };
-            write_png(&pixmap, &path)?;
-            written.push(path);
-        }
+        let path = directory.join(format!("menu-{}.png", subject.key()));
+        let pixmap = if subject == Subject::Window {
+            render_window_subject(subject)
+        } else {
+            render_subject(subject)
+        };
+        write_png(&pixmap, &path)?;
+        written.push(path);
     }
     Ok(written)
 }
@@ -424,9 +400,8 @@ pub fn render_real_all(directory: &std::path::Path) -> Result<Vec<std::path::Pat
         "about",
     ];
     let mut written = Vec::new();
-    for pixel in [false, true] {
-        let theme = if pixel { "pixel" } else { "normal" };
-        for id in SECTIONS {
+    for id in SECTIONS {
+        {
             let mut menu = super::real::menu();
             match id {
                 "root" => {}
@@ -446,9 +421,8 @@ pub fn render_real_all(directory: &std::path::Path) -> Result<Vec<std::path::Pat
                     let _ = super::open_section(&mut menu, section);
                 }
             }
-            menu.set_page(view::MAX_ROWS);
-            let pixmap = render_menu_card(&menu, pixel);
-            let path = directory.join(format!("menu-real-{id}-{theme}.png"));
+            let pixmap = render_menu_card(&menu);
+            let path = directory.join(format!("menu-real-{id}.png"));
             write_png(&pixmap, &path)?;
             written.push(path);
         }
@@ -456,16 +430,13 @@ pub fn render_real_all(directory: &std::path::Path) -> Result<Vec<std::path::Pat
     Ok(written)
 }
 
-/// Пишет галерею иконок в обеих темах.
+/// Пишет галерею иконок.
 pub fn render_icon_gallery(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
     let mut written = Vec::new();
-    for pixel in [false, true] {
-        let theme = if pixel { "pixel" } else { "normal" };
-        let path = directory.join(format!("menu-gallery-{theme}.png"));
-        let pixmap = render_icons(pixel);
-        write_png(&pixmap, &path)?;
-        written.push(path);
-    }
+    let path = directory.join("menu-gallery.png");
+    let pixmap = render_icons();
+    write_png(&pixmap, &path)?;
+    written.push(path);
     Ok(written)
 }
 
@@ -515,7 +486,7 @@ mod tests {
             secret: Some(input.frame(Language::Ru)),
             lang: Language::Ru,
         };
-        let pixmap = render_frame(&frame, false);
+        let pixmap = render_frame(&frame);
         assert!(pixmap.width() > 0 && pixmap.height() > 0);
         let secret: &SecretFrame = frame.secret.as_ref().expect("ввод в кадре");
         assert_eq!(secret.masked, "•••••••••••");
@@ -543,14 +514,14 @@ mod tests {
     }
 
     #[test]
-    fn style_state_shows_five_rows_with_values() {
+    fn style_state_shows_three_rows_with_values() {
         let frame = subject_menu(Subject::Style).frame();
-        assert_eq!(frame.total, 5);
+        assert_eq!(frame.total, 3);
         assert_eq!(frame.trail, vec!["HUD".to_string(), "Стиль".to_string()]);
-        assert_eq!(frame.items[0].value, "Обычная");
-        assert_eq!(frame.items[2].value, "", "у обоев вместо значения круг");
+        assert_eq!(frame.items[0].value, "Русский");
+        assert_eq!(frame.items[1].value, "", "у обоев вместо значения круг");
         let (values, toggles) = counts(&frame);
-        assert_eq!(values, 4, "четыре пункта со значением");
+        assert_eq!(values, 2, "язык и схема со значением");
         assert_eq!(toggles, 0, "в «Стиле» нет тумблеров");
     }
 
@@ -581,27 +552,25 @@ mod tests {
 
     #[test]
     fn frame_matches_the_overlay_size() {
-        let pixmap = render_subject(Subject::Root, false);
+        let pixmap = render_subject(Subject::Root);
         assert_eq!(pixmap.width() as f32, FRAME_W * SCALE);
         assert_eq!(pixmap.height() as f32, FRAME_H * SCALE);
     }
 
     #[test]
-    fn both_themes_render() {
-        for pixel in [false, true] {
-            let pixmap = render_subject(Subject::Style, pixel);
-            assert!(pixmap.width() > 0 && pixmap.height() > 0);
-        }
+    fn the_style_subject_renders() {
+        let pixmap = render_subject(Subject::Style);
+        assert!(pixmap.width() > 0 && pixmap.height() > 0);
     }
 
     #[test]
-    fn real_tree_renders_every_section_in_both_themes() {
+    fn real_tree_renders_every_section() {
         let dir = std::env::temp_dir().join(format!("hud-menu-real-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("каталог снимков");
         let written = render_real_all(&dir).expect("снимки настоящего дерева");
-        // Корень, девять разделов и порядок модулей в двух темах.
-        assert_eq!(written.len(), 22);
+        // Корень, девять разделов и порядок модулей.
+        assert_eq!(written.len(), 11);
         for path in &written {
             assert!(
                 std::fs::metadata(path).is_ok_and(|meta| meta.len() > 0),
@@ -613,7 +582,7 @@ mod tests {
 
     #[test]
     fn icon_gallery_covers_every_menu_icon() {
-        let pixmap = render_icons(false);
+        let pixmap = render_icons();
         assert!(pixmap.width() >= (400.0 * SCALE) as u32);
         assert!(pixmap.height() > (140.0 * SCALE) as u32);
     }

@@ -7,23 +7,22 @@ use super::super::{Action, Menu, Node};
 use super::*;
 
 /// Карточка списка с произвольной подсветкой: та же отрисовка, что и окно.
-fn render_card(frame: &Frame, pixel: bool, highlight_row: Option<f32>) -> tiny_skia::Pixmap {
-    render_card_hover(frame, pixel, highlight_row, None)
+fn render_card(frame: &Frame, highlight_row: Option<f32>) -> tiny_skia::Pixmap {
+    render_card_hover(frame, highlight_row, None)
 }
 
 /// То же с подсветкой строки под указателем.
 fn render_card_hover(
     frame: &Frame,
-    pixel: bool,
     highlight_row: Option<f32>,
     hover_row: Option<usize>,
 ) -> tiny_skia::Pixmap {
     let card_h = card_height_for(frame.items.len(), search_mode(frame));
-    let (ui, scale) = theme(pixel, palette::Palette::default());
+    let (ui, scale) = theme(palette::Palette::default());
     let mut pixmap =
         tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (card_h * SCALE) as u32).expect("pixmap");
     pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
-    let mut painter = TextPainter::new(&font_name(pixel));
+    let mut painter = TextPainter::new(&font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
     let mut view = MenuView {
         pixmap: &mut pixmap,
@@ -31,7 +30,6 @@ fn render_card_hover(
         icons: &mut icons,
         ui,
         scale,
-        pixel,
     };
     render_window(
         &mut view,
@@ -54,12 +52,19 @@ fn pixel_in_row(pixmap: &tiny_skia::Pixmap, frame: &Frame, slot: f32) -> palette
 }
 
 /// Пиксель кадры по логическим координатам. Буфер `Pixmap` хранит RGBA
-/// сам, перестановка каналов живёт только при отправке в shm.
+/// сам, перестановка каналов живёт только при отправке в shm. Значения
+/// палитры — straight, а буфер — premultiplied: альфа ниже единицы
+/// затемняет каналы, поэтому здесь буфер распаковывают обратно.
 fn at_pixel(pixmap: &tiny_skia::Pixmap, x: f32, y: f32) -> palette::Rgba {
     let data = pixmap.data();
     let at = (y as u32) * pixmap.width() + (x as u32);
     let px = &data[at as usize * 4..at as usize * 4 + 4];
-    palette::Rgba(px[0], px[1], px[2], px[3])
+    let a = px[3] as u32;
+    if a == 0 {
+        return palette::Rgba(0, 0, 0, 0);
+    }
+    let un = |v: u8| ((v as u32 * 255 + a / 2) / a).min(255) as u8;
+    palette::Rgba(un(px[0]), un(px[1]), un(px[2]), px[3])
 }
 
 /// Список из `count` строк с выбором `selected`.
@@ -74,9 +79,9 @@ fn frame_with(count: usize, selected: usize) -> Frame {
 #[test]
 fn no_highlight_row_keeps_the_row_itself_painted() {
     let frame = frame_with(8, 3);
-    let plain = render_card(&frame, false, None);
+    let plain = render_card(&frame, None);
 
-    let (ui, _) = theme(false, palette::Palette::default());
+    let (ui, _) = theme(palette::Palette::default());
     let want = ui.accent;
     for slot in [0.0f32, 2.0, 3.0, 5.0] {
         let got = pixel_in_row(&plain, &frame, slot);
@@ -95,11 +100,11 @@ fn no_highlight_row_keeps_the_row_itself_painted() {
 #[test]
 fn a_highlight_row_draws_at_the_given_position() {
     let frame = frame_with(8, 3);
-    let (ui, _) = theme(false, palette::Palette::default());
+    let (ui, _) = theme(palette::Palette::default());
     let want = ui.accent;
     let lit = |pixmap: &tiny_skia::Pixmap, slot: f32| pixel_in_row(pixmap, &frame, slot) == want;
 
-    let halfway = render_card(&frame, false, Some(1.5));
+    let halfway = render_card(&frame, Some(1.5));
     assert!(lit(&halfway, 1.0), "низ первой строки подсвечен");
     assert!(!lit(&halfway, 2.0), "строка ниже чистая");
     assert!(!lit(&halfway, 0.0), "строка выше не подсвечена");
@@ -108,7 +113,7 @@ fn a_highlight_row_draws_at_the_given_position() {
         "на месте прежнего выбора фона быть не должно"
     );
 
-    let settled = render_card(&frame, false, Some(1.0));
+    let settled = render_card(&frame, Some(1.0));
     assert!(lit(&settled, 1.0), "на целой строке полоса встаёт на неё");
     assert!(!lit(&settled, 2.0), "соседняя строка не подсвечена");
 }
@@ -118,7 +123,7 @@ fn a_highlight_row_draws_at_the_given_position() {
 /// заливке акцента.
 #[test]
 fn the_row_color_follows_the_band_proximity() {
-    let (ui, _) = theme(false, palette::Palette::default());
+    let (ui, _) = theme(palette::Palette::default());
 
     assert_eq!(
         mix(ui.text, ui.on_primary, 0.0),
@@ -157,7 +162,7 @@ fn the_row_color_follows_the_band_proximity() {
 /// побитово прежний: смешение на концах совпадает с исходными цветами.
 #[test]
 fn without_a_band_the_proximity_is_plain_selection() {
-    let (ui, _) = theme(false, palette::Palette::default());
+    let (ui, _) = theme(palette::Palette::default());
     let near = |selected: bool| usize::from(selected) as f32;
 
     assert_eq!(blend(ui.text, ui.on_primary, near(true)), ui.on_primary);
@@ -170,7 +175,7 @@ fn without_a_band_the_proximity_is_plain_selection() {
 fn blending_keeps_the_alpha_of_both_ends() {
     // Цвет иконки невыбранной строки полупрозрачен: смешение, затирающее
     // альфу в 255, посветлило бы все такие иконки.
-    let (ui, _) = theme(false, palette::Palette::default());
+    let (ui, _) = theme(palette::Palette::default());
     assert_ne!(
         ui.muted.3, 255,
         "тест бессмысленен, если цвет иконки непрозрачен"
@@ -199,10 +204,10 @@ fn only_the_row_under_the_band_lights_up() {
 #[test]
 fn the_sliding_band_leaves_the_previous_row() {
     let frame = frame_with(8, 3);
-    let (ui, _) = theme(false, palette::Palette::default());
+    let (ui, _) = theme(palette::Palette::default());
     let want = ui.accent;
 
-    let moving = render_card(&frame, false, Some(1.0));
+    let moving = render_card(&frame, Some(1.0));
 
     assert_eq!(pixel_in_row(&moving, &frame, 1.0), want);
     assert_ne!(
@@ -218,8 +223,8 @@ fn the_sliding_band_leaves_the_previous_row() {
 #[test]
 fn the_selected_row_is_filled_with_accent_from_edge_to_edge() {
     let frame = frame_with(8, 3);
-    let (ui, _) = theme(false, palette::Palette::default());
-    let moving = render_card(&frame, false, Some(2.0));
+    let (ui, _) = theme(palette::Palette::default());
+    let moving = render_card(&frame, Some(2.0));
 
     let row_h = row_height(search_mode(&frame));
     let y = (HEADER_H + 2.0 * row_h + row_h / 2.0) * SCALE;
@@ -237,8 +242,8 @@ fn the_selected_row_is_filled_with_accent_from_edge_to_edge() {
 fn an_empty_list_gets_no_floating_band() {
     let menu = Menu::new(Vec::new());
     let frame = menu.frame();
-    let empty = render_card(&frame, false, Some(0.0));
-    let plain = render_card(&frame, false, None);
+    let empty = render_card(&frame, Some(0.0));
+    let plain = render_card(&frame, None);
 
     assert_eq!(
         empty.data(),
@@ -247,23 +252,18 @@ fn an_empty_list_gets_no_floating_band() {
     );
 }
 
-/// Обе темы рисуются без паники, скользящая подсветка в том числе.
+/// Кадр рисуется без паники, скользящая подсветка в том числе.
 #[test]
-fn both_themes_render_a_sliding_band() {
+fn render_a_sliding_band() {
     let frame = frame_with(8, 3);
-    for pixel in [false, true] {
-        let moving = render_card(&frame, pixel, Some(2.5));
-        assert!(
-            moving.width() > 0 && moving.height() > 0,
-            "тема pixel={pixel}: кадр пуст"
-        );
-        let plain = render_card(&frame, pixel, None);
-        assert_ne!(
-            moving.data(),
-            plain.data(),
-            "тема pixel={pixel}: скользящая полоса ни на что не повлияла"
-        );
-    }
+    let moving = render_card(&frame, Some(2.5));
+    assert!(moving.width() > 0 && moving.height() > 0, "кадр пуст");
+    let plain = render_card(&frame, None);
+    assert_ne!(
+        moving.data(),
+        plain.data(),
+        "скользящая полоса ни на что не повлияла"
+    );
 }
 
 /// Список из десяти строк, выбор девятой: прокрутка ещё не нужна, и
@@ -388,7 +388,7 @@ fn meter_sits_in_the_middle_of_the_row() {
     // Название лежит в строке, значит и дорожка берёт её `y`.
     let label = Rect::new(base.x, row.y, base.w, base.h);
     let track = meter_track(label, row.right());
-    let scale = type_scale(false);
+    let scale = type_scale();
     let bar = meter_rect(center_band(track, scale.label * 2.0), 50).unwrap();
     let row_middle = row.y + row.h / 2.0;
     let bar_middle = bar.y + bar.h / 2.0;
@@ -490,9 +490,9 @@ fn the_search_field_keeps_its_place_next_to_any_crumbs() {
     for lang in [Language::Ru, Language::En] {
         let chrome = strings::chrome(lang);
         let mut pixmap = blank_buffer();
-        let mut painter = TextPainter::new(&font_name(false));
+        let mut painter = TextPainter::new(&font_name());
         let mut icons = TextPainter::new(settings_icons::FONT);
-        let view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+        let view = measuring_view(&mut pixmap, &mut painter, &mut icons);
         let inner = search_rect(header).w - (spacing::SM + ICON + spacing::SM) - spacing::SM;
         let width = view.painter.text_width(chrome.search, view.scale.caption);
         assert!(
@@ -508,13 +508,10 @@ fn the_search_field_keeps_its_place_next_to_any_crumbs() {
 /// неразличимы по весу.
 #[test]
 fn crumbs_are_larger_than_a_row_title() {
-    let scale = type_scale(false);
-    let pixel = type_scale(true);
-    assert!(scale.section_title > scale.label, "обычная тема");
-    assert!(pixel.section_title > pixel.label, "Pixel");
+    let scale = type_scale();
+    assert!(scale.section_title > scale.label);
     // Заголовок окна остаётся крупнее крошек: это уровнем выше.
     assert!(scale.page_title > scale.section_title);
-    assert!(pixel.page_title > pixel.section_title);
     // И вписывается в шапку.
     assert!(
         scale.section_title * 2.0 <= HEADER_H,
@@ -548,25 +545,23 @@ fn the_empty_notice_is_centered_in_the_list_area() {
 /// подсветки мыши поменяло бы все эталонные снимки меню.
 #[test]
 fn no_hover_keeps_the_frame_byte_for_byte() {
-    for pixel in [false, true] {
-        let frame = frame_with(8, 3);
-        let plain = render_card(&frame, pixel, None);
-        let also_plain = render_card_hover(&frame, pixel, None, None);
-        assert_eq!(
-            plain.data(),
-            also_plain.data(),
-            "pixel={pixel}: без подсветки мыши кадр не должен меняться"
-        );
-    }
+    let frame = frame_with(8, 3);
+    let plain = render_card(&frame, None);
+    let also_plain = render_card_hover(&frame, None, None);
+    assert_eq!(
+        plain.data(),
+        also_plain.data(),
+        "без подсветки мыши кадр не должен меняться"
+    );
 }
 
 /// Подсветка мыши не трогает выбор и не двигает скользящую полосу.
 #[test]
 fn hover_paints_only_the_row_under_the_pointer() {
     let frame = frame_with(8, 3);
-    let (ui, _) = theme(false, palette::Palette::default());
-    let plain = render_card_hover(&frame, false, None, None);
-    let hovered = render_card_hover(&frame, false, None, Some(1));
+    let (ui, _) = theme(palette::Palette::default());
+    let plain = render_card_hover(&frame, None, None);
+    let hovered = render_card_hover(&frame, None, Some(1));
 
     assert_ne!(
         plain.data(),
@@ -602,9 +597,9 @@ fn hover_paints_only_the_row_under_the_pointer() {
 #[test]
 fn hover_on_the_selected_row_keeps_the_accent() {
     let frame = frame_with(8, 3);
-    let (ui, _) = theme(false, palette::Palette::default());
-    let plain = render_card_hover(&frame, false, None, None);
-    let hovered = render_card_hover(&frame, false, None, Some(3));
+    let (ui, _) = theme(palette::Palette::default());
+    let plain = render_card_hover(&frame, None, None);
+    let hovered = render_card_hover(&frame, None, Some(3));
 
     assert_eq!(
         pixel_in_row(&hovered, &frame, 3.0),
@@ -623,32 +618,28 @@ fn hover_on_the_selected_row_keeps_the_accent() {
     );
 }
 
-/// Подложка под указателем непрозрачна в обеих темах: полупрозрачный край
-/// в Pixel означал бы ровно тот полутон, которого в этой теме быть не должно.
+/// Подложка под указателем непрозрачна: полупрозрачный край читался бы
+/// дырой в карточке.
 #[test]
 fn the_hover_wash_has_no_transparent_edge() {
-    for pixel in [false, true] {
-        assert_eq!(
-            palette_for(pixel).hover_bg.3,
-            255,
-            "pixel={pixel}: подсветка мыши должна быть плотной"
-        );
-    }
+    assert_eq!(
+        palette_for().hover_bg.3,
+        255,
+        "подсветка мыши должна быть плотной"
+    );
 }
 
 /// Подсветка мыши слабее выбранной строки: иначе мышь выглядела бы как
 /// выбор, а это разные вещи.
 #[test]
 fn hover_is_fainter_than_the_selected_row() {
-    for pixel in [false, true] {
-        let ui = palette_for(pixel);
-        assert_ne!(ui.hover_bg, ui.accent);
-        assert!(
-            (luminance(ui.accent) - luminance(ui.panel)).abs()
-                > (luminance(ui.hover_bg) - luminance(ui.panel)).abs(),
-            "pixel={pixel}: подсветка мыши должна быть слабее выбранной строки"
-        );
-    }
+    let ui = palette_for();
+    assert_ne!(ui.hover_bg, ui.accent);
+    assert!(
+        (luminance(ui.accent) - luminance(ui.panel)).abs()
+            > (luminance(ui.hover_bg) - luminance(ui.panel)).abs(),
+        "подсветка мыши должна быть слабее выбранной строки"
+    );
 }
 
 /// Полоса выбора едет по-прежнему, а подсветка мыши на неё не влияет: при
@@ -656,9 +647,9 @@ fn hover_is_fainter_than_the_selected_row() {
 #[test]
 fn hover_does_not_move_the_sliding_band() {
     let frame = frame_with(8, 3);
-    let ui = palette_for(false);
-    let moving = render_card_hover(&frame, false, Some(2.0), None);
-    let moving_hover = render_card_hover(&frame, false, Some(2.0), Some(5));
+    let ui = palette_for();
+    let moving = render_card_hover(&frame, Some(2.0), None);
+    let moving_hover = render_card_hover(&frame, Some(2.0), Some(5));
 
     assert_eq!(
         pixel_in_row(&moving, &frame, 2.0),
@@ -723,54 +714,12 @@ fn the_scrollbar_moves_with_the_window() {
     );
 }
 
-/// В Pixel у круга нет полутонов: тумблер 16×16 состоит ровно из двух ролей —
-/// кольца и подложки внутри него. Со сглаживанием на его месте оказывалось
-/// восемнадцать уникальных цветов.
+/// Тумблер остаётся сглаженным.
 #[test]
-fn the_pixel_toggle_has_no_half_tones() {
+fn the_toggle_keeps_its_soft_edge() {
     let frame =
         super::super::snapshot::subject_menu(super::super::snapshot::Subject::Search).frame();
-    let pixmap = render_card(&frame, true, None);
-    let data = pixmap.data();
-    let width = pixmap.width();
-
-    // Обходим окно правого индикатора первой строки поиска: там тумблеры.
-    let row_h = row_height(true);
-    let (cx, cy) = {
-        let dot = Rect::new(
-            CARD_W - PAD - TOGGLE_D,
-            HEADER_H + row_h / 2.0,
-            TOGGLE_D,
-            TOGGLE_D,
-        );
-        (dot.x * SCALE, dot.y * SCALE)
-    };
-    let side = (TOGGLE_D * SCALE) as i64;
-    let mut colors = std::collections::BTreeSet::new();
-    for y in (cy as i64)..(cy as i64 + side) {
-        for x in (cx as i64)..(cx as i64 + side) {
-            let at = (y as u32) * width + (x as u32);
-            colors.insert([
-                data[at as usize * 4],
-                data[at as usize * 4 + 1],
-                data[at as usize * 4 + 2],
-            ]);
-        }
-    }
-    assert!(
-        colors.len() <= 3,
-        "тумблер в Pixel состоит из {} цветов вместо двух-трёх: {colors:?}",
-        colors.len()
-    );
-}
-
-/// Тот же тумблер в обычной теме остаётся сглаженным: ступенчатка нужна
-/// только там, где полутонов быть не должно.
-#[test]
-fn the_normal_toggle_keeps_its_soft_edge() {
-    let frame =
-        super::super::snapshot::subject_menu(super::super::snapshot::Subject::Search).frame();
-    let pixmap = render_card(&frame, false, None);
+    let pixmap = render_card(&frame, None);
     let data = pixmap.data();
     let width = pixmap.width();
     let row_h = row_height(true);
@@ -802,16 +751,14 @@ fn measuring_view<'a>(
     pixmap: &'a mut tiny_skia::Pixmap,
     painter: &'a mut TextPainter,
     icons: &'a mut TextPainter,
-    pixel: bool,
 ) -> MenuView<'a> {
-    let (ui, scale) = theme(pixel, palette::Palette::default());
+    let (ui, scale) = theme(palette::Palette::default());
     MenuView {
         pixmap,
         painter,
         icons,
         ui,
         scale,
-        pixel,
     }
 }
 
@@ -829,9 +776,9 @@ fn blank_buffer() -> tiny_skia::Pixmap {
 fn the_footer_reserve_does_not_depend_on_what_is_shown() {
     for lang in [Language::Ru, Language::En] {
         let mut pixmap = blank_buffer();
-        let mut painter = TextPainter::new(&font_name(false));
+        let mut painter = TextPainter::new(&font_name());
         let mut icons = TextPainter::new(settings_icons::FONT);
-        let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+        let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons);
 
         // Первый вызов на этом ключе меряет, второй — берёт из кэша.
         let misses = zone_misses();
@@ -863,9 +810,9 @@ fn the_footer_reserve_does_not_depend_on_what_is_shown() {
     // Смена языка инвалидирует кэш: у русского и английского статусы разной
     // ширины, а значит разный и резерв.
     let mut pixmap = blank_buffer();
-    let mut painter = TextPainter::new(&font_name(false));
+    let mut painter = TextPainter::new(&font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
-    let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+    let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons);
     let misses = zone_misses();
     let ru = right_zone_width(&mut view, Language::Ru);
     let en = right_zone_width(&mut view, Language::En);
@@ -898,9 +845,9 @@ fn hints_step_down_through_three_levels() {
             ],
         ];
         let mut pixmap = blank_buffer();
-        let mut painter = TextPainter::new(&font_name(false));
+        let mut painter = TextPainter::new(&font_name());
         let mut icons = TextPainter::new(settings_icons::FONT);
-        let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+        let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons);
         let reserve = right_zone_width(&mut view, lang);
         let left = PAD;
         let limit = CARD_W - PAD - reserve - spacing::XL;
@@ -934,9 +881,9 @@ fn hints_step_down_through_three_levels() {
 fn hint_levels_get_narrower() {
     for lang in [Language::Ru, Language::En] {
         let mut pixmap = blank_buffer();
-        let mut painter = TextPainter::new(&font_name(false));
+        let mut painter = TextPainter::new(&font_name());
         let mut icons = TextPainter::new(settings_icons::FONT);
-        let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons, false);
+        let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons);
         let widths: Vec<f32> = (0..3)
             .map(|level| {
                 let (_, width) =
@@ -951,8 +898,8 @@ fn hint_levels_get_narrower() {
     }
 }
 
-fn palette_for(pixel: bool) -> UiPalette {
-    theme(pixel, palette::Palette::default()).0
+fn palette_for() -> UiPalette {
+    theme(palette::Palette::default()).0
 }
 
 fn card(rows: usize) -> Rect {
@@ -1041,24 +988,22 @@ fn card_rect_is_centered_for_both_modes() {
     }
 }
 
-/// Фон выбранной строки обязан быть светлее карточки в обеих темах:
-/// `surface_hover` темнее панели, и выделение проваливалось бы в фон.
+/// Фон выбранной строки обязан быть светлее карточки: `surface_hover`
+/// темнее панели, и выделение проваливалось бы в фон.
 #[test]
 fn selected_row_is_lighter_than_the_card() {
-    for pixel in [false, true] {
-        let ui = palette_for(pixel);
-        let selected = ui.accent;
-        assert!(
-            luminance(selected) > luminance(ui.surface),
-            "pixel={pixel}: фон выбранной строки {} не светлее карточки {}",
-            luminance(selected),
-            luminance(ui.surface)
-        );
-        assert!(
-            luminance(ui.surface_hover) < luminance(ui.surface),
-            "pixel={pixel}: surface_hover светлее карточки, подсветку можно было бы оставить"
-        );
-    }
+    let ui = palette_for();
+    let selected = ui.accent;
+    assert!(
+        luminance(selected) > luminance(ui.surface),
+        "фон выбранной строки {} не светлее карточки {}",
+        luminance(selected),
+        luminance(ui.surface)
+    );
+    assert!(
+        luminance(ui.surface_hover) < luminance(ui.surface),
+        "surface_hover светлее карточки, подсветку можно было бы оставить"
+    );
 }
 
 /// Подсветка не должна наезжать на hairline рамки карточки.
@@ -1102,7 +1047,7 @@ fn center_band_never_grows_past_the_row() {
 
 #[test]
 fn two_line_block_fits_the_search_row() {
-    let scale = type_scale(false);
+    let scale = type_scale();
     let block = scale.label + scale.caption + CAPTION_GAP;
     assert!(
         block < ROW_H_SEARCH,
@@ -1134,8 +1079,7 @@ fn dimensions_stay_on_the_four_pixel_grid() {
     assert_eq!(CARD_INSET, 1.0);
 }
 
-/// Подсказки подвала: полные и короткие варианты должны существовать
-/// оба, иначе Pixel-тема на русском их не покажет.
+/// Подсказки подвала: полные и короткие варианты должны существовать оба.
 #[test]
 fn footer_has_short_hint_variants() {
     for (full, short) in [
@@ -1294,14 +1238,14 @@ fn hit_test_uses_the_search_row_height() {
 /// должна быть константной — иначе она ничего не проверяла бы. Значение
 /// ещё и прибито к плотности панели: разъехаться они не должны.
 const _: () = assert!(
-    CARD_ALPHA > 0.8 && CARD_ALPHA < 1.0,
+    CARD_ALPHA >= 0.7 && CARD_ALPHA < 1.0,
     "полупрозрачность карточки должна быть лёгкой"
 );
 /// Плотность фона карточки обязана совпадать с плотностью панели: меню и
 /// панель стоят на экране рядом, и расхождение было видно сразу. Число
 /// продублировано намеренно — если у панели поменяют, тест об этом скажет.
 const _: () = assert!(
-    (CARD_ALPHA - 0.9).abs() < f32::EPSILON,
+    (CARD_ALPHA - 0.8).abs() < f32::EPSILON,
     "плотность фона меню должна совпадать с панелью"
 );
 

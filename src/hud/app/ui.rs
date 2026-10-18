@@ -1,26 +1,10 @@
 use chrono::Datelike;
 use std::sync::OnceLock;
-pub const FONT: &str = "Minecraft Rus";
+pub const FONT: &str = "JetBrainsMono Nerd Font Propo";
 pub const SIZE: f32 = 12.0;
 pub const SIZE_BT: f32 = 13.0;
 pub const SCALE: f32 = 2.0;
 
-pub const PIXEL_BASE: crate::hud::palette::Rgba = crate::hud::palette::Rgba(0x0b, 0x10, 0x20, 255);
-pub const PIXEL_PANEL: crate::hud::palette::Rgba = crate::hud::palette::Rgba(0x11, 0x1b, 0x31, 255);
-pub const PIXEL_PANEL_ALT: crate::hud::palette::Rgba =
-    crate::hud::palette::Rgba(0x0e, 0x17, 0x2b, 255);
-pub const PIXEL_BORDER: crate::hud::palette::Rgba =
-    crate::hud::palette::Rgba(0x31, 0x5b, 0x9b, 255);
-pub const PIXEL_HIGHLIGHT: crate::hud::palette::Rgba =
-    crate::hud::palette::Rgba(0x79, 0xa7, 0xff, 255);
-pub const PIXEL_TEXT: crate::hud::palette::Rgba = crate::hud::palette::Rgba(0xe8, 0xea, 0xff, 255);
-pub const PIXEL_MUTED: crate::hud::palette::Rgba = crate::hud::palette::Rgba(0x8d, 0x9a, 0xbd, 255);
-pub const PIXEL_ACTIVE: crate::hud::palette::Rgba =
-    crate::hud::palette::Rgba(0x20, 0xe2, 0x7a, 255);
-pub const PIXEL_ACTIVE_TEXT: crate::hud::palette::Rgba =
-    crate::hud::palette::Rgba(0x07, 0x15, 0x0e, 255);
-pub const PIXEL_WARNING: crate::hud::palette::Rgba =
-    crate::hud::palette::Rgba(0xff, 0xc8, 0x57, 255);
 pub struct Theme {
     pub chip_inset: f32,
     pub chip_gap: f32,
@@ -29,25 +13,9 @@ pub struct Theme {
     pub tray_pad: f32,
     pub vol_pad: &'static str,
     pub icon_gap: &'static str,
-    pub full_hover: bool,
-    pub wifi_extra: f32,
 }
 
 impl Theme {
-    pub fn pixel() -> Self {
-        Self {
-            chip_inset: 2.0,
-            chip_gap: 2.0,
-            tray_icon: 14.0,
-            tray_space: 6.0,
-            tray_pad: 3.0,
-            vol_pad: "  ",
-            icon_gap: "   ",
-            full_hover: true,
-            wifi_extra: 5.0,
-        }
-    }
-
     pub fn normal() -> Self {
         Self {
             chip_inset: 3.0,
@@ -57,16 +25,9 @@ impl Theme {
             tray_pad: 5.0,
             vol_pad: "",
             icon_gap: " ",
-            full_hover: false,
-            wifi_extra: 0.0,
         }
     }
 }
-
-pub const PIXEL_SEGMENT_COUNT: usize = 5;
-pub const PIXEL_SEGMENT_W: f32 = 3.0;
-pub const PIXEL_SEGMENT_GAP: f32 = 1.0;
-pub const PIXEL_SEGMENT_H: f32 = 2.0;
 
 pub fn configured_font() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -113,10 +74,6 @@ pub const OSD_CLOSE: std::time::Duration = std::time::Duration::from_millis(110)
 /// Догоняющая анимация полосы уровня: она короче появления, чтобы полоса
 /// поспевала за числом, а не тянулась за ним.
 pub const OSD_FILL: std::time::Duration = std::time::Duration::from_millis(90);
-/// Ступени прозрачности анимаций в Pixel-теме живут в общей основе анимаций:
-/// подсветка чипов, карточка OSD и открытие окон квантуются одинаково.
-pub use crate::hud::anim::PIXEL_ANIM_STEPS;
-
 pub const PANEL_W: f32 = 340.0;
 pub const PANEL_W_WIDE: f32 = 400.0;
 pub const PANEL_W_CLOCK: f32 = 236.0;
@@ -412,7 +369,6 @@ pub struct Cell {
     pub bg: Option<crate::hud::palette::Rgba>,
     pub hit: Option<Hit>,
     pub bat: Option<u8>,
-    pub bar: Option<u8>,
     pub ram: bool,
 }
 
@@ -428,7 +384,6 @@ impl Cell {
             bg: None,
             hit: None,
             bat: None,
-            bar: None,
             ram: false,
         }
     }
@@ -454,86 +409,6 @@ pub fn fill_rect(
     };
     if let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) {
         pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
-    }
-}
-
-pub fn fill_pixel_chamfer(
-    pixmap: &mut tiny_skia::Pixmap,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    color: crate::hud::palette::Rgba,
-    cut: f32,
-) {
-    let cut = cut.min(w / 2.0).min(h / 2.0).max(0.0);
-    fill_rect(pixmap, x + cut, y, w - cut * 2.0, h, color);
-    fill_rect(pixmap, x, y + cut, cut, h - cut * 2.0, color);
-    fill_rect(pixmap, x + w - cut, y + cut, cut, h - cut * 2.0, color);
-    fill_rect(pixmap, x + cut, y + h - cut, w - cut * 2.0, cut, color);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn draw_pixel_frame(
-    pixmap: &mut tiny_skia::Pixmap,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    fill: crate::hud::palette::Rgba,
-    border: crate::hud::palette::Rgba,
-    highlight: crate::hud::palette::Rgba,
-) {
-    let k = SCALE;
-    let cut = (2.0 * k).min(w / 2.0).min(h / 2.0);
-    let inset = k;
-    fill_pixel_chamfer(pixmap, x, y, w, h, border, cut);
-    fill_pixel_chamfer(
-        pixmap,
-        x + inset,
-        y + inset,
-        w - inset * 2.0,
-        h - inset * 2.0,
-        fill,
-        (cut - inset).max(0.0),
-    );
-    let inner_x = x + cut + inset;
-    let inner_y = y + inset;
-    let inner_w = (w - (cut + inset) * 2.0).max(0.0);
-    let inner_h = (h - (cut + inset) * 2.0).max(0.0);
-    fill_rect(pixmap, inner_x, inner_y, inner_w, inset, highlight);
-    fill_rect(
-        pixmap,
-        inner_x,
-        inner_y,
-        inset,
-        inner_h,
-        highlight.with_a(0.42),
-    );
-}
-
-pub fn draw_pixel_outline(
-    pixmap: &mut tiny_skia::Pixmap,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    color: crate::hud::palette::Rgba,
-) {
-    let k = SCALE;
-    let cut = k.min(w / 2.0).min(h / 2.0);
-    let b = k;
-    fill_rect(pixmap, x + cut, y, w - cut * 2.0, b, color);
-    fill_rect(pixmap, x + cut, y + h - b, w - cut * 2.0, b, color);
-    fill_rect(pixmap, x, y + cut, b, h - cut * 2.0, color);
-    fill_rect(pixmap, x + w - b, y + cut, b, h - cut * 2.0, color);
-    let steps = (cut / b).round().max(1.0) as i32;
-    for i in 0..steps {
-        let s = i as f32 * b;
-        fill_rect(pixmap, x + cut - b - s, y + s, b, b, color);
-        fill_rect(pixmap, x + w - cut + s, y + s, b, b, color);
-        fill_rect(pixmap, x + cut - b - s, y + h - b - s, b, b, color);
-        fill_rect(pixmap, x + w - cut + s, y + h - b - s, b, b, color);
     }
 }
 
@@ -571,53 +446,6 @@ pub fn fill_round_rect(
             tiny_skia::Transform::identity(),
             None,
         );
-    }
-}
-
-pub fn blit_argb_nearest(
-    pixmap: &mut tiny_skia::Pixmap,
-    icon: &crate::hud::tray::TrayIcon,
-    x: f32,
-    y: f32,
-    size: f32,
-) {
-    let (sw, sh) = (icon.w as usize, icon.h as usize);
-    if sw == 0 || sh == 0 || icon.argb.len() < sw * sh * 4 {
-        return;
-    }
-    let dst_s = (size * SCALE) as usize;
-    if dst_s == 0 {
-        return;
-    }
-    let pw = pixmap.width() as i32;
-    let ph = pixmap.height() as i32;
-    let x0 = x as i32;
-    let y0 = y as i32;
-    let pixels = pixmap.pixels_mut();
-    for dy in 0..dst_s as i32 {
-        let sy = ((dy as usize * sh) / dst_s).min(sh - 1);
-        for dx in 0..dst_s as i32 {
-            let sx = ((dx as usize * sw) / dst_s).min(sw - 1);
-            let o = (sy * sw + sx) * 4;
-            let alpha = icon.argb[o + 3];
-            if alpha < 128 {
-                continue;
-            }
-            let xx = x0 + dx;
-            let yy = y0 + dy;
-            if xx < 0 || yy < 0 || xx >= pw || yy >= ph {
-                continue;
-            }
-            let inv = alpha as f32 / 255.0;
-            let dst = &mut pixels[(yy * pw + xx) as usize];
-            let nr = (icon.argb[o + 2] as f32 * inv + dst.red() as f32 * (1.0 - inv)) as u8;
-            let ng = (icon.argb[o + 1] as f32 * inv + dst.green() as f32 * (1.0 - inv)) as u8;
-            let nb = (icon.argb[o] as f32 * inv + dst.blue() as f32 * (1.0 - inv)) as u8;
-            let na = (alpha as f32 + dst.alpha() as f32 * (1.0 - inv)) as u8;
-            if let Some(px) = tiny_skia::PremultipliedColorU8::from_rgba(nr, ng, nb, na) {
-                *dst = px;
-            }
-        }
     }
 }
 

@@ -10,7 +10,6 @@ from pathlib import Path
 
 
 DEFAULTS = {
-    "appearance": {"theme": "pixel"},
     "hudbar": {
         "height": 27,
         "tray": True,
@@ -57,7 +56,7 @@ def merge_settings(config_home: Path) -> dict:
         result = canonical
     else:
         result = {"hudbar": canonical}
-    for section in ("appearance", "notifications"):
+    for section in ("notifications",):
         legacy_section = legacy.get(section)
         current_section = result.get(section)
         if isinstance(legacy_section, dict):

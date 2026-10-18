@@ -32,8 +32,7 @@ pub mod spacing {
 
 // ─────────────────────────── Radius ────────────────────────────
 
-/// Радиусы скругления в логических пикселях. У Pixel все значения нулевые:
-/// см. `radius`.
+/// Радиусы скругления в логических пикселях.
 pub mod radii {
     /// 4 px: квадрат выбора темы внутри карточки.
     pub const XS: f32 = 4.0;
@@ -51,16 +50,8 @@ pub mod radii {
     pub const KNOB: f32 = 7.0;
 }
 
-/// Радиус под тему: у Pixel углы прямые, у обычной темы — скруглённые.
-/// Наружу отдаётся в логических пикселях; умножать на `SCALE` должен caller.
-pub fn radius(pixel: bool, token: f32) -> f32 {
-    if pixel { 0.0 } else { token }
-}
-
-/// Радиус «таблетки»: сайдбар, трек и ручка тумблера в строке модуля.
-/// Эти элементы скруглены в обеих темах — так было в 0.3.0, и токен фиксирует
-/// именно это, а не меняет вид. Для всего остального — `radius`.
-pub fn always(token: f32) -> f32 {
+/// Радиус из токена в логических пикселях; умножать на `SCALE` должен caller.
+pub fn radius(token: f32) -> f32 {
     token
 }
 
@@ -82,36 +73,21 @@ pub struct TypeScale {
     pub value: f32,
 }
 
-/// Размеры шрифта по темам. Обе шкалы кратны друг другу, чтобы строки
-/// модуля, карточки и подвал читались одной системой.
-pub fn type_scale(pixel: bool) -> TypeScale {
-    if pixel {
-        TypeScale {
-            page_title: 19.0,
-            section_title: 14.0,
-            label: 13.0,
-            caption: 11.5,
-            value: 13.5,
-        }
-    } else {
-        TypeScale {
-            page_title: 20.0,
-            section_title: 15.0,
-            label: 14.0,
-            caption: 12.0,
-            value: 15.0,
-        }
+/// Размеры шрифта.
+pub fn type_scale() -> TypeScale {
+    TypeScale {
+        page_title: 20.0,
+        section_title: 15.0,
+        label: 14.0,
+        caption: 12.0,
+        value: 15.0,
     }
 }
 
-/// Шрифт темы: у Pixel и обычной он разный. Им же пользуются снапшоты, чтобы
-/// PNG и живое окно рисовались одним шрифтом.
-pub fn font_name(pixel: bool) -> String {
-    if pixel {
-        "Minecraft Rus".to_string()
-    } else {
-        "JetBrainsMono Nerd Font Propo".to_string()
-    }
+/// Шрифт интерфейса. Им же пользуются снапшоты, чтобы PNG и живое окно
+/// рисовались одним шрифтом.
+pub fn font_name() -> String {
+    "JetBrainsMono Nerd Font Propo".to_string()
 }
 
 // ─────────────────────────── Layout ────────────────────────────
@@ -135,8 +111,8 @@ pub const RAIL_GAP: f32 = 26.0;
 
 // ─────────────────────────── Palette ───────────────────────────
 
-/// Фон окна непрозрачный: сквозь настройки не должен просвечивать терминал.
-pub const BG_ALPHA: f32 = 1.0;
+/// Плотность окна у композитора: блюр одежды остаётся, а карточка на 80%.
+pub const BG_ALPHA: f32 = 0.8;
 
 /// Смешивание двух цветов. Единственный способ получить новый цвет палитры:
 /// так тема продолжает следовать за matugen, а не зашивает hex.
@@ -237,68 +213,40 @@ fn extend(base: UiPalette) -> UiPalette {
     }
 }
 
-/// Палитра окна: обычная тема берёт цвета из matugen, Pixel — свои.
-pub fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
-    let base = if pixel {
-        UiPalette {
-            base: palette::Rgba(0x0b, 0x10, 0x20, 255).with_a(BG_ALPHA),
-            panel: palette::Rgba(0x11, 0x1b, 0x31, 255).with_a(BG_ALPHA),
-            idle_panel: palette::Rgba(0x0e, 0x17, 0x2b, 255).with_a(BG_ALPHA),
-            // Рамка карточки — единственное, что отделяет карточку от
-            // размытого фона, а не украшение. Старые 0x315b9b давали 2.53:1
-            // к своей же карточке; 0x4d6aa5 даёт 3.20:1 и остаётся холодным.
-            border: palette::Rgba(0x4d, 0x6a, 0xa5, 255),
-            accent: palette::Rgba(0x79, 0xa7, 0xff, 255),
-            text: palette::Rgba(0xe8, 0xea, 0xff, 255),
-            muted: palette::Rgba(0x8d, 0x9a, 0xbd, 255),
-            // Текст на акценте Pixel: тот же тёмно-синий, что и база темы, —
-            // на светлом акценте 0x79a7ff читается он, а не вторая роль.
-            on_primary: palette::Rgba(0x0b, 0x10, 0x20, 255),
-            surface: palette::Rgba(0, 0, 0, 0),
-            surface_hover: palette::Rgba(0, 0, 0, 0),
-            border_subtle: palette::Rgba(0, 0, 0, 0),
-            border_focus: palette::Rgba(0, 0, 0, 0),
-            accent_dim: palette::Rgba(0, 0, 0, 0),
-            text_disabled: palette::Rgba(0, 0, 0, 0),
-            picker_thumb: palette::Rgba(0, 0, 0, 0),
-            hover_bg: palette::Rgba(0, 0, 0, 0),
-            // В Pixel заглушка идёт ступенями и без полутонов, но альфа та же,
-            // что и в обычной теме: проверка контраста одна на обе темы.
-            placeholder: palette::Rgba(0xe8, 0xea, 0xff, 255).with_a(PLACEHOLDER_ALPHA),
-        }
-    } else {
-        UiPalette {
-            base: p.base.with_a(BG_ALPHA),
-            panel: mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA),
-            idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
-            // Рамка карточки — не украшение, а граница слоя: у слоя ровно размер
-            // карточки, тени нет, и отделяет её только эта линия. На 0.35 к
-            // акценту она давала 1.98:1 и не отделяла совсем; 0.45 давало
-            // 2.52:1, тоже ниже порога графики. 0.55 — 3.28:1 в худшей схеме,
-            // и рамка при этом не читается второй подсветкой, как на 0.65.
-            border: mix(p.base, p.primary, 0.55),
-            accent: p.primary,
-            text: p.text,
-            // 0.63 — минимальная альфа, при которой `muted` проходит 4.5:1 с запасом:
-            // худший случай по десяти схемам в обоих режимах — 4.81:1. На
-            // 0.61 было 4.54, на 0.58 было 4.09.
-            muted: p.text.with_a(0.63),
-            // Роль matugen как есть: тёмная схема даёт тёмный текст на светлом
-            // акценте, светлая — светлый на тёмном.
-            on_primary: p.on_primary,
-            surface: palette::Rgba(0, 0, 0, 0),
-            surface_hover: palette::Rgba(0, 0, 0, 0),
-            border_subtle: palette::Rgba(0, 0, 0, 0),
-            border_focus: palette::Rgba(0, 0, 0, 0),
-            accent_dim: palette::Rgba(0, 0, 0, 0),
-            text_disabled: palette::Rgba(0, 0, 0, 0),
-            picker_thumb: palette::Rgba(0, 0, 0, 0),
-            hover_bg: palette::Rgba(0, 0, 0, 0),
-            placeholder: palette::Rgba(0, 0, 0, 0),
-        }
+/// Палитра окна: цвета берутся из matugen.
+pub fn ui_palette(p: palette::Palette) -> UiPalette {
+    let base = UiPalette {
+        base: p.base.with_a(BG_ALPHA),
+        panel: mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA),
+        idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
+        // Рамка карточки — не украшение, а граница слоя: у слоя ровно размер
+        // карточки, тени нет, и отделяет её только эта линия. На 0.35 к
+        // акценту она давала 1.98:1 и не отделяла совсем; 0.45 давало
+        // 2.52:1, тоже ниже порога графики. 0.55 — 3.28:1 в худшей схеме,
+        // и рамка при этом не читается второй подсветкой, как на 0.65.
+        border: mix(p.base, p.primary, 0.55),
+        accent: p.primary,
+        text: p.text,
+        // 0.63 — минимальная альфа, при которой `muted` проходит 4.5:1 с запасом:
+        // худший случай по десяти схемам в обоих режимах — 4.81:1. На
+        // 0.61 было 4.54, на 0.58 было 4.09.
+        muted: p.text.with_a(0.63),
+        // Роль matugen как есть: тёмная схема даёт тёмный текст на светлом
+        // акценте, светлая — светлый на тёмном.
+        on_primary: p.on_primary,
+        surface: palette::Rgba(0, 0, 0, 0),
+        surface_hover: palette::Rgba(0, 0, 0, 0),
+        border_subtle: palette::Rgba(0, 0, 0, 0),
+        border_focus: palette::Rgba(0, 0, 0, 0),
+        accent_dim: palette::Rgba(0, 0, 0, 0),
+        text_disabled: palette::Rgba(0, 0, 0, 0),
+        picker_thumb: palette::Rgba(0, 0, 0, 0),
+        hover_bg: palette::Rgba(0, 0, 0, 0),
+        placeholder: palette::Rgba(0, 0, 0, 0),
     };
     extend(base)
 }
+
 /// Относительная яркость по WCAG 2.1.
 fn relative_luminance(color: palette::Rgba) -> f32 {
     let channel = |value: u8| {
@@ -492,7 +440,7 @@ mod tests {
         let mut failures = Vec::new();
         for light in [false, true] {
             for scheme in MODEL_SCHEMES {
-                let ui = ui_palette(false, model_palette(scheme, light));
+                let ui = ui_palette(model_palette(scheme, light));
                 for (name, front, back, need) in pairs(&ui) {
                     let ratio = contrast(front, back);
                     if ratio < need {
@@ -515,24 +463,6 @@ mod tests {
         );
     }
 
-    /// Те же пары в теме Pixel: у неё свои hex, и правила общие.
-    #[test]
-    fn every_pair_passes_its_wcag_threshold_in_the_pixel_theme() {
-        let ui = ui_palette(true, palette::Palette::default());
-        let mut failures = Vec::new();
-        for (name, front, back, need) in pairs(&ui) {
-            let ratio = contrast(front, back);
-            if ratio < need {
-                failures.push(format!("{name}: {ratio:.2}:1 при пороге {need}"));
-            }
-        }
-        assert!(
-            failures.is_empty(),
-            "пары ниже порога в Pixel:\n{}",
-            failures.join("\n")
-        );
-    }
-
     /// `muted` держит запас над порогом мелкого текста.
     ///
     /// WCAG требует 4.5:1, но `muted` — роль с самым большим числом
@@ -546,7 +476,7 @@ mod tests {
         let mut where_ = "";
         for light in [false, true] {
             for scheme in MODEL_SCHEMES {
-                let ui = ui_palette(false, model_palette(scheme, light));
+                let ui = ui_palette(model_palette(scheme, light));
                 let value = contrast(ui.muted, ui.panel);
                 if value < worst {
                     worst = value;
@@ -564,11 +494,8 @@ mod tests {
     /// таблицей, а не набором отдельных утверждений.
     #[test]
     fn the_thresholds_are_the_ones_the_audit_asked_for() {
-        assert_eq!(
-            pairs(&ui_palette(false, palette::Palette::default())).len(),
-            22
-        );
-        for (_, _, _, need) in pairs(&ui_palette(true, palette::Palette::default())) {
+        assert_eq!(pairs(&ui_palette(palette::Palette::default())).len(), 22);
+        for (_, _, _, need) in pairs(&ui_palette(palette::Palette::default())) {
             assert!(need == 0.0 || need == 3.0 || need == 4.5, "порог {need}");
         }
     }
@@ -582,7 +509,7 @@ mod tests {
         let mut worst = f32::INFINITY;
         for light in [false, true] {
             for scheme in MODEL_SCHEMES {
-                let ui = ui_palette(false, model_palette(scheme, light));
+                let ui = ui_palette(model_palette(scheme, light));
                 let ratio = contrast(ui.placeholder, ui.panel);
                 worst = worst.min(ratio);
                 assert!(
@@ -609,7 +536,7 @@ mod tests {
         let mut worst = f32::INFINITY;
         for light in [false, true] {
             for scheme in MODEL_SCHEMES {
-                let ui = ui_palette(false, model_palette(scheme, light));
+                let ui = ui_palette(model_palette(scheme, light));
                 worst = worst.min(contrast(ui.muted, ui.panel));
             }
         }
@@ -632,47 +559,22 @@ mod tests {
         }
     }
 
-    /// «Таблетки» остаются скруглёнными в обеих темах: так выглядел HUDbar
-    /// 0.3.0, и токен не должен был это менять.
+    /// Шкала ролей согласована по размеру: заголовок крупнее секции, секция —
+    /// строки, значение — подписи.
     #[test]
-    fn pill_shapes_stay_rounded_in_both_themes() {
-        for token in [radii::RAIL, radii::TRACK, radii::KNOB] {
-            assert_eq!(always(token), token);
-            assert_eq!(radius(true, token), 0.0, "таблетка должна быть круглой");
-        }
-    }
-
-    /// Pixel обязан быть полностью прямым: любой радиус в нём — ноль.
-    #[test]
-    fn pixel_theme_has_no_rounding() {
-        for token in [radii::XS, radii::SM, radii::RAIL, radii::MD, radii::LG] {
-            assert!(token > 0.0, "радиус {token} должен быть осмысленным");
-            assert_eq!(radius(true, token), 0.0, "у Pixel углы прямые");
-            assert_eq!(radius(false, token), token);
-        }
-    }
-
-    /// Обе темы используют одну шкалу ролей, и в обычной теме текст крупнее.
-    #[test]
-    fn both_themes_share_the_same_type_roles() {
-        let normal = type_scale(false);
-        let pixel = type_scale(true);
-        assert!(normal.page_title > pixel.page_title);
-        assert!(normal.section_title > pixel.section_title);
-        assert!(normal.label > pixel.label);
-        assert!(normal.caption > pixel.caption);
-        assert!(normal.value > pixel.value);
-        assert!(normal.page_title > normal.section_title);
-        assert!(normal.section_title > normal.label);
-        assert!(normal.value > normal.caption);
+    fn the_type_roles_are_ordered_by_size() {
+        let scale = type_scale();
+        assert!(scale.page_title > scale.section_title);
+        assert!(scale.section_title > scale.label);
+        assert!(scale.value > scale.caption);
     }
 
     /// Производные цвета считаются из базовых и остаются непрозрачными там,
     /// где базовые непрозрачны: иначе проявится терминал под окном.
     #[test]
     fn derived_palette_colors_come_from_the_base_ones() {
-        for pixel in [false, true] {
-            let p = ui_palette(pixel, palette::Palette::default());
+        {
+            let p = ui_palette(palette::Palette::default());
             assert_eq!(p.surface, p.panel, "surface должен быть panel");
             assert_ne!(
                 p.surface_hover, p.surface,
@@ -696,9 +598,9 @@ mod tests {
                 p.hover_bg, p.surface,
                 "hover отличается от выбранной строки"
             );
-            // Окно непрозрачное: базовые цвета обязаны быть плотными.
-            assert_eq!(p.base.3, 255);
-            assert_eq!(p.panel.3, 255);
+            // Окно 80%: фоновые цвета идут ноздрями от BG_ALPHA (204).
+            assert_eq!(p.base.3, 204);
+            assert_eq!(p.panel.3, 204);
         }
     }
 }

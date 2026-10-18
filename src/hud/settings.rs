@@ -233,7 +233,6 @@ pub struct Settings {
     pub dnd: bool,
     /// Показывать ли шестерёнку Control Center на панели.
     pub control_button: bool,
-    pub theme: Option<String>,
     pub font_size: u32,
     pub line_height: u32,
     pub position: NotificationPosition,
@@ -335,7 +334,6 @@ impl Default for Settings {
             network: true,
             dnd: true,
             control_button: true,
-            theme: None,
             font_size: 13,
             line_height: 15,
             position: NotificationPosition::TopRight,
@@ -402,13 +400,6 @@ fn parse_into(settings: &mut Settings, content: &str) {
             .map(str::to_string)
             .collect();
         settings.module_order = normalize_module_order(&keys);
-    }
-    if let Some(theme) = value
-        .get("appearance")
-        .and_then(|appearance| appearance.get("theme"))
-        .and_then(Value::as_str)
-    {
-        settings.theme = Some(theme.to_string());
     }
     if let Some(height) = object.get("height").and_then(Value::as_u64) {
         settings.height = clamp(height as i64, HEIGHT_MIN, HEIGHT_MAX);
@@ -715,14 +706,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_theme_from_appearance() {
-        let mut settings = Settings::default();
-        parse_into(&mut settings, r#"{"appearance":{"theme":"pixel"}}"#);
-
-        assert_eq!(settings.theme.as_deref(), Some("pixel"));
-    }
-
-    #[test]
     fn missing_notifications_section_keeps_defaults() {
         let mut settings = Settings::default();
         parse_into(&mut settings, r#"{"hudbar":{"height":30}}"#);
@@ -808,7 +791,6 @@ mod tests {
             sections,
             [
                 "$schema",
-                "appearance",
                 "hudbar",
                 "language",
                 "module_order",

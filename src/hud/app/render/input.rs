@@ -37,14 +37,9 @@ impl App {
         }
     }
 
-    /// Прозрачность подсветки чипа. В Pixel-теме значение округляется до
-    /// ступеней: полупрозрачной рамки в пиксельной графике быть не должно.
+    /// Прозрачность подсветки чипа.
     pub fn hover_alpha(&self, h: Hit) -> f32 {
-        let value = self.hover_anim.value(&h);
-        if self.pixel_mode() {
-            return crate::hud::anim::quantize(value, PIXEL_ANIM_STEPS);
-        }
-        value
+        self.hover_anim.value(&h)
     }
 
     pub fn on_bar_click(&mut self, x: f32, y: f32, qh: &QueueHandle<Self>) {

@@ -17,10 +17,6 @@ use std::time::{Duration, Instant};
 /// Кривая: нормализованное время 0..1 → нормализованное значение 0..1.
 pub type Easing = fn(f32) -> f32;
 
-/// Ступени прозрачности анимаций в Pixel-теме: 0, 1/4, 1/2, 3/4, 1. Действует
-/// на подсветку чипов, проявление карточки OSD и открытие окон.
-pub const PIXEL_ANIM_STEPS: u32 = 4;
-
 /// Приведение входа к 0..1. `f32::clamp` при значении NaN возвращает сам NaN,
 /// а NaN в альфе уехал бы в цвет пикселя и испортил кадр, поэтому вход
 /// нормализуется явно: всё, что не число, считается нулём.
@@ -43,15 +39,6 @@ pub fn ease_in_cubic(t: f32) -> f32 {
 
 /// Приведение значения к ближайшей из `steps` ступеней: для Pixel-темы, где
 /// промежуточных значений быть не должно. `steps == 0` — значение как есть.
-pub fn quantize(t: f32, steps: u32) -> f32 {
-    let t = unit(t);
-    if steps == 0 {
-        return t;
-    }
-    let steps = steps as f32;
-    ((t * steps).round() / steps).clamp(0.0, 1.0)
-}
-
 /// Общие настройки анимаций: включены ли они и с какой скоростью идут.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnimSettings {
@@ -339,36 +326,6 @@ mod tests {
         // ease_in_cubic — ниже прямой на всём отрезке.
         assert!(ease_in_cubic(0.25) < 0.25);
         assert!(ease_in_cubic(0.75) < 0.75);
-    }
-
-    #[test]
-    fn quantize_snaps_to_steps() {
-        assert!((quantize(0.0, 4) - 0.0).abs() < 1e-6);
-        assert!((quantize(1.0, 4) - 1.0).abs() < 1e-6);
-        assert!((quantize(0.49, 4) - 0.5).abs() < 1e-6);
-        assert!((quantize(0.13, 4) - 0.25).abs() < 1e-6);
-        assert!((quantize(-1.0, 4) - 0.0).abs() < 1e-6);
-        assert!((quantize(9.0, 4) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn quantize_without_steps_returns_clamped_input() {
-        assert!((quantize(0.37, 0) - 0.37).abs() < 1e-6);
-        assert!((quantize(4.0, 0) - 1.0).abs() < 1e-6);
-        assert!((quantize(-4.0, 0) - 0.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn quantize_produces_only_step_values() {
-        for step in 0..=64u32 {
-            let steps = if step == 0 { 1 } else { step };
-            for tick in 0..=64 {
-                let t = tick as f32 / 64.0;
-                let value = quantize(t, steps);
-                let back = (value * steps as f32).round() / steps as f32;
-                assert!((value - back).abs() < 1e-6, "вне ступеней: {value}");
-            }
-        }
     }
 
     #[test]

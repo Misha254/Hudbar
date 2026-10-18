@@ -10,13 +10,12 @@ The repository has one canonical entrypoint for each HUD feature. Files currentl
 | niri binds | `hud-keybinds` | shell wrapper + `hud-keybinds-rs` | Native keybind viewer |
 | yazi binds | `hud-yazibinds` | shell wrapper + `hud-yazibinds-rs` | Native yazi keybind viewer |
 | Settings backend | `hud-setting` | Python CLI | Persist settings and restart affected services |
-| Theme switcher | `hud-theme` | Python CLI | Switch pixel/normal font and theme state |
 
 The `CTL` chip in the bar opens the built-in control center. It provides quick actions for Wi-Fi,
 Bluetooth, DND, audio, microphone, wallpapers, power menu, and screen lock.
 
-All persistent HUD state is stored in `~/.config/hudbar/settings.json` under the `appearance`,
-`hudbar`, `notifications`, `osd`, and `vpn` sections. Key names, ranges, and installer defaults are
+All persistent HUD state is stored in `~/.config/hudbar/settings.json` under the `hudbar`,
+`notifications`, `osd`, and `vpn` sections. Key names, ranges, and installer defaults are
 described by `docs/settings.schema.json`; the installer drops the schema next to the settings file,
 which points at it with a relative `$schema` key, so an editor validates and completes the file. Two
 tests keep the schema honest: one compares it with the parser (keys, ranges, enumerations), the other

@@ -17,7 +17,6 @@ pub trait TextRenderer {
     fn text_width(&mut self, text: &str, size: f32) -> f32;
     fn icon_gap(&self) -> &'static str;
     fn theme(&self) -> Theme;
-    fn pixel_mode(&self) -> bool;
     fn bar_palette(&self) -> palette::Palette;
     #[allow(clippy::too_many_arguments)]
     fn draw_text(
@@ -86,7 +85,7 @@ impl TextRenderer for App {
                     img.placement.height,
                     color,
                     &img.data,
-                    self.pixel_mode(),
+                    false,
                 );
             }
         }
@@ -102,30 +101,11 @@ impl TextRenderer for App {
     }
 
     fn theme(&self) -> Theme {
-        if self.pixel_mode() {
-            Theme::pixel()
-        } else {
-            Theme::normal()
-        }
-    }
-
-    fn pixel_mode(&self) -> bool {
-        self.font.contains("Minecraft Rus")
+        Theme::normal()
     }
 
     fn bar_palette(&self) -> palette::Palette {
-        if self.pixel_mode() {
-            palette::Palette {
-                base: PIXEL_BASE,
-                text: PIXEL_TEXT,
-                primary: PIXEL_HIGHLIGHT,
-                on_primary: PIXEL_ACTIVE_TEXT,
-                secondary: PIXEL_MUTED,
-                error: PIXEL_WARNING,
-            }
-        } else {
-            self.palette
-        }
+        self.palette
     }
 
     fn draw_text(

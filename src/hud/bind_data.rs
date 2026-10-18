@@ -349,39 +349,6 @@ pub fn load_yazi_grouped() -> Vec<(String, Vec<Entry>)> {
     groups
 }
 
-// ---------------------------------------------------------------- тема
-
-/// Тема оформления из `~/.config/hudbar/settings.json` (как `hud-theme current`).
-/// Читаем значение ключа `"theme"`, а не ищем подстроку: любое другое поле
-/// с этим словом (`"normal"` в шрифте, в описании) переключало тему не туда.
-pub fn read_theme() -> String {
-    let Ok(text) = std::fs::read_to_string(home().join(".config/hudbar/settings.json")) else {
-        return "pixel".to_string();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return "pixel".to_string();
-    };
-    value
-        .get("appearance")
-        .and_then(|v| v.get("theme"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|theme| matches!(*theme, "pixel" | "normal"))
-        .unwrap_or("pixel")
-        .to_string()
-}
-
-pub fn pixel_mode() -> bool {
-    read_theme() != "normal"
-}
-
-pub fn configured_font() -> String {
-    if pixel_mode() {
-        "Minecraft Rus".to_string()
-    } else {
-        "JetBrainsMono Nerd Font Propo".to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

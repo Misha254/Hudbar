@@ -219,7 +219,6 @@ struct SchemesApp {
     icons: TextPainter,
     model: Schemes,
     ui: ui_tokens::UiPalette,
-    pixel: bool,
     lang: Language,
     exit: Arc<AtomicBool>,
 }
@@ -244,11 +243,9 @@ impl SchemesApp {
         self.sel_tween = tween;
     }
 
-    /// Позиция подсветки для отрисовки: в Pixel-теме округляется до целой
-    /// строки, иначе кромка рамки размывается.
+    /// Позиция подсветки для отрисовки.
     fn sel_row(&self, now: std::time::Instant) -> Option<f32> {
-        let value = self.sel_tween.value(now);
-        Some(if self.pixel { value.round() } else { value })
+        Some(self.sel_tween.value(now))
     }
 
     /// Идёт ли ход подсветки.
@@ -298,7 +295,7 @@ impl SchemesApp {
         }
         // Один момент на кадр: проявление окна и ход подсветки читают его все.
         let now = std::time::Instant::now();
-        let openness = self.ctx.openness_now(now, self.pixel);
+        let openness = self.ctx.openness_now(now);
         // Подсветка едет к выбранной строке. Список схем не меняется, поэтому
         // snap здесь не нужен: единственная цель — номер выбранной строки.
         self.step_sel(now);
@@ -312,21 +309,9 @@ impl SchemesApp {
         pixmap.fill(tiny_skia::Color::TRANSPARENT);
         let card = Self::card();
 
-        let mut canvas = wallpaper::view::Canvas::new(
-            &mut pixmap,
-            &mut self.painter,
-            &mut self.icons,
-            self.pixel,
-            self.ui,
-        );
-        paint(
-            &mut canvas,
-            card,
-            &self.model,
-            self.pixel,
-            self.lang,
-            highlight,
-        );
+        let mut canvas =
+            wallpaper::view::Canvas::new(&mut pixmap, &mut self.painter, &mut self.icons, self.ui);
+        paint(&mut canvas, card, &self.model, self.lang, highlight);
         wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
         layer::fade(&mut pixmap, openness);
 
@@ -360,11 +345,10 @@ fn paint(
     canvas: &mut wallpaper::view::Canvas<'_, '_>,
     card: Rect,
     model: &Schemes,
-    pixel: bool,
     lang: Language,
     highlight: Option<f32>,
 ) {
-    let ts = ui_tokens::type_scale(pixel);
+    let ts = ui_tokens::type_scale();
     let area = schemes::zone(card);
 
     canvas.fill(card, ui_tokens::radii::LG, canvas.ui.panel);
@@ -755,7 +739,6 @@ fn run() -> Result<(), String> {
     let shm = Shm::bind(&globals, &qh).map_err(|error| format!("нет wl_shm: {error}"))?;
 
     let loaded = settings::load();
-    let pixel = loaded.theme.as_deref() == Some("pixel");
     // На энергосбережении анимации гаснут сами, настройку не трогаем.
     let anim = anim::AnimSettings::new(
         loaded.animations && power_profile::anim_allowed(),
@@ -763,7 +746,7 @@ fn run() -> Result<(), String> {
     );
     let started = std::time::Instant::now();
     let palette = palette::load();
-    let ui = ui_tokens::ui_palette(pixel, palette);
+    let ui = ui_tokens::ui_palette(palette);
 
     let ctx = layer::open(
         &compositor,
@@ -792,11 +775,10 @@ fn run() -> Result<(), String> {
         keyboard: None,
         mods: Modifiers::default(),
         repeat: Repeat::default(),
-        painter: TextPainter::new(&ui_tokens::font_name(pixel)),
+        painter: TextPainter::new(&ui_tokens::font_name()),
         icons: TextPainter::new(settings_icons::FONT),
         model: Schemes::open(),
         ui,
-        pixel,
         lang: loaded.language,
         exit: Arc::new(AtomicBool::new(false)),
     };

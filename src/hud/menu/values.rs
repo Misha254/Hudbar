@@ -10,9 +10,6 @@
 //!
 //! * `get` никогда не пишет: сборка списка может вызывать его десятки раз;
 //! * `set` для настроек идёт только через `Patch`, чужие ключи файла целы;
-//! * тема применяется через `config_io::apply_theme`, а не голым патчем:
-//!   иначе `settings.json` сказал бы «pixel», а файл шрифта остался бы
-//!   старым, и панель с окном разошлись бы по глифам;
 //! * долгие скрипты (`wall.sh`) из `set` не ждут: схема и обои применяются
 //!   откреплённо через общий враппер `wallpaper`, тот же, что у окна
 //!   настроек. Ошибки уходят в журнал, меню не виснет на пересчёте matugen.
@@ -195,34 +192,6 @@ pub fn set_language(index: usize) {
     };
     if let Err(error) = config_io::apply_patch(&Patch::Language(language)) {
         log::warn(format!("язык не записался: {error}"));
-    }
-}
-
-/// Индекс темы: 0 — обычная, 1 — Pixel. Неизвестное значение считается
-/// обычной: меню обязано открыться, а не упасть на опечатке в конфиге.
-pub fn theme() -> usize {
-    theme_index_of(settings::load().theme.as_deref())
-}
-
-/// Индекс темы по строке конфига. Чистая функция ради теста: файл здесь не
-/// читается.
-pub fn theme_index_of(theme: Option<&str>) -> usize {
-    match theme {
-        Some("pixel") => 1,
-        _ => 0,
-    }
-}
-
-/// Смена темы вместе с файлом шрифта. Окно после изменения перечитывает
-/// тему и пересоздаёт painter: отсюда мгновенная перерисовка.
-pub fn set_theme(index: usize) {
-    let theme = if index == 1 {
-        super::super::config::Theme::Pixel
-    } else {
-        super::super::config::Theme::Normal
-    };
-    if let Err(error) = config_io::apply_theme(theme) {
-        log::warn(format!("тема не применилась: {error}"));
     }
 }
 
@@ -459,14 +428,6 @@ pub fn current_wallpaper() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn theme_index_treats_unknown_as_normal() {
-        assert_eq!(theme_index_of(Some("pixel")), 1);
-        assert_eq!(theme_index_of(Some("normal")), 0);
-        assert_eq!(theme_index_of(None), 0);
-        assert_eq!(theme_index_of(Some("midnight")), 0);
-    }
 
     #[test]
     fn height_is_clamped_to_the_supported_range() {

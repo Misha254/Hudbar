@@ -24,19 +24,6 @@
       "default": ["tray", "weather", "webcam", "clock", "recorder", "battery", "system", "audio", "network", "dnd"],
       "description": "Порядок чипов на баре. Переставлять можно только внутри зоны: tray слева, часы и погода в центре, остальное справа. Неизвестные ключи отбрасываются, пропущенные дописываются в конец."
     },
-    "appearance": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Внешний вид окон: обычная тема из matugen или пиксельная.",
-      "properties": {
-        "theme": {
-          "type": "string",
-          "enum": ["normal", "pixel"],
-          "default": "pixel",
-          "description": "Какую тему рисуют панель и окна: normal — цвета из colors.css, pixel — пиксельные константы."
-        }
-      }
-    },
     "hudbar": {
       "type": "object",
       "additionalProperties": false,

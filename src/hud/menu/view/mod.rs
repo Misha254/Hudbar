@@ -1,8 +1,7 @@
 //! Отрисовка меню: карточка, шапка, строки и подвал.
 //!
 //! Окно меню — оверлей поверх всего, поэтому кадр начинается не с карточки, а
-//! с затемнения: без него подписи на тёмной панели не читались бы, а в Pixel
-//! режим без размытия выглядел бы как чёрный прямоугольник.
+//! с затемнения: без него подписи на тёмной панели не читались бы.
 //!
 //! Геометрия считается сверху вниз и держится на токенах `ui_tokens`: ширина
 //! карточки, высота строки и радиусы — константы оттуда, а набор цветов —
@@ -21,10 +20,9 @@
 //!   константе размера шрифта.
 //!
 //! Строки рисует тот же `TextPainter`, что и окно настроек, а глифы —
-//! отдельной копией painter с шрифтом Nerd Font: в Pixel основной шрифт —
-//! Minecraft Rus, и иконок в нём нет.
+//! отдельным painter с шрифтом Nerd Font.
 
-use super::super::canvas::{fill_disc_hard, fill_round_rect, stroke_rect};
+use super::super::canvas::{fill_round_rect, stroke_rect};
 use super::super::geom::Rect;
 use super::super::palette;
 use super::super::text::{Align, SCALE, TextPainter};
@@ -77,7 +75,6 @@ pub struct MenuView<'a> {
     pub icons: &'a mut TextPainter,
     pub ui: UiPalette,
     pub scale: TypeScale,
-    pub pixel: bool,
 }
 
 impl<'a> MenuView<'a> {
@@ -110,7 +107,7 @@ impl<'a> MenuView<'a> {
             rect.y * SCALE,
             rect.w * SCALE,
             rect.h * SCALE,
-            radius(self.pixel, radii::LG) * SCALE,
+            radius(radii::LG) * SCALE,
             self.ui.panel,
         );
         stroke_rect(
@@ -145,21 +142,11 @@ impl<'a> MenuView<'a> {
     }
 
     /// Заливка кругом по центру прямоугольника. Радиус всегда половина
-    /// стороны: круг — это форма миниатюры и кружка, а не скругление угла,
-    /// поэтому тема влияет не на форму, а только на край.
-    ///
-    /// В Pixel край ступенчатый: у круга со сглаживанием восемнадцать
-    /// уникальных цветов в элементе 16×16, а полутонов в этой теме быть не
-    /// должно. Форма остаётся кругом намеренно — квадрат выдавал бы
-    /// переключатель за чекбокс.
+    /// стороны: круг — это форма миниатюры и кружка, а не скругление угла.
     fn disc(&mut self, rect: Rect, color: palette::Rgba) {
         let r = rect.w.min(rect.h) / 2.0;
         let cx = rect.x + rect.w / 2.0;
         let cy = rect.y + rect.h / 2.0;
-        if self.pixel {
-            fill_disc_hard(self.pixmap, cx * SCALE, cy * SCALE, r * SCALE, color);
-            return;
-        }
         fill_round_rect(
             self.pixmap,
             (cx - r) * SCALE,
@@ -270,6 +257,6 @@ pub(crate) fn ring(
 
 /// Палитра и шкала по теме: тот же расчёт, что у окна настроек, чтобы меню и
 /// настройки выглядели одной оболочкой.
-pub fn theme(pixel: bool, base: palette::Palette) -> (UiPalette, TypeScale) {
-    (ui_palette(pixel, base), type_scale(pixel))
+pub fn theme(base: palette::Palette) -> (UiPalette, TypeScale) {
+    (ui_palette(base), type_scale())
 }

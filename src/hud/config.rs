@@ -24,7 +24,6 @@ pub struct Config {
     pub modules: Vec<(Module, bool)>,
     pub height: u32,
     pub language: Language,
-    pub theme: Option<Theme>,
     pub font_size: u32,
     pub line_height: u32,
     pub position: NotificationPosition,
@@ -37,38 +36,6 @@ pub struct Config {
     /// не правит, поэтому модель хранит только значения по умолчанию.
     pub vpn_controller: String,
     pub vpn_timeout_ms: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Theme {
-    Normal,
-    Pixel,
-}
-
-impl Theme {
-    pub fn key(self) -> &'static str {
-        match self {
-            Theme::Normal => "normal",
-            Theme::Pixel => "pixel",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Theme> {
-        match key {
-            "normal" => Some(Theme::Normal),
-            "pixel" => Some(Theme::Pixel),
-            _ => None,
-        }
-    }
-
-    /// Имя файла шрифта, который читает HUDbar (`ui.rs:configured_font`).
-    /// Тема и файл шрифта обязаны совпадать, иначе панель и окно рисуют разное.
-    pub fn font(self) -> &'static str {
-        match self {
-            Theme::Normal => "JetBrainsMono Nerd Font Propo",
-            Theme::Pixel => "Minecraft Rus",
-        }
-    }
 }
 
 impl Config {
@@ -158,7 +125,6 @@ impl Config {
             network: self.module_enabled(Module::Network),
             dnd: self.module_enabled(Module::Dnd),
             control_button: self.control_button,
-            theme: self.theme.map(|theme| theme.key().to_string()),
             font_size: self.font_size,
             line_height: self.line_height,
             position: self.position,
@@ -189,7 +155,6 @@ impl Default for Config {
                 .collect(),
             height: 27,
             language: Language::Ru,
-            theme: None,
             font_size: 13,
             line_height: 15,
             position: NotificationPosition::TopRight,
@@ -210,7 +175,6 @@ impl From<&Settings> for Config {
         let mut config = Config {
             height: clamp_height(settings.height as i64),
             language: settings.language,
-            theme: settings.theme.as_deref().and_then(Theme::from_key),
             font_size: settings.font_size(),
             line_height: settings.line_height(),
             position: settings.position,
@@ -258,7 +222,7 @@ fn split_by_zone(order: &[String]) -> (Vec<Module>, Vec<Module>, Vec<Module>) {
 #[cfg(test)]
 mod tests {
     use super::super::settings::{Language, Module, Settings, Zone};
-    use super::{Config, Theme, clamp_height};
+    use super::{Config, clamp_height};
 
     fn config_with_order(keys: &[&str]) -> Config {
         let settings = Settings {
@@ -431,21 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn theme_and_its_font_file_agree() {
-        // Панель читает тему из файла шрифта, окно — из settings.json. Если
-        // имена разойдутся, панель и окно покажут разные шрифты.
-        assert_eq!(Theme::Normal.font(), "JetBrainsMono Nerd Font Propo");
-        assert_eq!(Theme::Pixel.font(), "Minecraft Rus");
-        for theme in [Theme::Normal, Theme::Pixel] {
-            let settings = Settings {
-                theme: Some(theme.key().to_string()),
-                ..Default::default()
-            };
-            assert_eq!(Config::from(&settings).theme, Some(theme));
-        }
-    }
-
-    #[test]
     fn config_reads_notifications_with_clamping() {
         let settings = Settings {
             font_size: 99,
@@ -475,22 +424,5 @@ mod tests {
 
         assert_eq!(config.language, Language::En);
         assert_eq!(config.to_settings().language, Language::En);
-    }
-
-    /// Темы в схеме настроек — те же две, что знает код. Список живёт в двух
-    /// местах: здесь его проверяет `Theme::from_key`, в схеме — редактор.
-    #[test]
-    fn the_settings_schema_lists_both_themes() {
-        let schema: serde_json::Value =
-            serde_json::from_str(include_str!("../../docs/settings.schema.json"))
-                .expect("схема настроек разбирается");
-        let listed: Vec<&str> = schema["properties"]["appearance"]["properties"]["theme"]["enum"]
-            .as_array()
-            .expect("перечисление тем")
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .collect();
-
-        assert_eq!(listed, [Theme::Normal.key(), Theme::Pixel.key()]);
     }
 }

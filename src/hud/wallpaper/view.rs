@@ -1,9 +1,8 @@
 //! Отрисовка окна выбора обоев. Геометрия живёт в [`super::layout`], здесь
 //! только заливка и текст, поэтому тесты раскладки не зависят от пикселей.
 //!
-//! Стиль берётся из `ui_tokens` и `palette`: Normal мягкие скругления, Pixel —
-//! квадратные. Миниатюры пока заглушки: настоящие пиксели подставит W3 через
-//! загрузчик кэша превью.
+//! Стиль берётся из `ui_tokens` и `palette`. Миниатюры пока заглушки:
+//! настоящие пиксели подставит W3 через загрузчик кэша превью.
 
 use std::path::Path;
 
@@ -23,7 +22,7 @@ pub const FRAME_W: f32 = 1200.0;
 pub const FRAME_H: f32 = 800.0;
 /// Прозрачность карточки в живом окне: сквозь неё видно размытие слоя, как у
 /// меню (`CARD_ALPHA` там 0.9); фото чуть плотнее, чтобы не выцветать.
-pub const CARD_ALPHA: f32 = 0.97;
+pub const CARD_ALPHA: f32 = 0.8;
 
 /// Всё, чем рисуем кадр: два painter'а (текст и глифы), палитра и шкала.
 // Пейнтеры приходят снаружи: `FontSystem::new()` внутри тяжёлый, и живое окно
@@ -33,7 +32,6 @@ pub struct Canvas<'a, 'b> {
     pub text: &'b mut TextPainter,
     pub icons: &'b mut TextPainter,
     pub ui: UiPalette,
-    pub pixel: bool,
 }
 
 impl<'a, 'b> Canvas<'a, 'b> {
@@ -43,7 +41,6 @@ impl<'a, 'b> Canvas<'a, 'b> {
         pixmap: &'a mut tiny_skia::Pixmap,
         text: &'b mut TextPainter,
         icons: &'b mut TextPainter,
-        pixel: bool,
         ui: UiPalette,
     ) -> Self {
         Canvas {
@@ -51,13 +48,11 @@ impl<'a, 'b> Canvas<'a, 'b> {
             text,
             icons,
             ui,
-            pixel,
         }
     }
 
     /// Заливка прямоугольника в логических координатах.
     pub fn fill(&mut self, rect: Rect, radius: f32, color: palette::Rgba) {
-        let radius = if self.pixel { 0.0 } else { radius };
         fill_round_rect(
             self.pixmap,
             rect.x * SCALE,
@@ -100,8 +95,7 @@ impl<'a, 'b> Canvas<'a, 'b> {
             pixmap: self.pixmap,
             painter: self.text,
             palette: self.ui,
-            scale: ui_tokens::type_scale(self.pixel),
-            pixel: self.pixel,
+            scale: ui_tokens::type_scale(),
         }
     }
 }
@@ -111,7 +105,6 @@ impl<'a, 'b> Canvas<'a, 'b> {
 pub struct Frame<'p> {
     pub state: &'p State,
     pub card: Rect,
-    pub pixel: bool,
     pub ui: UiPalette,
     pub lang: Language,
     pub provider: &'p dyn thumb::Provider,
@@ -124,13 +117,8 @@ pub struct Frame<'p> {
 }
 
 /// Кадр целиком: подложка, карточка, зоны, содержимое и подвал.
-pub fn render(
-    state: &State,
-    pixel: bool,
-    palette: palette::Palette,
-    lang: Language,
-) -> tiny_skia::Pixmap {
-    render_with(state, pixel, palette, lang, &thumb::Empty)
+pub fn render(state: &State, palette: palette::Palette, lang: Language) -> tiny_skia::Pixmap {
+    render_with(state, palette, lang, &thumb::Empty)
 }
 
 /// Кадр с миниатюрами: провайдер отдаёт готовое из фонового загрузчика, чего
@@ -138,12 +126,11 @@ pub fn render(
 /// `state.ratios`, цвета схем — из `state.swatch_map`.
 pub fn render_with(
     state: &State,
-    pixel: bool,
     palette: palette::Palette,
     lang: Language,
     provider: &dyn thumb::Provider,
 ) -> tiny_skia::Pixmap {
-    let ui = ui_tokens::ui_palette(pixel, palette);
+    let ui = ui_tokens::ui_palette(palette);
     let mut pixmap =
         tiny_skia::Pixmap::new((FRAME_W * SCALE) as u32, (FRAME_H * SCALE) as u32).expect("pixmap");
     backdrop(&mut pixmap, ui);
@@ -154,13 +141,12 @@ pub fn render_with(
         layout::CARD_W,
         layout::CARD_H,
     );
-    let mut text = TextPainter::new(&ui_tokens::font_name(pixel));
+    let mut text = TextPainter::new(&ui_tokens::font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
-    let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, pixel, ui);
+    let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, ui);
     let frame = Frame {
         state,
         card,
-        pixel,
         ui,
         lang,
         provider,
@@ -176,12 +162,11 @@ pub fn render_with(
 /// ввода-вывода.
 pub fn render_window(
     state: &State,
-    pixel: bool,
     palette: palette::Palette,
     lang: Language,
     provider: &dyn thumb::Provider,
 ) -> tiny_skia::Pixmap {
-    let ui = ui_tokens::ui_palette(pixel, palette);
+    let ui = ui_tokens::ui_palette(palette);
     let mut pixmap = tiny_skia::Pixmap::new(
         (layout::CARD_W * SCALE) as u32,
         (layout::CARD_H * SCALE) as u32,
@@ -189,13 +174,12 @@ pub fn render_window(
     .expect("pixmap");
     pixmap.fill(tiny_skia::Color::TRANSPARENT);
     let card = Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H);
-    let mut text = TextPainter::new(&ui_tokens::font_name(pixel));
+    let mut text = TextPainter::new(&ui_tokens::font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
-    let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, pixel, ui);
+    let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, ui);
     let frame = Frame {
         state,
         card,
-        pixel,
         ui,
         lang,
         provider,
@@ -210,7 +194,7 @@ pub fn render_window(
 /// Карточка в заданном месте: общая для снимка и живого окна, форка нет.
 pub fn draw_card(canvas: &mut Canvas<'_, '_>, frame: &Frame<'_>) {
     let zones = layout::zones(frame.card);
-    let ts = ui_tokens::type_scale(frame.pixel);
+    let ts = ui_tokens::type_scale();
 
     // Карточка: в Normal со скруглением, в Pixel — прямоугольник.
     canvas.fill(frame.card, ui_tokens::radii::LG, canvas.ui.panel);
@@ -593,7 +577,7 @@ fn cell_marker(canvas: &mut Canvas<'_, '_>, thumb: Rect) {
     canvas.fill(tick, layout::CLEAR_BTN / 2.0, canvas.ui.border_focus);
     canvas.glyph(
         settings_icons::CHECK,
-        ui_tokens::type_scale(canvas.pixel).caption,
+        ui_tokens::type_scale().caption,
         canvas.ui.text,
         tick,
     );
@@ -800,21 +784,20 @@ mod tests {
     }
 
     /// Карточка в заданном месте: та же отрисовка, что и у окна.
-    fn render_card(state: &State, pixel: bool, highlight: Option<(f32, f32)>) -> tiny_skia::Pixmap {
-        let ui = ui_tokens::ui_palette(pixel, palette::Palette::default());
+    fn render_card(state: &State, highlight: Option<(f32, f32)>) -> tiny_skia::Pixmap {
+        let ui = ui_tokens::ui_palette(palette::Palette::default());
         let mut pixmap = tiny_skia::Pixmap::new(
             (layout::CARD_W * SCALE) as u32,
             (layout::CARD_H * SCALE) as u32,
         )
         .expect("pixmap");
         pixmap.fill(tiny_skia::Color::TRANSPARENT);
-        let mut text = TextPainter::new(&ui_tokens::font_name(pixel));
+        let mut text = TextPainter::new(&ui_tokens::font_name());
         let mut icons = TextPainter::new(settings_icons::FONT);
-        let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, pixel, ui);
+        let mut canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, ui);
         let frame = Frame {
             state,
             card: Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H),
-            pixel,
             ui,
             lang: Language::Ru,
             provider: &Solid,
@@ -866,7 +849,7 @@ mod tests {
     #[test]
     fn no_highlight_keeps_the_cell_itself_drawn() {
         let state = demo_state(Zone::Grid, 5);
-        let plain = render_card(&state, false, None);
+        let plain = render_card(&state, None);
         let z = layout::zones(Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H));
 
         let selected = layout::cell(z, 1, 1).unwrap();
@@ -884,8 +867,8 @@ mod tests {
     #[test]
     fn the_sliding_frame_leaves_the_cell_behind() {
         let state = demo_state(Zone::Grid, 5);
-        let plain = render_card(&state, false, None);
-        let moving = render_card(&state, false, Some((2.0, 1.0)));
+        let plain = render_card(&state, None);
+        let moving = render_card(&state, Some((2.0, 1.0)));
         let z = layout::zones(Rect::new(0.0, 0.0, layout::CARD_W, layout::CARD_H));
 
         let old = layout::cell(z, 1, 1).unwrap();
@@ -903,27 +886,25 @@ mod tests {
         );
     }
 
-    /// Обе темы рисуются с едущей рамкой без паники и меняют кадр.
+    /// Рисуется с едущей рамкой без паники и меняет кадр.
     #[test]
-    fn both_themes_render_a_sliding_frame() {
+    fn renders_a_sliding_frame() {
         let state = demo_state(Zone::Grid, 2);
-        for pixel in [false, true] {
-            let plain = render_card(&state, pixel, None);
-            let moving = render_card(&state, pixel, Some((3.5, 0.5)));
-            assert_ne!(
-                moving.data(),
-                plain.data(),
-                "тема pixel={pixel}: едущая рамка ни на что не повлияла"
-            );
-        }
+        let plain = render_card(&state, None);
+        let moving = render_card(&state, Some((3.5, 0.5)));
+        assert_ne!(
+            moving.data(),
+            plain.data(),
+            "едущая рамка ни на что не повлияла"
+        );
     }
 
     /// Фокус в колонке папок: сетка не выбрана, едущей рамки на ней нет.
     #[test]
     fn the_frame_is_drawn_only_in_the_grid_zone() {
         let state = demo_state(Zone::Folders, 0);
-        let plain = render_card(&state, false, None);
-        let moving = render_card(&state, false, Some((1.0, 1.0)));
+        let plain = render_card(&state, None);
+        let moving = render_card(&state, Some((1.0, 1.0)));
 
         assert_eq!(
             moving.data(),
@@ -955,11 +936,11 @@ mod tests {
     #[test]
     fn long_name_is_truncated_and_ratio_still_fits() {
         let mut pixmap = tiny_skia::Pixmap::new(2400, 1600).expect("pixmap");
-        let ui = ui_tokens::ui_palette(false, palette::Palette::default());
-        let ts = ui_tokens::type_scale(false);
-        let mut text = TextPainter::new(&ui_tokens::font_name(false));
+        let ui = ui_tokens::ui_palette(palette::Palette::default());
+        let ts = ui_tokens::type_scale();
+        let mut text = TextPainter::new(&ui_tokens::font_name());
         let mut icons = TextPainter::new(settings_icons::FONT);
-        let canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, false, ui);
+        let canvas = Canvas::new(&mut pixmap, &mut text, &mut icons, ui);
         let card = Rect::new(
             (FRAME_W - layout::CARD_W) / 2.0,
             (FRAME_H - layout::CARD_H) / 2.0,
@@ -1044,16 +1025,14 @@ mod tests {
         assert!(thumb.y - z.grid.y >= layout::ZONE_INSET);
     }
 
-    /// Снимок обеих тем рисуется без паники: значит координаты в границах.
+    /// Снимок рисуется без паники: значит координаты в границах.
     #[test]
-    fn render_survives_both_themes_and_both_zones() {
-        for pixel in [false, true] {
-            for zone in [Zone::Folders, Zone::Grid] {
-                let mut state = super::super::state::State::open();
-                state.zone = zone;
-                let pixmap = render(&state, pixel, palette::Palette::default(), Language::Ru);
-                assert!(pixmap.width() > 0 && pixmap.height() > 0);
-            }
+    fn render_survives_both_zones() {
+        for zone in [Zone::Folders, Zone::Grid] {
+            let mut state = super::super::state::State::open();
+            state.zone = zone;
+            let pixmap = render(&state, palette::Palette::default(), Language::Ru);
+            assert!(pixmap.width() > 0 && pixmap.height() > 0);
         }
     }
 
@@ -1069,16 +1048,8 @@ mod tests {
         }
         let state = super::super::state::State::open();
         let provider = One(thumb::Thumb::solid(16, 16, [40, 80, 160, 255]));
-        for pixel in [false, true] {
-            let pixmap = render_window(
-                &state,
-                pixel,
-                palette::Palette::default(),
-                Language::Ru,
-                &provider,
-            );
-            assert_eq!(pixmap.width(), (layout::CARD_W * SCALE) as u32);
-            assert_eq!(pixmap.height(), (layout::CARD_H * SCALE) as u32);
-        }
+        let pixmap = render_window(&state, palette::Palette::default(), Language::Ru, &provider);
+        assert_eq!(pixmap.width(), (layout::CARD_W * SCALE) as u32);
+        assert_eq!(pixmap.height(), (layout::CARD_H * SCALE) as u32);
     }
 }

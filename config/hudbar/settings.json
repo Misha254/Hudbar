@@ -13,9 +13,6 @@
     "network",
     "dnd"
   ],
-  "appearance": {
-    "theme": "pixel"
-  },
   "hudbar": {
     "height": 27,
     "tray": true,

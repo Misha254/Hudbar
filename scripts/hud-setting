@@ -18,7 +18,6 @@ LEGACY_DEADLINE = "2027-01-01"
 _warned_legacy = False
 defaults = {
     "language": "ru",
-    "appearance": {"theme": "pixel"},
     "hudbar": {
         "height": 27, "tray": True, "weather": True, "clock": True,
         "recorder": True, "battery": True, "system": True, "webcam": True,
@@ -83,7 +82,7 @@ def load_state() -> dict:
     state["module_order"] = [key for key in order if key in MODULE_KEYS]
     state["module_order"] += [key for key in MODULE_KEYS if key not in state["module_order"]]
     legacy = legacy_state()
-    for section in ("appearance", "notifications"):
+    for section in ("notifications",):
         if section not in state and section in legacy:
             state[section] = legacy[section]
     for section, values in defaults.items():
@@ -168,9 +167,6 @@ def main() -> int:
             save_state(state)
             restart_hudbar()
         return 0
-    if command == "theme" and len(sys.argv) == 3 and sys.argv[2] in {"pixel", "normal"}:
-        subprocess.run([our_binary("hud-theme"), sys.argv[2]], check=True)
-        return 0
     if command == "hud-height" and len(sys.argv) == 3:
         state["hudbar"]["height"] = max(24, min(48, int(sys.argv[2])))
         save_state(state)
@@ -197,13 +193,7 @@ def main() -> int:
         subprocess.run([str(home / ".local/bin/wall.sh")], check=False)
         return 0
     elif command == "reset":
-        # Сброс возвращает заводские значения, но НЕ меняет тему молча:
-        # текущая тема остаётся, иначе reset неожиданно ломал бы шрифты.
-        current = load_state()
         state = json.loads(json.dumps(defaults))
-        theme = current.get("appearance", {}).get("theme")
-        if theme in {"pixel", "normal"}:
-            state["appearance"]["theme"] = theme
         save_state(state)
         patch_dunst(state)
         return 0

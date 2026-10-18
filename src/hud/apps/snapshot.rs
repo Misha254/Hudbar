@@ -7,7 +7,7 @@
 //! к вёрстке.
 //!
 //! Запуск:
-//!   hud-apps-rs --snapshot <default|search|empty|pinned> <out.png> [--theme normal|pixel]
+//!   hud-apps-rs --snapshot <default|search|empty|pinned> <out.png>
 
 use std::path::Path;
 
@@ -25,25 +25,12 @@ use super::view;
 /// Разбор аргументов `--snapshot` и запись PNG.
 pub fn run(args: &[String]) -> Result<(), String> {
     if args.len() < 2 {
-        return Err(
-            "hud-apps-rs --snapshot <default|search|empty|pinned> <out.png> [--theme normal|pixel]"
-                .to_string(),
-        );
+        return Err("hud-apps-rs --snapshot <default|search|empty|pinned> <out.png>".to_string());
     }
     let mode = args[0].as_str();
     let out = args[1].as_str();
-    let pixel = match args
-        .iter()
-        .position(|arg| arg == "--theme")
-        .and_then(|at| args.get(at + 1))
-        .map(String::as_str)
-    {
-        Some("pixel") => true,
-        Some("normal") | None => false,
-        Some(other) => return Err(format!("неизвестная тема: {other}")),
-    };
     let model = scene(mode)?;
-    write_png(&render(&model, pixel, palette::load()), Path::new(out))
+    write_png(&render(&model, palette::load()), Path::new(out))
 }
 
 /// Состояние для кадра. Список — настоящий: снимок должен показывать, что
@@ -80,7 +67,7 @@ fn scene(mode: &str) -> Result<Model, String> {
 
 /// Кадр окна в буфер. Иконки грузятся до отрисовки: первый кадр должен быть
 /// готовым, иначе снимок покажет заглушки там, где окно покажет иконки.
-pub fn render(model: &Model, pixel: bool, base: Palette) -> tiny_skia::Pixmap {
+pub fn render(model: &Model, base: Palette) -> tiny_skia::Pixmap {
     let (width, height) = view::layer_size(model.visible().len());
     let mut pixmap = tiny_skia::Pixmap::new(
         (width as f32 * SCALE) as u32,
@@ -88,12 +75,9 @@ pub fn render(model: &Model, pixel: bool, base: Palette) -> tiny_skia::Pixmap {
     )
     .expect("буфер кадра");
     pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
-    let mut painter = TextPainter::new(&font_name(pixel));
+    let mut painter = TextPainter::new(&font_name());
     let mut icons = TextPainter::new(settings_icons::FONT);
-    let (ui, scale) = (
-        super::super::ui_tokens::ui_palette(pixel, base),
-        type_scale(pixel),
-    );
+    let (ui, scale) = (super::super::ui_tokens::ui_palette(base), type_scale());
     let mut loader = Loader::new();
     for row in model.visible() {
         if let Some(app) = model.app_at(row) {
@@ -107,7 +91,6 @@ pub fn render(model: &Model, pixel: bool, base: Palette) -> tiny_skia::Pixmap {
             icons: &mut icons,
             ui,
             scale,
-            pixel,
         };
         view::render_window(&mut window, model, &loader, RowsHighlight::none())
     };
@@ -153,7 +136,7 @@ mod tests {
     /// даже на синтетическом списке.
     #[test]
     fn a_snapshot_of_a_synthetic_list_renders() {
-        let pixmap = render(&model(), false, palette::Palette::default());
+        let pixmap = render(&model(), palette::Palette::default());
         let (width, height) = view::layer_size(model().visible().len());
         assert_eq!(pixmap.width(), (width as f32 * SCALE) as u32);
         assert_eq!(pixmap.height(), (height as f32 * SCALE) as u32);
@@ -169,7 +152,7 @@ mod tests {
     fn a_missing_icon_leaves_a_placeholder_instead_of_failing() {
         let mut model = model();
         model.select(0);
-        let pixmap = render(&model, true, palette::Palette::default());
+        let pixmap = render(&model, palette::Palette::default());
         assert_eq!(pixmap.height() % (SCALE as u32), 0);
     }
 
@@ -177,7 +160,7 @@ mod tests {
     fn the_png_is_written_and_readable() {
         let file =
             std::env::temp_dir().join(format!("hud-apps-snapshot-{}.png", std::process::id()));
-        let pixmap = render(&model(), false, palette::Palette::default());
+        let pixmap = render(&model(), palette::Palette::default());
         write_png(&pixmap, &file).expect("запись png");
         let written = std::fs::metadata(&file).expect("файл снимка");
         assert!(written.len() > 0);

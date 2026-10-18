@@ -56,7 +56,7 @@ pub(crate) fn secret_view(
         field.y * SCALE,
         field.w * SCALE,
         field.h * SCALE,
-        radius(view.pixel, radii::SM) * SCALE,
+        radius(radii::SM) * SCALE,
         view.ui.idle_panel,
     );
     stroke_rect(

@@ -186,14 +186,9 @@ impl App {
         self.osd.is_some()
     }
 
-    /// Проявление карточки с учётом темы: в Pixel-теме значение идёт ступенями,
-    /// иначе рамка полупрозрачной и не вяжется с остальным рисунком.
+    /// Проявление карточки.
     pub fn osd_openness(&self) -> f32 {
-        let value = self.osd_anim.value(self.now);
-        if self.pixel_mode() {
-            return crate::hud::anim::quantize(value, PIXEL_ANIM_STEPS);
-        }
-        value
+        self.osd_anim.value(self.now)
     }
 
     /// Заполнение полосы уровня в текущий момент.

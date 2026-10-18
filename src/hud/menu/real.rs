@@ -28,8 +28,6 @@ use super::values;
 /// Версия пакета для строки «О программе».
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const THEME_RU: [&str; 2] = ["Обычная", "Pixel"];
-const THEME_EN: [&str; 2] = ["Normal", "Pixel"];
 const LANG_OPTS: [&str; 2] = ["Русский", "English"];
 const POS_RU: [&str; 4] = [
     "Слева сверху",
@@ -520,19 +518,7 @@ fn style_section_with(lang: Language, wallpaper: WallpaperTools) -> Node {
         Language::Ru => ru,
         Language::En => en,
     };
-    let theme_opts = match lang {
-        Language::Ru => &THEME_RU,
-        Language::En => &THEME_EN,
-    };
     let mut children = vec![
-        Node::choice(
-            settings_icons::THEME,
-            t("Тема", "Theme"),
-            theme_opts,
-            values::theme,
-            values::set_theme,
-        )
-        .search_as(&["theme", "тема"]),
         Node::choice(
             settings_icons::LANGUAGE,
             t("Язык", "Language"),
@@ -1728,13 +1714,7 @@ mod tests {
         let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
         assert_eq!(
             titles,
-            [
-                "Тема",
-                "Язык",
-                "Выбрать обои…",
-                "Случайные обои",
-                "Схема matugen"
-            ]
+            ["Язык", "Выбрать обои…", "Случайные обои", "Схема matugen"]
         );
 
         let no_tools = WallpaperTools {
@@ -1745,6 +1725,6 @@ mod tests {
         assert_eq!(menu.enter(), Outcome::Pushed);
         let frame = menu.frame();
         let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
-        assert_eq!(titles, ["Тема", "Язык", "Схема matugen"]);
+        assert_eq!(titles, ["Язык", "Схема matugen"]);
     }
 }

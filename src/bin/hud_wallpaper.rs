@@ -130,7 +130,7 @@ hud-wallpaper-rs — выбор обоев HUDbar
   hud-wallpaper-rs [папка]
       Открыть выбор. Папка: имя из колонки (anime, nature, …).
       Нет такой папки — корневой вид «all».
-  hud-wallpaper-rs --snapshot <default|search|empty> <out.png> [--theme normal|pixel]
+  hud-wallpaper-rs --snapshot <default|search|empty> <out.png>
       Снимок состояния без Wayland.
   -h, --help
       Эта справка.";
@@ -151,7 +151,6 @@ struct WpApp {
     icons: TextPainter,
     state: State,
     ui: ui_tokens::UiPalette,
-    pixel: bool,
     lang: settings::Language,
     loader: Arc<Loader<FsSource>>,
     /// Скользящая рамка выбранной ячейки: состояние живёт здесь, а `view`
@@ -310,7 +309,7 @@ impl WpApp {
         // Один момент на кадр: проявление окна, ход рамки и проявление
         // миниатюр читают его все, иначе значения разъедутся по instants.
         let now = std::time::Instant::now();
-        let openness = self.ctx.openness_now(now, self.pixel);
+        let openness = self.ctx.openness_now(now);
 
         // Ход рамки: цель — позиция выбранной ячейки, отсчитанная от верха
         // окна сетки. При смене набора `Frame::update` встаёт на место сам.
@@ -329,7 +328,7 @@ impl WpApp {
             now,
             self.ctx.anim,
         );
-        let highlight = self.cell_frame.pos(now, self.pixel);
+        let highlight = self.cell_frame.pos(now);
         let anim = self.ctx.anim;
         let started = &self.thumb_fade;
         let thumb_alpha = move |path: &std::path::Path| started.alpha(path, now, anim);
@@ -348,20 +347,14 @@ impl WpApp {
         let frame = wallpaper::view::Frame {
             state: &self.state,
             card,
-            pixel: self.pixel,
             ui: self.ui,
             lang: self.lang,
             provider,
             highlight,
             thumb_alpha: &thumb_alpha,
         };
-        let mut canvas = wallpaper::view::Canvas::new(
-            &mut pixmap,
-            &mut self.painter,
-            &mut self.icons,
-            self.pixel,
-            self.ui,
-        );
+        let mut canvas =
+            wallpaper::view::Canvas::new(&mut pixmap, &mut self.painter, &mut self.icons, self.ui);
         wallpaper::view::draw_card(&mut canvas, &frame);
         wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
         layer::fade(&mut pixmap, openness);
@@ -695,24 +688,12 @@ fn main() {
 }
 
 fn snapshot(args: &[String]) -> Result<(), String> {
-    // --snapshot <default|search|schemes|empty> <out.png> [--theme ...]
+    // --snapshot <default|search|schemes|empty> <out.png>
     if args.len() < 2 {
-        return Err(
-            "hud-wallpaper-rs --snapshot <default|search|empty> <out.png> [--theme normal|pixel]"
-                .to_string(),
-        );
+        return Err("hud-wallpaper-rs --snapshot <default|search|empty> <out.png>".to_string());
     }
     let mode = &args[0];
     let out = &args[1];
-    let theme = args
-        .iter()
-        .position(|a| a == "--theme")
-        .and_then(|i| args.get(i + 1));
-    let pixel = match theme.map(String::as_str) {
-        Some("pixel") => true,
-        Some("normal") | None => false,
-        Some(other) => return Err(format!("неизвестная тема: {other}")),
-    };
 
     let state = match mode.as_str() {
         "default" => State::open(),
@@ -739,7 +720,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     };
 
     let palette = palette::load();
-    let pixmap = wallpaper::view::render(&state, pixel, palette, settings::Language::Ru);
+    let pixmap = wallpaper::view::render(&state, palette, settings::Language::Ru);
     canvas::write_png(&pixmap, Path::new(out))
 }
 
@@ -787,7 +768,6 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
 
     // Тема и язык читаются при старте из `settings.json`, как у меню.
     let loaded = settings::load();
-    let pixel = loaded.theme.as_deref() == Some("pixel");
     let lang = loaded.language;
     let anim = anim::AnimSettings::new(loaded.animations, loaded.animation_speed);
     // На энергосбережении процессор придушен и анимации идут рывками:
@@ -803,7 +783,7 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
     };
     let started = std::time::Instant::now();
     let palette = palette::load();
-    let ui = ui_tokens::ui_palette(pixel, palette);
+    let ui = ui_tokens::ui_palette(palette);
 
     // Модель заводится до слоя, но размер фиксирован карточкой — первый commit
     // идёт с ним же, нулей протокол не увидит.
@@ -839,11 +819,10 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
         keyboard: None,
         mods: Modifiers::default(),
         repeat: Repeat::default(),
-        painter: TextPainter::new(&ui_tokens::font_name(pixel)),
+        painter: TextPainter::new(&ui_tokens::font_name()),
         icons: TextPainter::new(settings_icons::FONT),
         state,
         ui,
-        pixel,
         lang,
         loader,
         cell_frame: wallpaper::frame::Frame::new(started),

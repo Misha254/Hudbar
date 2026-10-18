@@ -60,9 +60,9 @@ const HEIGHT: u32 = 620;
 const TITLE: &str = "Yazi";
 /// Плотность окна у композитора: вся отрисовка идёт в буфер непрозрачным,
 /// а в конце проход умножает альфу всех пикселей на эту долю — так же, как
-/// `apply_card_alpha` меню и `p.base.with_a(0.9)` панели. Значение то же,
+/// `apply_card_alpha` меню и `p.base.with_a(0.8)` панели. Значение то же,
 /// что у `menu::view::geometry::CARD_ALPHA`.
-const CARD_ALPHA: f32 = 0.9;
+const CARD_ALPHA: f32 = 0.8;
 const PLACEHOLDER: &str = "Поиск…";
 
 // Поток строк в две колонки, как в окне биндов niri: заголовок группы на всю
@@ -118,7 +118,6 @@ struct YaziApp {
     /// Замеренный верх глифов (logical px) для (шрифт, размер, интерлиньяж).
     top_cache: HashMap<(String, u32, u32), f32>,
     font: String,
-    pixel: bool,
     query: String,
     groups: Vec<(String, Vec<Entry>)>,
     items: Vec<Entry>,
@@ -166,27 +165,15 @@ fn mix(a: palette::Rgba, b: palette::Rgba, t: f32) -> palette::Rgba {
     )
 }
 
-fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
-    if pixel {
-        UiPalette {
-            panel: palette::Rgba(0x11, 0x1b, 0x31, 255),
-            idle_panel: palette::Rgba(0x0e, 0x17, 0x2b, 255),
-            border: palette::Rgba(0x4d, 0x6a, 0xa5, 255),
-            accent: palette::Rgba(0x79, 0xa7, 0xff, 255),
-            text: palette::Rgba(0xe8, 0xea, 0xff, 255),
-            muted: palette::Rgba(0x8d, 0x9a, 0xbd, 255),
-            on_primary: palette::Rgba(0x0b, 0x10, 0x20, 255),
-        }
-    } else {
-        UiPalette {
-            panel: mix(p.base, p.secondary, 0.10),
-            idle_panel: mix(p.base, p.secondary, 0.05),
-            border: mix(p.base, p.primary, 0.55),
-            accent: p.primary,
-            text: p.text,
-            muted: p.text.with_a(0.58),
-            on_primary: p.on_primary,
-        }
+fn ui_palette(p: palette::Palette) -> UiPalette {
+    UiPalette {
+        panel: mix(p.base, p.secondary, 0.10),
+        idle_panel: mix(p.base, p.secondary, 0.05),
+        border: mix(p.base, p.primary, 0.55),
+        accent: p.primary,
+        text: p.text,
+        muted: p.text.with_a(0.58),
+        on_primary: p.on_primary,
     }
 }
 
@@ -480,8 +467,6 @@ impl YaziApp {
             self.groups = load_groups();
             self.rebuild();
             self.palette = palette::load();
-            self.pixel = bind_data::pixel_mode();
-            self.font = bind_data::configured_font();
             self.dirty = true;
         } else if palette::load() != self.palette {
             self.palette = palette::load();
@@ -687,11 +672,11 @@ impl YaziApp {
         let Some(mut pixmap) = tiny_skia::Pixmap::new(pw, ph) else {
             return;
         };
-        let p = ui_palette(self.pixel, self.palette);
+        let p = ui_palette(self.palette);
         let k = SCALE;
-        let title_size = if self.pixel { 20.0 } else { 21.0 };
-        let row_size = if self.pixel { 12.0 } else { 13.0 };
-        let search_size = if self.pixel { 12.0 } else { 13.0 };
+        let title_size = 21.0;
+        let row_size = 13.0;
+        let search_size = 13.0;
         pixmap.fill(p.panel.to_tiny());
         fill_rect(&mut pixmap, 0.0, 0.0, pw as f32, 1.5, p.accent.with_a(0.7));
 
@@ -733,7 +718,7 @@ impl YaziApp {
             sy * k,
             (self.width as f32 - PAD_X * 2.0) * k,
             38.0 * k,
-            if self.pixel { 0.0 } else { 8.0 * k },
+            8.0 * k,
             p.idle_panel,
         );
         // Рамка поля как у поисковой строки меню.
@@ -1293,8 +1278,7 @@ fn main() {
         font_system: FontSystem::new(),
         swash: SwashCache::new(),
         top_cache: HashMap::new(),
-        font: bind_data::configured_font(),
-        pixel: bind_data::pixel_mode(),
+        font: "JetBrainsMono Nerd Font Propo".to_string(),
         query: String::new(),
         groups,
         items: Vec::new(),

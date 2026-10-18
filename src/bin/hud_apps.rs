@@ -174,7 +174,6 @@ struct AppsApp {
     hover: Option<usize>,
     palette: palette::Palette,
     /// Пиксельная ли тема сейчас: от неё зависят шрифт и скругления.
-    pixel: bool,
     /// Остаток дробного скролла: тачпад присылает value120 меньше 120, и без
     /// накопления одно деление давало ноль строк.
     scroll_acc: f32,
@@ -308,7 +307,7 @@ impl AppsApp {
     fn draw(&mut self) {
         let _frame = log::Frame::start("лаунчер");
         let now = std::time::Instant::now();
-        let openness = self.ctx.openness_now(now, self.pixel);
+        let openness = self.ctx.openness_now(now);
         let visible = self.model.visible().len();
         // Подсветка выбранной строки. `update` идёт до чтения позиции: он может
         // запустить ход, и тогда читать надо уже новую.
@@ -318,7 +317,7 @@ impl AppsApp {
             now,
             self.ctx.anim,
         );
-        let sliding = self.highlight.row(now, self.pixel);
+        let sliding = self.highlight.row(now);
         if self.ctx.width == 0 || self.ctx.height == 0 {
             return;
         }
@@ -330,7 +329,7 @@ impl AppsApp {
         // Буфер заливается прозрачным: сквозь него видно рабочий стол, а
         // правило слоя размывает то, что под карточкой.
         pixmap.fill(palette::Rgba(0, 0, 0, 0).to_tiny());
-        let (ui, scale) = view::theme(self.pixel, self.palette);
+        let (ui, scale) = view::theme(self.palette);
         let card = {
             let mut window = view::AppsView {
                 pixmap: &mut pixmap,
@@ -338,7 +337,6 @@ impl AppsApp {
                 icons: &mut self.icons,
                 ui,
                 scale,
-                pixel: self.pixel,
             };
             view::render_window(
                 &mut window,
@@ -745,7 +743,6 @@ fn event_loop() -> Result<(), String> {
     // получивший `0` по ширине или высоте, — ошибка протокола, и композитор
     // убивает клиента прямо на старте.
     let current = settings::load();
-    let pixel = current.theme.as_deref() == Some("pixel");
     // На энергосбережении анимации гаснут сами, настройку не трогаем.
     let anim_on = current.animations && power_profile::anim_allowed();
     if current.animations && !anim_on {
@@ -790,14 +787,13 @@ fn event_loop() -> Result<(), String> {
         keyboard: None,
         mods: Modifiers::default(),
         repeat: Repeat::default(),
-        painter: TextPainter::new(&ui_tokens::font_name(pixel)),
+        painter: TextPainter::new(&ui_tokens::font_name()),
         icons: TextPainter::new(settings_icons::FONT),
         model,
         loader: icons::Loader::new(),
         highlight: highlight::Highlight::new(started),
         hover: None,
         palette: palette::load(),
-        pixel,
         scroll_acc: 0.0,
         exit: Arc::new(AtomicBool::new(false)),
     };

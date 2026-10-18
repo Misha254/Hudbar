@@ -558,14 +558,7 @@ mod tests {
 
     fn tree() -> Vec<Node> {
         vec![
-            Node::submenu(
-                "a",
-                "Стиль",
-                vec![
-                    Node::choice("t", "Тема", &["Обычная", "Pixel"], || 0, |_| {}),
-                    Node::picker("w", "Обои", "wallpaper"),
-                ],
-            ),
+            Node::submenu("a", "Стиль", vec![Node::picker("w", "Обои", "wallpaper")]),
             Node::toggle("d", "Не беспокоить", || true, |_| {}).when(|| false),
             Node::number("h", "Высота", 20.0, 48.0, 1.0, "px", || 27.0, |_| {}),
         ]
@@ -584,7 +577,7 @@ mod tests {
         let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
         assert_eq!(
             titles,
-            ["Тема", "Обои", "Высота"],
+            ["Обои", "Высота"],
             "скрытый переключатель не должен находиться"
         );
     }
@@ -594,7 +587,7 @@ mod tests {
         let nodes = tree();
         let style = &nodes[0];
         assert!(!style.is_leaf());
-        assert_eq!(style.children().map(<[Node]>::len), Some(2));
+        assert_eq!(style.children().map(<[Node]>::len), Some(1));
         assert!(nodes[2].is_leaf());
     }
 
@@ -606,8 +599,7 @@ mod tests {
         assert_eq!(rows[1].value, "27px", "у числа есть значение с единицей");
 
         let style = level_rows(nodes[0].children().unwrap(), 1, Language::Ru);
-        assert_eq!(style[0].value, "Обычная");
-        assert_eq!(style[1].value, "", "у пикера вместо значения миниатюра");
+        assert_eq!(style[0].value, "", "у пикера вместо значения миниатюра");
     }
 
     #[test]
@@ -662,9 +654,9 @@ mod tests {
     fn search_rows_carry_the_path_as_caption() {
         let rows = search_rows(&tree(), 0, Language::Ru);
         assert_eq!(rows[0].caption.as_deref(), Some("Стиль ›"));
-        assert_eq!(rows[0].title, "Тема");
-        assert_eq!(rows[0].value, "Обычная");
-        assert_eq!(rows[2].caption, None, "корень без родителей");
+        assert_eq!(rows[0].title, "Обои");
+        assert_eq!(rows[0].value, "", "у пикера вместо значения миниатюра");
+        assert_eq!(rows[1].caption, None, "корень без родителей");
     }
 
     #[test]

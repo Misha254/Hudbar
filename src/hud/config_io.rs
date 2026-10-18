@@ -7,7 +7,7 @@
 //! - `colors.css` и шаблоны matugen не трогаются: цветами владеет matugen;
 //! - применяется только то, что реально изменилось.
 
-use super::config::{Config, Theme};
+use super::config::Config;
 use super::settings::{HEIGHT_MAX, HEIGHT_MIN, Language, Module, NotificationPosition};
 use serde_json::{Map, Value};
 use std::fs;
@@ -39,10 +39,6 @@ pub fn home() -> PathBuf {
 
 pub fn settings_path() -> PathBuf {
     home().join(".config/hudbar/settings.json")
-}
-
-pub fn font_path() -> PathBuf {
-    home().join(".config/hudbar/font")
 }
 
 /// Пишет `text` во временный файл рядом с целью, `fsync`-ит и переименовывает.
@@ -116,10 +112,6 @@ pub fn merge(config: &Config, base: Option<&Value>) -> Value {
         ),
     );
 
-    if let Some(theme) = config.theme {
-        section(&mut root, "appearance").insert("theme".into(), Value::String(theme.key().into()));
-    }
-
     let bar = section(&mut root, "hudbar");
     bar.insert("height".into(), Value::from(config.height));
     bar.insert("control_button".into(), Value::Bool(config.control_button));
@@ -164,7 +156,6 @@ pub enum Patch {
     ControlButton(bool),
     Height(u32),
     Language(Language),
-    Theme(Theme),
     Notifications {
         font_size: Option<u32>,
         line_height: Option<u32>,
@@ -198,7 +189,6 @@ impl Patch {
             }
             Patch::Height(height) => format!("высота: {height} px"),
             Patch::Language(language) => format!("язык: {}", language.key()),
-            Patch::Theme(theme) => format!("тема: {}", theme.key()),
             Patch::Notifications { .. } => "уведомления".to_string(),
             Patch::Osd { .. } => "OSD".to_string(),
             Patch::Animations { .. } => "Анимации".to_string(),
@@ -255,15 +245,6 @@ impl Patch {
                     return false;
                 }
                 put_root(root, "language", value);
-                true
-            }
-            Patch::Theme(theme) => {
-                let appearance = section(root, "appearance");
-                let value = Value::String(theme.key().to_string());
-                if appearance.get("theme") == Some(&value) {
-                    return false;
-                }
-                appearance.insert("theme".to_string(), value);
                 true
             }
             Patch::Notifications {
@@ -409,47 +390,6 @@ pub fn save(config: &Config) -> Result<(), WriteError> {
     atomic_write(&path, &text)
 }
 
-/// Пишет файл шрифта, чтобы тема в панели и в окне совпадали.
-pub fn save_font(theme: Theme) -> Result<(), WriteError> {
-    save_font_to(&font_path(), theme)
-}
-
-fn save_font_to(path: &Path, theme: Theme) -> Result<(), WriteError> {
-    atomic_write(path, &format!("{}\n", theme.font()))
-}
-
-/// Согласованно меняет тему в JSON и в файле шрифта.
-///
-/// `settings.json` обновляется через тот же точечный patch-путь. Если запись
-/// второго источника не удалась, первый источник возвращается к прежней теме.
-pub fn apply_theme(theme: Theme) -> Result<(), WriteError> {
-    apply_theme_to(&settings_path(), &font_path(), theme)
-}
-
-/// То же, но для указанных файлов: оба пути вынесены параметрами, чтобы тесты
-/// не подменяли `HOME`.
-pub fn apply_theme_to(settings: &Path, font: &Path, theme: Theme) -> Result<(), WriteError> {
-    let previous = read_theme(settings).unwrap_or(Theme::Normal);
-    apply_patch_to(settings, &Patch::Theme(theme))?;
-    if let Err(error) = save_font_to(font, theme) {
-        // Шрифт не записался — возвращаем JSON к прежней теме, иначе панель и
-        // окно разойдутся по глифам.
-        let _ = apply_patch_to(settings, &Patch::Theme(previous));
-        let _ = save_font_to(font, previous);
-        return Err(error);
-    }
-    Ok(())
-}
-
-fn read_theme(path: &Path) -> Option<Theme> {
-    let text = fs::read_to_string(path).ok()?;
-    let root: Value = serde_json::from_str(&text).ok()?;
-    root.get("appearance")?
-        .get("theme")?
-        .as_str()
-        .and_then(Theme::from_key)
-}
-
 /// Нормализует значение перед записью: высота и размеры в пределах поддержки.
 pub fn normalize(config: &mut Config) {
     config.height = config.height.clamp(HEIGHT_MIN, HEIGHT_MAX);
@@ -569,15 +509,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_does_not_invent_a_theme_when_none_is_chosen() {
-        let base: Value = serde_json::from_str(r#"{"appearance":{"theme":"pixel"}}"#).unwrap();
-
-        let merged = merge(&Config::default(), Some(&base));
-
-        assert_eq!(merged["appearance"]["theme"], "pixel");
-    }
-
-    #[test]
     fn merge_writes_every_module_flag() {
         let mut config = Config::default();
         config.set_module(Module::Weather, false);
@@ -646,7 +577,6 @@ mod tests {
         config.move_within_zone(Module::Audio, -1);
         config.height = 33;
         config.language = Language::En;
-        config.theme = Some(Theme::Pixel);
 
         let merged = merge(&config, None);
         let text = serde_json::to_string(&merged).unwrap();
@@ -655,7 +585,6 @@ mod tests {
         assert_eq!(restored.flatten(), config.flatten());
         assert_eq!(restored.height, 33);
         assert_eq!(restored.language, Language::En);
-        assert_eq!(restored.theme, Some(Theme::Pixel));
     }
 
     #[test]
@@ -822,7 +751,6 @@ mod tests {
     #[test]
     fn no_source_file_invokes_legacy_settings_commands() {
         let setting_command = ["hud", "setting"].join("-");
-        let theme_command = ["hud", "theme"].join("-");
         let mut offenders = Vec::new();
         for path in source_files() {
             let Ok(text) = fs::read_to_string(&path) else {
@@ -832,9 +760,7 @@ mod tests {
                 let invokes_process = line.contains("Command::new")
                     || line.contains(".arg(")
                     || line.contains(".args(");
-                if invokes_process
-                    && (line.contains(&setting_command) || line.contains(&theme_command))
-                {
+                if invokes_process && line.contains(&setting_command) {
                     offenders.push(format!("{}:{}: {}", path.display(), number + 1, line));
                 }
             }
@@ -902,24 +828,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn font_file_matches_the_theme() {
-        assert_eq!(Theme::Normal.font(), "JetBrainsMono Nerd Font Propo");
-        assert_eq!(Theme::Pixel.font(), "Minecraft Rus");
-    }
-
     fn seed(path: &Path, text: &str) {
         atomic_write(path, text).unwrap();
-    }
-
-    fn read_theme_from(path: &Path) -> Option<Theme> {
-        let text = fs::read_to_string(path).unwrap();
-        serde_json::from_str::<Value>(&text)
-            .unwrap()
-            .get("appearance")?
-            .get("theme")?
-            .as_str()
-            .and_then(Theme::from_key)
     }
 
     #[test]
@@ -964,8 +874,8 @@ mod tests {
   "hudbar": {
     "height": 27
   },
-  "appearance": {
-    "theme": "normal"
+  "osd": {
+    "enabled": false
   }
 }
 "#;
@@ -976,55 +886,10 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         let language = text.find("\"language\"").expect("language");
         let hudbar = text.find("\"hudbar\"").expect("hudbar");
-        let appearance = text.find("\"appearance\"").expect("appearance");
+        let osd = text.find("\"osd\"").expect("osd");
         assert!(
-            language < hudbar && hudbar < appearance,
+            language < hudbar && hudbar < osd,
             "порядок секций изменился:\n{text}"
         );
-    }
-
-    #[test]
-    fn apply_theme_keeps_json_and_font_in_sync() {
-        let dir = temp_dir("theme");
-        let path = dir.join("settings.json");
-        let font = dir.join("font");
-        seed(&path, r#"{"appearance":{"theme":"normal"},"my_key":5}"#);
-
-        apply_theme_to(&path, &font, Theme::Pixel).unwrap();
-
-        assert_eq!(read_theme_from(&path), Some(Theme::Pixel));
-        assert_eq!(fs::read_to_string(&font).unwrap(), "Minecraft Rus\n");
-        let root: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(root["my_key"], 5, "чужие ключи переживают смену темы");
-    }
-
-    #[test]
-    fn apply_theme_rolls_json_back_when_the_font_cannot_be_written() {
-        let dir = temp_dir("theme-rollback");
-        let path = dir.join("settings.json");
-        // Каталог вместо файла: запись шрифта гарантированно не удастся.
-        let blocked_font = dir.join("font");
-        fs::create_dir_all(&blocked_font).unwrap();
-        seed(&path, r#"{"appearance":{"theme":"normal"}}"#);
-
-        let error = apply_theme_to(&path, &blocked_font, Theme::Pixel);
-
-        assert!(error.is_err(), "ожидалась ошибка записи шрифта");
-        assert_eq!(
-            read_theme_from(&path),
-            Some(Theme::Normal),
-            "JSON должен вернуться к прежней теме"
-        );
-    }
-
-    #[test]
-    fn save_font_writes_exactly_the_theme_font() {
-        let dir = temp_dir("font");
-        let path = dir.join("font");
-
-        fs::write(&path, "stale\n").unwrap();
-        atomic_write(&path, &format!("{}\n", Theme::Pixel.font())).unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "Minecraft Rus\n");
     }
 }

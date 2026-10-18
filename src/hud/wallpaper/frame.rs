@@ -46,17 +46,8 @@ pub fn cell_position(sel: usize, cols: usize, top_row: usize) -> (f32, f32) {
 }
 
 /// Позиция рамки для отрисовки.
-///
-/// В Pixel-теме округляется до целой ячейки: рамка — сплошная обводка без
-/// альфы, и на полуячеечном сдвиге её кромка размывается. Делить ход на
-/// четыре шага нельзя — `PIXEL_ANIM_STEPS` относится к шкале 0..1, а здесь
-/// твин живёт в ячейках, и половина ячейки даёт ту же размытую кромку.
-pub fn draw_cell(pos: (f32, f32), pixel: bool) -> (f32, f32) {
-    if pixel {
-        (pos.0.round(), pos.1.round())
-    } else {
-        (pos.0.clamp(0.0, f32::MAX), pos.1.clamp(0.0, f32::MAX))
-    }
+pub fn draw_cell(pos: (f32, f32)) -> (f32, f32) {
+    (pos.0, pos.1)
 }
 
 /// Скользящая рамка выбранной ячейки.
@@ -108,10 +99,10 @@ impl Frame {
 /// Позиция рамки для `view`. `None`, пока рамка не началась: это прежний путь,
 /// где ячейка рисует рамку сама.
 impl Frame {
-    pub fn pos(&self, now: Instant, pixel: bool) -> Option<(f32, f32)> {
+    pub fn pos(&self, now: Instant) -> Option<(f32, f32)> {
         self.set
             .as_ref()
-            .map(|_| draw_cell((self.col.value(now), self.row.value(now)), pixel))
+            .map(|_| draw_cell((self.col.value(now), self.row.value(now))))
     }
 
     /// Идёт ли ход рамки.
@@ -299,7 +290,7 @@ mod tests {
     #[test]
     fn the_first_update_lands_on_the_target() {
         let frame = started(ms(0), AnimSettings::default());
-        assert_eq!(frame.pos(ms(0), false), Some((0.0, 0.0)));
+        assert_eq!(frame.pos(ms(0)), Some((0.0, 0.0)));
         assert!(!frame.animating(ms(0)));
     }
 
@@ -309,14 +300,14 @@ mod tests {
         let mut frame = started(ms(0), settings);
         frame.update(set(), (2.0, 1.0), ms(10), settings);
 
-        assert_eq!(frame.pos(ms(10), false), Some((0.0, 0.0)));
-        let midway = frame.pos(ms(60), false).unwrap();
+        assert_eq!(frame.pos(ms(10)), Some((0.0, 0.0)));
+        let midway = frame.pos(ms(60)).unwrap();
         assert!(
             midway.0 > 0.0 && midway.0 < 2.0,
             "ход по колонке: {midway:?}"
         );
         assert!(midway.1 > 0.0 && midway.1 < 1.0, "ход по ряду: {midway:?}");
-        assert_eq!(frame.pos(ms(110), false), Some((2.0, 1.0)));
+        assert_eq!(frame.pos(ms(110)), Some((2.0, 1.0)));
     }
 
     #[test]
@@ -326,7 +317,7 @@ mod tests {
         frame.update(set_of("anime", "", 40, 8), (3.0, 2.0), ms(10), settings);
 
         assert_eq!(
-            frame.pos(ms(10), false),
+            frame.pos(ms(10)),
             Some((3.0, 2.0)),
             "новая папка: рамка встаёт на место"
         );
@@ -344,7 +335,7 @@ mod tests {
             settings,
         );
 
-        assert_eq!(frame.pos(ms(10), false), Some((1.0, 0.0)));
+        assert_eq!(frame.pos(ms(10)), Some((1.0, 0.0)));
         assert!(!frame.animating(ms(10)));
     }
 
@@ -354,7 +345,7 @@ mod tests {
         let mut frame = started(ms(0), settings);
         frame.update(set_of("anime", "", 7, 0), (2.0, 1.0), ms(10), settings);
 
-        assert_eq!(frame.pos(ms(10), false), Some((2.0, 1.0)));
+        assert_eq!(frame.pos(ms(10)), Some((2.0, 1.0)));
     }
 
     #[test]
@@ -370,7 +361,7 @@ mod tests {
             settings,
         );
 
-        assert_eq!(frame.pos(ms(10), false), Some((2.0, 0.0)));
+        assert_eq!(frame.pos(ms(10)), Some((2.0, -1.0)));
         assert!(!frame.animating(ms(10)));
     }
 
@@ -386,7 +377,7 @@ mod tests {
             frame.update(set(), (3.0, 3.0), now, settings);
         }
 
-        assert_eq!(frame.pos(now, false), Some((3.0, 3.0)));
+        assert_eq!(frame.pos(now), Some((3.0, 3.0)));
         assert!(!frame.animating(now));
     }
 
@@ -410,7 +401,7 @@ mod tests {
         let mut frame = started(ms(0), settings);
         frame.update(set(), (2.0, 1.0), ms(10), settings);
 
-        assert_eq!(frame.pos(ms(10), false), Some((2.0, 1.0)));
+        assert_eq!(frame.pos(ms(10)), Some((2.0, 1.0)));
         assert!(!frame.animating(ms(10)));
     }
 
@@ -427,37 +418,20 @@ mod tests {
     }
 
     #[test]
-    fn the_pixel_theme_snaps_the_frame_to_whole_cells() {
+    fn the_frame_reaches_the_target_cell() {
         let settings = AnimSettings::default();
         let mut frame = started(ms(0), settings);
         frame.update(set(), (3.0, 3.0), ms(10), settings);
 
-        let midway = frame.pos(ms(60), false).unwrap();
-        let pixel = frame.pos(ms(60), true).unwrap();
-
-        assert!(
-            pixel.0 != midway.0 || pixel.1 != midway.1,
-            "округления не было"
-        );
-        assert!((pixel.0 - pixel.0.round()).abs() < 1e-6);
-        assert!((pixel.1 - pixel.1.round()).abs() < 1e-6);
-        assert!((0.0..=3.0).contains(&pixel.0));
-        assert!((0.0..=3.0).contains(&pixel.1));
-    }
-
-    #[test]
-    fn draw_cell_is_a_noop_outside_the_pixel_theme() {
-        for step in 0..=10 {
-            let value = step as f32 / 10.0;
-            assert_eq!(draw_cell((value, value), false), (value, value));
-        }
-        assert_eq!(draw_cell((2.4, 1.6), true), (2.0, 2.0));
+        let pos = frame.pos(ms(1000)).expect("рамка уже на месте");
+        assert!((pos.0 - 3.0).abs() < 1e-6);
+        assert!((pos.1 - 3.0).abs() < 1e-6);
     }
 
     #[test]
     fn nothing_is_drawn_before_the_first_update() {
         let frame = Frame::new(ms(0));
-        assert!(frame.pos(ms(0), false).is_none());
+        assert!(frame.pos(ms(0)).is_none());
         assert!(!frame.animating(ms(0)));
     }
 

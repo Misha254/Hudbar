@@ -43,14 +43,8 @@ pub fn position(selected: usize, top: usize) -> f32 {
 }
 
 /// Позиция подсветки для отрисовки.
-///
-/// В Pixel-теме округляется до целой строки: подсветка — сплошная заливка, и
-/// на полустрочном `y` её край размывается, то есть читается как
-/// полупрозрачность. Делить ход на четыре шага нельзя: `PIXEL_ANIM_STEPS`
-/// относится к шкале 0..1, а здесь твин живёт в строках, и четверть строки —
-/// это ровно та же размытая кромка, только постоянная.
-pub fn draw_position(pos: f32, pixel: bool) -> f32 {
-    if pixel { pos.round() } else { pos }
+pub fn draw_position(pos: f32) -> f32 {
+    pos
 }
 
 /// Скользящая подсветка: твин по строкам плюс признак последнего уровня.
@@ -97,10 +91,10 @@ impl Highlight {
 
     /// Позиция для `render_window`. `None`, пока подсветка не началась: это
     /// тот же путь, который рисует выбранную строку внутри `row()`.
-    pub fn row(&self, now: Instant, pixel: bool) -> Option<f32> {
+    pub fn row(&self, now: Instant) -> Option<f32> {
         self.level
             .as_ref()
-            .map(|_| draw_position(self.pos.value(now), pixel))
+            .map(|_| draw_position(self.pos.value(now)))
     }
 
     /// Идёт ли ход: пока едет, окно обязано перерисовываться.
@@ -150,7 +144,7 @@ mod tests {
     #[test]
     fn the_first_update_lands_on_the_target_right_away() {
         let highlight = started(ms(0), AnimSettings::default());
-        assert!((highlight.row(ms(0), false).unwrap() - 3.0).abs() < 1e-6);
+        assert!((highlight.row(ms(0)).unwrap() - 3.0).abs() < 1e-6);
     }
 
     #[test]
@@ -159,9 +153,9 @@ mod tests {
         let mut highlight = started(ms(0), settings);
         highlight.update(level(), 4.0, ms(10), settings);
 
-        let at_start = highlight.row(ms(10), false).unwrap();
-        let midway = highlight.row(ms(55), false).unwrap();
-        let at_end = highlight.row(ms(100), false).unwrap();
+        let at_start = highlight.row(ms(10)).unwrap();
+        let midway = highlight.row(ms(55)).unwrap();
+        let at_end = highlight.row(ms(100)).unwrap();
 
         assert!(
             (at_start - 3.0).abs() < 1e-6,
@@ -178,7 +172,7 @@ mod tests {
         highlight.update(level_of(2, "", 12), 6.0, ms(10), settings);
 
         assert!(
-            (highlight.row(ms(10), false).unwrap() - 6.0).abs() < 1e-6,
+            (highlight.row(ms(10)).unwrap() - 6.0).abs() < 1e-6,
             "вход в подменю не должен ехать от старой позиции"
         );
         assert!(!highlight.animating(ms(10)));
@@ -190,7 +184,7 @@ mod tests {
         let mut highlight = started(ms(0), settings);
         highlight.update(level_of(1, "wif", 12), 1.0, ms(10), settings);
 
-        assert!((highlight.row(ms(10), false).unwrap() - 1.0).abs() < 1e-6);
+        assert!((highlight.row(ms(10)).unwrap() - 1.0).abs() < 1e-6);
         assert!(!highlight.animating(ms(10)));
     }
 
@@ -204,7 +198,7 @@ mod tests {
         highlight.update(level_of(1, "", 9), 4.0, ms(200), settings);
 
         assert!(
-            (highlight.row(ms(200), false).unwrap() - 4.0).abs() < 1e-6,
+            (highlight.row(ms(200)).unwrap() - 4.0).abs() < 1e-6,
             "подгрузка строк не должна гнать подсветку через пустоту"
         );
     }
@@ -217,7 +211,7 @@ mod tests {
         highlight.update(level(), position(5, 2), ms(10), settings);
 
         assert!(
-            (highlight.row(ms(10), false).unwrap() - 3.0).abs() < 1e-6,
+            (highlight.row(ms(10)).unwrap() - 3.0).abs() < 1e-6,
             "позиция не изменилась — подсветка стоит на месте"
         );
         assert!(!highlight.animating(ms(10)));
@@ -230,12 +224,12 @@ mod tests {
         // Выбор тот же, окно сдвинулось: строка физически уехала вверх.
         highlight.update(level(), position(5, 3), ms(10), settings);
 
-        let midway = highlight.row(ms(55), false).unwrap();
+        let midway = highlight.row(ms(55)).unwrap();
         assert!(
             midway < 3.0 && midway > 2.0,
             "подсветка идёт за строкой: {midway}"
         );
-        assert!((highlight.row(ms(100), false).unwrap() - 2.0).abs() < 1e-6);
+        assert!((highlight.row(ms(100)).unwrap() - 2.0).abs() < 1e-6);
     }
 
     #[test]
@@ -252,7 +246,7 @@ mod tests {
             highlight.update(level(), 8.0, now, settings);
         }
 
-        assert!((highlight.row(now, false).unwrap() - 8.0).abs() < 1e-6);
+        assert!((highlight.row(now).unwrap() - 8.0).abs() < 1e-6);
         assert!(!highlight.animating(now));
     }
 
@@ -280,7 +274,7 @@ mod tests {
         highlight.update(level(), 7.0, ms(10), settings);
 
         assert!(
-            (highlight.row(ms(10), false).unwrap() - 7.0).abs() < 1e-6,
+            (highlight.row(ms(10)).unwrap() - 7.0).abs() < 1e-6,
             "выключенная анимация должна встать на место сразу"
         );
         assert!(!highlight.animating(ms(10)));
@@ -295,37 +289,17 @@ mod tests {
     }
 
     #[test]
-    fn the_pixel_theme_snaps_the_highlight_to_whole_rows() {
-        let settings = AnimSettings::default();
-        let mut highlight = started(ms(0), settings);
-        highlight.update(level(), 4.0, ms(10), settings);
-
-        // Берём середину хода: на старте позиция ещё целая, и округление не видно.
-        let midway = highlight.row(ms(55), false).unwrap();
-        let pixel = highlight.row(ms(55), true).unwrap();
-
-        assert!(
-            (midway - pixel.round()).abs() > 1e-6,
-            "в Pixel-теме позиция должна округляться: {midway} против {pixel}"
-        );
-        assert!((pixel - pixel.round()).abs() < 1e-6, "позиция не целая");
-        assert!((3.0..=4.0).contains(&pixel), "полуполоса: {pixel}");
-    }
-
-    #[test]
-    fn draw_position_is_a_noop_outside_the_pixel_theme() {
+    fn draw_position_is_a_passthrough() {
         for step in 0..=10 {
             let value = step as f32 / 10.0;
-            assert!((draw_position(value, false) - value).abs() < 1e-6);
+            assert!((draw_position(value) - value).abs() < 1e-6);
         }
-        assert!((draw_position(2.4, true) - 2.0).abs() < 1e-6);
-        assert!((draw_position(2.6, true) - 3.0).abs() < 1e-6);
     }
 
     #[test]
     fn nothing_is_drawn_before_the_first_update() {
         let highlight = Highlight::new(ms(0));
-        assert!(highlight.row(ms(0), false).is_none());
+        assert!(highlight.row(ms(0)).is_none());
         assert!(!highlight.animating(ms(0)));
     }
 }
