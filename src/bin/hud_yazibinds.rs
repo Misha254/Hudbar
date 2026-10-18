@@ -247,19 +247,14 @@ impl YaziApp {
                     });
                     let len = self.section_len(row);
                     let block_rows = len.div_ceil(COLS);
-                    let favorites = matches!(
-                        &self.rows[row],
-                        ListRow::Header(name) if name == bind_data::YAZI_FAVORITES_GROUP
-                    );
                     for (n, r) in (row + 1..=row + len).enumerate() {
-                        // «Частые» читаются как две вертикальные группы:
-                        // основные операции слева, дополнительные действия справа.
-                        // Остальные секции остаются компактными построчно.
-                        let (c, row_in_block) = if favorites {
-                            (n / block_rows, n % block_rows)
-                        } else {
-                            (n % COLS, n / COLS)
-                        };
+                        // Все секции газеткой как «Частые»: колонки —
+                        // вертикальные списки, чтение идёт сначала вниз по
+                        // первой колонке, потом по второй. Построчная разметка
+                        // заставляла прокрутку с выделением зигзагом менять
+                        // колонку на каждом шаге.
+                        let c = n / block_rows;
+                        let row_in_block = n % block_rows;
                         slots.push(Slot {
                             row: r,
                             item: match self.rows[r] {
