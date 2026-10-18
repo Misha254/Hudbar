@@ -861,7 +861,8 @@ impl YaziApp {
             );
         }
 
-        // Скроллбар: полоса — доля видимого от высоты потока, бегунок — по прокрутке.
+        // Скроллбар: как в меню — только бегунок цвета `muted`, без трека и
+        // акцента, иначе у правого края читается лишняя вертикальная линейка.
         if self.max_top() > 0.5 {
             let track_h = self.view_h();
             let content = (self.content_h() - LIST_Y0).max(track_h);
@@ -870,15 +871,7 @@ impl YaziApp {
             let th = track_h * shown;
             let ty = LIST_Y0 + self.top / range * (track_h - th);
             let bx = self.width as f32 - 6.0;
-            fill_rect(
-                &mut pixmap,
-                bx * k,
-                LIST_Y0 * k,
-                2.0 * k,
-                track_h * k,
-                p.border,
-            );
-            fill_rect(&mut pixmap, bx * k, ty * k, 2.0 * k, th * k, p.accent);
+            fill_rect(&mut pixmap, bx * k, ty * k, 2.0 * k, th * k, p.muted);
         }
 
         // Плотность карточки как у меню: вся отрисовка непрозрачна в буфере,
