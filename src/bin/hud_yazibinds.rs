@@ -56,7 +56,11 @@ const HEIGHT: u32 = 620;
 const TITLE: &str = "Yazi";
 /// Фон непрозрачный, как у меню и лаунчера: та же плотность цвета окна,
 /// иначе фон читается другим тоном рядом с ними.
-const BG_ALPHA: f32 = 1.0;
+/// Плотность окна у композитора: вся отрисовка идёт в буфер непрозрачным,
+/// а в конце проход умножает альфу всех пикселей на эту долю — так же, как
+/// `apply_card_alpha` меню и `p.base.with_a(0.9)` панели. Значение то же,
+/// что у `menu::view::geometry::CARD_ALPHA`.
+const CARD_ALPHA: f32 = 0.9;
 const PLACEHOLDER: &str = "Поиск…";
 
 // Поток строк в две колонки, как в окне биндов niri: заголовок группы на всю
@@ -86,7 +90,8 @@ struct Slot {
 
 #[derive(Clone, Copy)]
 struct UiPalette {
-    base: palette::Rgba,
+    /// Фон карточки: тот же слэб, что fill_round_rect у карточки меню.
+    panel: palette::Rgba,
     idle_panel: palette::Rgba,
     border: palette::Rgba,
     accent: palette::Rgba,
@@ -162,9 +167,9 @@ fn mix(a: palette::Rgba, b: palette::Rgba, t: f32) -> palette::Rgba {
 fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
     if pixel {
         UiPalette {
-            base: palette::Rgba(0x0b, 0x10, 0x20, 255).with_a(BG_ALPHA),
-            idle_panel: palette::Rgba(0x0e, 0x17, 0x2b, 255).with_a(BG_ALPHA),
-            border: palette::Rgba(0x31, 0x5b, 0x9b, 255),
+            panel: palette::Rgba(0x11, 0x1b, 0x31, 255),
+            idle_panel: palette::Rgba(0x0e, 0x17, 0x2b, 255),
+            border: palette::Rgba(0x4d, 0x6a, 0xa5, 255),
             accent: palette::Rgba(0x79, 0xa7, 0xff, 255),
             text: palette::Rgba(0xe8, 0xea, 0xff, 255),
             muted: palette::Rgba(0x8d, 0x9a, 0xbd, 255),
@@ -172,9 +177,9 @@ fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
         }
     } else {
         UiPalette {
-            base: p.base.with_a(BG_ALPHA),
-            idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
-            border: mix(p.base, p.primary, 0.35),
+            panel: mix(p.base, p.secondary, 0.10),
+            idle_panel: mix(p.base, p.secondary, 0.05),
+            border: mix(p.base, p.primary, 0.55),
             accent: p.primary,
             text: p.text,
             muted: p.text.with_a(0.58),
@@ -693,7 +698,7 @@ impl YaziApp {
         let title_size = if self.pixel { 20.0 } else { 21.0 };
         let row_size = if self.pixel { 12.0 } else { 13.0 };
         let search_size = if self.pixel { 12.0 } else { 13.0 };
-        pixmap.fill(p.base.to_tiny());
+        pixmap.fill(p.panel.to_tiny());
         fill_rect(&mut pixmap, 0.0, 0.0, pw as f32, 1.5, p.accent.with_a(0.7));
 
         self.draw_text(
@@ -736,6 +741,15 @@ impl YaziApp {
             38.0 * k,
             if self.pixel { 0.0 } else { 8.0 * k },
             p.idle_panel,
+        );
+        // Рамка поля как у поисковой строки меню.
+        stroke_rect(
+            &mut pixmap,
+            PAD_X * k,
+            sy * k,
+            (self.width as f32 - PAD_X * 2.0) * k,
+            38.0 * k,
+            p.border,
         );
         if self.query.is_empty() {
             self.draw_text(
@@ -880,6 +894,10 @@ impl YaziApp {
             );
             fill_rect(&mut pixmap, bx * k, ty * k, 2.0 * k, th * k, p.accent);
         }
+
+        // Плотность карточки как у меню: вся отрисовка непрозрачна в буфере,
+        // альфа mul'ится целиком прямо перед отправкой в композитор.
+        apply_window_alpha(&mut pixmap, CARD_ALPHA);
 
         let stride = (pw * 4) as i32;
         let Ok((buffer, canvas)) =
@@ -1124,6 +1142,40 @@ impl ProvidesRegistryState for YaziApp {
 
 delegate_registry!(YaziApp);
 smithay_client_toolkit::delegate_dispatch2!(YaziApp);
+
+/// Альфа всей карточки — эквивалент `apply_card_alpha` меню: буфер рисуется
+/// непрозрачным, дробь умножается на альфу каждого пикселя в конце прохода.
+/// Premultiplied-помощник обязан масштабировать все четыре канала, а не только
+/// альфа-байт.
+fn apply_window_alpha(pixmap: &mut tiny_skia::Pixmap, alpha: f32) {
+    let factor = (alpha.clamp(0.0, 1.0) * 255.0) as u32;
+    for pixel in pixmap.pixels_mut() {
+        if let Some(scaled) = tiny_skia::PremultipliedColorU8::from_rgba(
+            (pixel.red() as u32 * factor / 255) as u8,
+            (pixel.green() as u32 * factor / 255) as u8,
+            (pixel.blue() as u32 * factor / 255) as u8,
+            (pixel.alpha() as u32 * factor / 255) as u8,
+        ) {
+            *pixel = scaled;
+        }
+    }
+}
+
+/// Рамка в один логический пиксель: четыре сегмента по краям. Толщина та же,
+/// что у обводки карточки меню.
+fn stroke_rect(
+    pixmap: &mut tiny_skia::Pixmap,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: palette::Rgba,
+) {
+    fill_rect(pixmap, x, y, w, SCALE, color);
+    fill_rect(pixmap, x, y + h - SCALE, w, SCALE, color);
+    fill_rect(pixmap, x, y, SCALE, h, color);
+    fill_rect(pixmap, x + w - SCALE, y, SCALE, h, color);
+}
 
 fn fill_rect(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w: f32, h: f32, color: palette::Rgba) {
     let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) else {
