@@ -723,8 +723,8 @@ impl BindsApp {
             );
         }
 
-        // Скроллбар: как в меню — только бегунок цвета `muted`, без трека и
-        // акцента, иначе у правого края читается лишняя вертикальная линейка.
+        // Скроллбар: трек во всю высоту списка и яркий бегунок — как в
+        // привычном варианте, приглушённый одноцветный бегунок читался хуже.
         if self.top > 0 || self.top + slots.len() < self.items.len() {
             let track_h = self.height as f32 - LIST_Y0 - 8.0;
             let total = self.items.len().max(1) as f32;
@@ -734,7 +734,15 @@ impl BindsApp {
             let th = track_h * shown;
             let ty = LIST_Y0 + self.top as f32 / range * (track_h - th);
             let bx = self.width as f32 - 6.0;
-            fill_rect(&mut pixmap, bx * k, ty * k, 2.0 * k, th * k, p.muted);
+            fill_rect(
+                &mut pixmap,
+                bx * k,
+                LIST_Y0 * k,
+                2.0 * k,
+                track_h * k,
+                p.border,
+            );
+            fill_rect(&mut pixmap, bx * k, ty * k, 2.0 * k, th * k, p.accent);
         }
 
         // Плотность карточки как у меню: вся отрисовка непрозрачна в буфере,
