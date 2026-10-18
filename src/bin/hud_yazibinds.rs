@@ -66,7 +66,6 @@ const COL_GAP: f32 = 28.0;
 const ROW_GAP: f32 = 2.0;
 const LIST_Y0: f32 = 118.0;
 const PAD_X: f32 = 28.0;
-const MARK_W: f32 = 2.0;
 const KEY_W: f32 = 132.0;
 /// Отступ после блока секции, чтобы следующая группа не примыкала вплотную.
 const SECTION_GAP: f32 = 12.0;
@@ -87,12 +86,13 @@ struct Slot {
 #[derive(Clone, Copy)]
 struct UiPalette {
     base: palette::Rgba,
-    panel: palette::Rgba,
     idle_panel: palette::Rgba,
     border: palette::Rgba,
     accent: palette::Rgba,
     text: palette::Rgba,
     muted: palette::Rgba,
+    /// Текст на заливке акцентом — тёмный, как роль `on_primary` у схем.
+    on_primary: palette::Rgba,
 }
 
 struct YaziApp {
@@ -162,22 +162,22 @@ fn ui_palette(pixel: bool, p: palette::Palette) -> UiPalette {
     if pixel {
         UiPalette {
             base: palette::Rgba(0x0b, 0x10, 0x20, 255).with_a(BG_ALPHA),
-            panel: palette::Rgba(0x11, 0x1b, 0x31, 255).with_a(BG_ALPHA),
             idle_panel: palette::Rgba(0x0e, 0x17, 0x2b, 255).with_a(BG_ALPHA),
             border: palette::Rgba(0x31, 0x5b, 0x9b, 255),
             accent: palette::Rgba(0x79, 0xa7, 0xff, 255),
             text: palette::Rgba(0xe8, 0xea, 0xff, 255),
             muted: palette::Rgba(0x8d, 0x9a, 0xbd, 255),
+            on_primary: palette::Rgba(0x0b, 0x10, 0x20, 255),
         }
     } else {
         UiPalette {
             base: p.base.with_a(BG_ALPHA),
-            panel: mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA),
             idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
             border: mix(p.base, p.primary, 0.35),
             accent: p.primary,
             text: p.text,
             muted: p.text.with_a(0.58),
+            on_primary: p.on_primary,
         }
     }
 }
@@ -800,7 +800,7 @@ impl YaziApp {
                     &label,
                     row_size,
                     p.accent,
-                    (slot.x + MARK_W + 8.0) * k,
+                    (slot.x + 10.0) * k,
                     (slot.y + 5.0) * k,
                     18.0,
                 );
@@ -812,30 +812,24 @@ impl YaziApp {
             };
             let selected = item == self.selected;
             if selected {
+                // Как в меню и лаунчере: выбранная строка залита акцентом
+                // целиком, ключ и описание на ней — тёмный `on_primary`.
                 fill_rect(
                     &mut pixmap,
                     slot.x * k,
                     slot.y * k,
                     slot.w * k,
                     (slot.h - ROW_GAP) * k,
-                    p.panel,
-                );
-                fill_rect(
-                    &mut pixmap,
-                    slot.x * k,
-                    (slot.y + 3.0) * k,
-                    MARK_W * k,
-                    (slot.h - ROW_GAP - 6.0) * k,
                     p.accent,
                 );
             }
-            // Отступ постоянный: метка занимает своё место всегда, текст не прыгает.
-            let text_x = slot.x + MARK_W + 8.0;
+            // Отступ постоянный: 10 = бывшая метка (2) плюс щель (8).
+            let text_x = slot.x + 10.0;
             self.draw_text_boxed(
                 &mut pixmap,
                 &e.key,
                 row_size,
-                p.accent,
+                if selected { p.on_primary } else { p.accent },
                 KEY_W,
                 (text_x + 2.0) * k,
                 (slot.y + 5.0) * k,
@@ -845,7 +839,7 @@ impl YaziApp {
                 &mut pixmap,
                 &e.desc,
                 row_size,
-                p.text,
+                if selected { p.on_primary } else { p.text },
                 slot.x + slot.w - (text_x + KEY_W + 12.0),
                 (text_x + KEY_W + 4.0) * k,
                 (slot.y + 5.0) * k,
