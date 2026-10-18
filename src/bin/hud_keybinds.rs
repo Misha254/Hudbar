@@ -19,7 +19,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers, RepeatInfo},
         pointer::{AxisScroll, PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
@@ -45,15 +45,17 @@ mod bind_data;
 mod binds_layout;
 #[path = "../hud/palette.rs"]
 mod palette;
+#[path = "../hud/repeat.rs"]
+mod repeat;
 #[path = "../hud/shell.rs"]
 mod shell;
+
+use repeat::Repeat;
 
 const SCALE: f32 = 2.0;
 const WIDTH: u32 = 900;
 const HEIGHT: u32 = 620;
 const TITLE: &str = "Бинды";
-/// Фон непрозрачный, как у меню и лаунчера: та же плотность цвета окна,
-/// иначе фон читается другим тоном рядом с ними.
 /// Плотность окна у композитора: вся отрисовка идёт в буфер непрозрачным,
 /// а в конце проход умножает альфу всех пикселей на эту долю — так же, как
 /// `apply_card_alpha` меню и `p.base.with_a(0.9)` панели. Значение то же,
@@ -102,6 +104,8 @@ struct BindsApp {
     window: Window,
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// Клиентский автоповтор удержанной стрелки: композитор повторы не шлёт.
+    repeat: Repeat,
     mods: Modifiers,
     font_system: FontSystem,
     swash: SwashCache,
@@ -942,6 +946,7 @@ impl KeyboardHandler for BindsApp {
         _: u32,
         event: KeyEvent,
     ) {
+        self.repeat.press(&event);
         self.on_key(event);
     }
     fn repeat_key(
@@ -961,8 +966,20 @@ impl KeyboardHandler for BindsApp {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.repeat.release(&event);
+    }
+    /// Rate и delay удержания клавиши: композитор сообщает их один раз,
+    /// клиент сам выдаёт повторы, пока клавиша зажата.
+    fn update_repeat_info(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        info: RepeatInfo,
+    ) {
+        self.repeat.set_info(info);
     }
     fn update_modifiers(
         &mut self,
@@ -1148,6 +1165,7 @@ fn main() {
         pointer: None,
         keyboard: None,
         mods: Modifiers::default(),
+        repeat: Repeat::default(),
         font_system: FontSystem::new(),
         swash: SwashCache::new(),
         top_cache: HashMap::new(),
@@ -1175,13 +1193,27 @@ fn main() {
         if event_queue.flush().is_err() {
             break;
         }
-        // Сон фиксированный: анимаций и клиентского повтора тут нет
-        // (повторы шлёт композитор и будят сокет сами), ждать нечего —
-        // только не крутить цикл вхолостую.
-        shell::poll_read(&mut event_queue, conn.as_fd(), 250u16);
+        // Сон до ближайшего повтора удержанной клавиши или 250 мс: композитор
+        // повторы не шлёт, клиент выдаёт их сам, поэтому спать дольше —
+        // значит двигать выбор рывками по тикам сна.
+        let timeout = app
+            .repeat
+            .wait_hint()
+            .and_then(|left| u16::try_from(left.as_millis()).ok())
+            .unwrap_or(250);
+        shell::poll_read(&mut event_queue, conn.as_fd(), timeout);
         // Ошибка разговора с вейлендом — повод выйти, иначе цикл крутится вхолостую.
         if event_queue.dispatch_pending(&mut app).is_err() {
             break;
+        }
+        // Повтор удержанной стрелки виден обработчику как обычное нажатие.
+        let mut repeat_fired = false;
+        while let Some(event) = app.repeat.poll() {
+            app.on_key(event);
+            repeat_fired = true;
+        }
+        if repeat_fired {
+            app.dirty = true;
         }
         if app.dirty {
             app.dirty = false;
