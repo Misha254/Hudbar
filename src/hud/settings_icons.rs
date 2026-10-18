@@ -27,6 +27,10 @@ pub const BATTERY: &str = "\u{f240}";
 pub const SYSTEM: &str = "\u{f4bc}";
 pub const SOUND: &str = "\u{f028}";
 pub const NETWORK: &str = "\u{f1eb}";
+
+/// Накопители: fa-hdd — классический жёсткий диск, кодпойнт проверен по cmap
+/// JetBrainsMono Nerd Font Propo.
+pub const HARD_DRIVE: &str = "\u{f0a0}";
 /// Bluetooth: тот же глиф, что в панели у модуля Bluetooth (у панели его
 /// пока нет, поэтому константа живёт здесь, рядом со звуком и сетью).
 pub const BLUETOOTH: &str = "\u{f293}";

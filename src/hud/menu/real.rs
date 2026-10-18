@@ -909,13 +909,13 @@ fn devices_group(lang: Language) -> Node {
             .when(has_niri)
             .search_as(&["displays", "дисплеи", "monitors", "мониторы", "screens"]),
             Node::dynamic(
-                settings_icons::BATTERY,
-                t("Устройства", "Storage"),
+                settings_icons::HARD_DRIVE,
+                t("Накопители", "Drives"),
                 ProviderKey::STORAGE,
             )
             .with_id("system/storage")
             .when(has_udisksctl)
-            .search_as(&["storage", "диски", "накопители", "disks", "флешка"]),
+            .search_as(&["storage", "диски", "накопители", "ssd", "nvme", "флешка"]),
         ],
     )
     .when(has_devices_menu)
@@ -1427,9 +1427,9 @@ mod tests {
             assert_eq!(
                 storage.title,
                 if lang == Language::Ru {
-                    "Устройства"
+                    "Накопители"
                 } else {
-                    "Storage"
+                    "Drives"
                 }
             );
         }
