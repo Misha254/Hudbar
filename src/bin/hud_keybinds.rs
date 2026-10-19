@@ -970,8 +970,138 @@ impl ProvidesRegistryState for BindsApp {
 delegate_registry!(BindsApp);
 smithay_client_toolkit::delegate_dispatch2!(BindsApp);
 
+/// `hud-keybinds-rs --snapshot <out.png>`: тот же `render`, что у живого
+/// окна, но без Wayland. Демо-данных хватает на прокрутку: две секции,
+/// 14 биндов, выбран пятый, список прокручен на три строки. Фон сцены —
+/// как у снимков меню (menu/snapshot.rs): градиент, карточка по центру.
+fn snapshot(out: &str) {
+    // Цвета сцены — из menu/snapshot.rs (:35-37): верх и горизонт градиента.
+    const BACKDROP_TOP: palette::Rgba = palette::Rgba(0x1a, 0x1f, 0x30, 255);
+    const BACKDROP_HORIZON: palette::Rgba = palette::Rgba(0x11, 0x15, 0x24, 255);
+    const SCENE_W: f32 = 1200.0;
+    const SCENE_H: f32 = 800.0;
+
+    let keys = [
+        (
+            "Окна и обзор",
+            [
+                ("Super+T", "Терминал"),
+                ("Super+D", "Лаунчер приложений"),
+                ("Super+W", "Закрыть окно"),
+                ("Super+F", "Полноэкранный режим"),
+                ("Super+V", "Плавающее окно"),
+                ("Super+P", "Скриншот области"),
+                ("Super+Space", "Обзор окон"),
+            ],
+        ),
+        (
+            "Звук, яркость и медиа",
+            [
+                ("XF86AudioRaiseVolume", "Громкость выше"),
+                ("XF86AudioLowerVolume", "Громкость ниже"),
+                ("XF86AudioMute", "Звук без звука"),
+                ("XF86AudioPlay", "Плей/пауза"),
+                ("XF86MonBrightnessUp", "Яркость выше"),
+                ("XF86MonBrightnessDown", "Яркость ниже"),
+                ("Super+M", "Микрофон"),
+            ],
+        ),
+    ];
+    let groups: Vec<(String, Vec<bind_data::Entry>)> = keys
+        .iter()
+        .map(|(name, pairs)| {
+            (
+                name.to_string(),
+                pairs
+                    .iter()
+                    .map(|(k, d)| bind_data::Entry::new(k.to_string(), d.to_string()))
+                    .collect(),
+            )
+        })
+        .collect();
+    let items = binds_layout::entries_from_groups(&groups, "");
+    let mut rows: Vec<ListRow> = Vec::new();
+    let mut item = 0;
+    for (name, entries) in &groups {
+        rows.push(ListRow::Header(name.clone()));
+        for _ in entries {
+            rows.push(ListRow::Item(item));
+            item += 1;
+        }
+    }
+    let r = Render {
+        palette: palette::load(),
+        rows: &rows,
+        items: &items,
+        selected: 5,
+        top: 90.0,
+        query: "",
+        hover: None,
+        groups_total: items.len(),
+    };
+
+    let height = card_frame::card_height(card_frame::ROOT_ROWS);
+    let card = geom::Rect::new(
+        (SCENE_W - card_frame::CARD_W) / 2.0,
+        (SCENE_H - height) / 2.0,
+        card_frame::CARD_W,
+        height,
+    );
+    let mut pixmap = tiny_skia::Pixmap::new(
+        (SCENE_W * text::SCALE) as u32,
+        (SCENE_H * text::SCALE) as u32,
+    )
+    .expect("pixmap");
+    // Градиентный фон сцены — построчно, как у снимков меню.
+    let width = pixmap.width();
+    let scene_height = pixmap.height();
+    {
+        let pixels = pixmap.pixels_mut();
+        for y in 0..scene_height {
+            let t = y as f32 / scene_height.max(1) as f32;
+            let red = (BACKDROP_TOP.0 as f32
+                + (BACKDROP_HORIZON.0 as f32 - BACKDROP_TOP.0 as f32) * t)
+                as u8;
+            let green = (BACKDROP_TOP.1 as f32
+                + (BACKDROP_HORIZON.1 as f32 - BACKDROP_TOP.1 as f32) * t)
+                as u8;
+            let blue = (BACKDROP_TOP.2 as f32
+                + (BACKDROP_HORIZON.2 as f32 - BACKDROP_TOP.2 as f32) * t)
+                as u8;
+            let row = y as usize * width as usize;
+            for x in 0..width as usize {
+                if let Some(color) =
+                    tiny_skia::PremultipliedColorU8::from_rgba(red, green, blue, 255)
+                {
+                    pixels[row + x] = color;
+                }
+            }
+        }
+    }
+    let mut painter = text::TextPainter::new(&ui_tokens::font_name());
+    let mut icons = text::TextPainter::new(settings_icons::FONT);
+    render(&mut pixmap, card, &r, &mut painter, &mut icons);
+    card_frame::apply_card_alpha(&mut pixmap, card, card_frame::CARD_ALPHA);
+    if let Err(error) = canvas::write_png(&pixmap, std::path::Path::new(out)) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+    println!("бинды {}x{} → {out}", pixmap.width(), pixmap.height());
+}
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--snapshot") {
+        match args.get(1) {
+            Some(out) => snapshot(out),
+            None => {
+                eprintln!("использование: hud-keybinds-rs --snapshot <out.png>");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+
     let conn = Connection::connect_to_env().expect("wayland connection");
     let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
     let qh = event_queue.handle();
