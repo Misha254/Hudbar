@@ -15,7 +15,7 @@ use super::geom::Rect;
 use super::palette;
 use super::settings_icons;
 use super::text::{Align, SCALE, TextPainter};
-use super::ui_tokens::{radii, radius, spacing, type_scale, UiPalette};
+use super::ui_tokens::{UiPalette, radii, radius, spacing, type_scale};
 
 // ─────────────────────────── Геометрия ────────────────────────────
 
@@ -110,6 +110,7 @@ pub fn apply_card_alpha(pixmap: &mut tiny_skia::Pixmap, card: Rect, alpha: f32) 
 /// Спецификация скроллбара. У окон биндов — трек во всю высоту списка и
 /// акцентный бегунок («вариант 1»); у меню — бегунок без трека цветом `muted`
 /// с отступом `SCROLLBAR_INSET`.
+#[derive(Clone, Copy)]
 pub struct ScrollbarStyle {
     pub track: bool,
     pub inset: f32,
@@ -118,6 +119,7 @@ pub struct ScrollbarStyle {
 
 /// Форма подсветки строки. У биндов — скруглённая заливка всего слота без
 /// отступа; у меню — прямая полоса с отступом `CARD_INSET` от краёв карточки.
+#[derive(Clone, Copy)]
 pub struct RowHighlightStyle {
     pub rounded: bool,
     pub inset: f32,
@@ -125,9 +127,12 @@ pub struct RowHighlightStyle {
 
 // ─────────────────────────── Каркас ───────────────────────────
 
-/// Подложка карточки и её рамка — то же, что `MenuView::card`
-/// (menu/view/mod.rs:103-122): заливка `panel` радиусом `radii::LG` и
-/// hairline `border`. Пиксели снаружи скругления остаются прозрачными.
+/// Подложка карточки и её рамка — по `MenuView::card` (menu/view/mod.rs:103-122):
+/// заливка `panel` радиусом `radii::LG` и hairline `border`. Отличие одно и
+/// сознательное: меню рисует рамку четырьмя полосами (`stroke_rect`), и его
+/// углы дорисовывает композитор по layer-rule, а это окно — xdg toplevel,
+/// округлять его нечем, поэтому рамка ведётся по тому же скруглённому контуру,
+/// что и заливка, и пиксели снаружи остаются прозрачными.
 pub fn card(pixmap: &mut tiny_skia::Pixmap, rect: Rect, ui: &UiPalette) {
     fill_round_rect(
         pixmap,
@@ -138,19 +143,49 @@ pub fn card(pixmap: &mut tiny_skia::Pixmap, rect: Rect, ui: &UiPalette) {
         radius(radii::LG) * SCALE,
         ui.panel,
     );
-    stroke_rect(
-        pixmap,
+    let r = (radius(radii::LG) * SCALE)
+        .min(rect.w * SCALE / 2.0)
+        .min(rect.h * SCALE / 2.0);
+    let mut builder = tiny_skia::PathBuilder::new();
+    let (x, y, w, h) = (
         rect.x * SCALE,
         rect.y * SCALE,
         rect.w * SCALE,
         rect.h * SCALE,
-        ui.border,
-        SCALE,
     );
+    builder.move_to(x + r, y);
+    builder.line_to(x + w - r, y);
+    builder.quad_to(x + w, y, x + w, y + r);
+    builder.line_to(x + w, y + h - r);
+    builder.quad_to(x + w, y + h, x + w - r, y + h);
+    builder.line_to(x + r, y + h);
+    builder.quad_to(x, y + h, x, y + h - r);
+    builder.line_to(x, y + r);
+    builder.quad_to(x, y, x + r, y);
+    builder.close();
+    if let Some(path) = builder.finish() {
+        let paint = tiny_skia::Paint {
+            shader: tiny_skia::Shader::SolidColor(ui.border.to_tiny()),
+            anti_alias: true,
+            ..Default::default()
+        };
+        let stroke = tiny_skia::Stroke {
+            width: SCALE,
+            ..Default::default()
+        };
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &stroke,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+    }
 }
 
 /// Шапка: заголовок слева, поле поиска справа — как в меню (header.rs:36-181).
 /// Зона заголовка не наезжает на поиск: ширина считается как у `crumbs_rect`.
+#[allow(clippy::too_many_arguments)]
 pub fn header(
     pixmap: &mut tiny_skia::Pixmap,
     text: &mut TextPainter,
@@ -247,14 +282,7 @@ fn search_field(
             Align::Start,
         );
     } else {
-        text.paint_boxed(
-            pixmap,
-            query,
-            scale.label,
-            ui.text,
-            text_rect,
-            Align::Start,
-        );
+        text.paint_boxed(pixmap, query, scale.label, ui.text, text_rect, Align::Start);
         // Курсор: вертикальная черта сразу после набранного текста. Окно
         // работает только с клавиатуры, поэтому курсор всегда на виду.
         let caret_x = text_x + text.text_width(query, scale.label);
@@ -380,12 +408,22 @@ pub fn scrollbar(
 }
 
 /// Заливка выбранной строки акцентом.
-pub fn select_band(pixmap: &mut tiny_skia::Pixmap, row: Rect, ui: &UiPalette, style: RowHighlightStyle) {
+pub fn select_band(
+    pixmap: &mut tiny_skia::Pixmap,
+    row: Rect,
+    ui: &UiPalette,
+    style: RowHighlightStyle,
+) {
     band(pixmap, row, style, ui.accent);
 }
 
 /// Подложка строки под указателем: `hover_bg` той же формы, что у выбора.
-pub fn hover_band(pixmap: &mut tiny_skia::Pixmap, row: Rect, ui: &UiPalette, style: RowHighlightStyle) {
+pub fn hover_band(
+    pixmap: &mut tiny_skia::Pixmap,
+    row: Rect,
+    ui: &UiPalette,
+    style: RowHighlightStyle,
+) {
     band(pixmap, row, style, ui.hover_bg);
 }
 
@@ -439,7 +477,8 @@ mod tests {
     /// Скроллбар с треком рисуется: трек и бегунок оставляют непустые пиксели.
     #[test]
     fn scrollbar_draws_track_and_thumb() {
-        let mut pixmap = tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (360.0 * SCALE) as u32).expect("буфер");
+        let mut pixmap =
+            tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (360.0 * SCALE) as u32).expect("буфер");
         let ui = ui_palette(Palette::default());
         scrollbar(
             &mut pixmap,
@@ -448,20 +487,30 @@ mod tests {
             492.0,
             360.0,
             90.0,
-            ScrollbarStyle { track: true, inset: 6.0, thumb_accent: true },
+            ScrollbarStyle {
+                track: true,
+                inset: 6.0,
+                thumb_accent: true,
+            },
         );
-        assert!(pixmap.data().iter().any(|byte| *byte != 0), "скроллбар нарисован");
+        assert!(
+            pixmap.data().iter().any(|byte| *byte != 0),
+            "скроллбар нарисован"
+        );
     }
 
     /// Карточка закрашивает не всё: углы снаружи скругления прозрачны.
     #[test]
     fn card_leaves_outer_corners_transparent() {
-        let mut pixmap = tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (200.0 * SCALE) as u32).expect("буфер");
+        let mut pixmap =
+            tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (200.0 * SCALE) as u32).expect("буфер");
         let ui = ui_palette(Palette::default());
         card(&mut pixmap, Rect::new(0.0, 0.0, CARD_W, 200.0), &ui);
         let corner = pixmap.pixel(0, 0).expect("угол");
         assert_eq!(corner.alpha(), 0, "угол снаружи прозрачен");
-        let middle = pixmap.pixel(pixmap.width() / 2, pixmap.height() / 2).expect("центр");
+        let middle = pixmap
+            .pixel(pixmap.width() / 2, pixmap.height() / 2)
+            .expect("центр");
         assert!(middle.alpha() > 0, "центр карточки залит");
     }
 }
