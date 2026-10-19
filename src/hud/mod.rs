@@ -3,6 +3,10 @@ pub mod actions;
 pub mod bind_data;
 #[allow(dead_code)]
 pub mod binds_layout;
+// Общий каркас карточки (фон, шапка, подвал, скроллбар, подсветка строк) для
+// окон биндов; геометрия и цвета — как у карточки меню.
+#[allow(dead_code)]
+pub mod card_frame;
 // Примитивы рисования по пиксельной карте: заливки, рамки, контекст виджета.
 #[allow(dead_code)]
 pub mod canvas;
