@@ -42,7 +42,7 @@ pub fn parse_niri_line(line: &str) -> Option<(String, String)> {
     Some((bind, title))
 }
 
-/// Все бинды из `~/.config/niri/*.kdl`, сгруппированные по ближайшему `//`-комментарию.
+/// Все бинды из `~/.config/niri/*.kdl`, сгруппированные по заголовкам `// === Имя ===`.
 pub fn load_niri() -> Vec<Entry> {
     load_niri_grouped()
         .into_iter()
@@ -50,15 +50,17 @@ pub fn load_niri() -> Vec<Entry> {
         .collect()
 }
 
-/// Имя группы из `//`-комментария kdl. Разделители `===` и закомментированный
-/// код группой не считаются — возвращается `None`.
+/// Имя группы — только из заголовка-разделителя `// === Имя ===`. Прочие
+/// `//`-строки (пояснения к бинду, слоганы) секцию не переключают, поэтому
+/// мусорных названий разделов по соседству с биндами не появляется.
 pub fn group_for_comment(line: &str) -> Option<String> {
     let name = line.trim().strip_prefix("//")?.trim();
     let code_like = name.contains('{') || name.contains(';') || name.contains('}');
-    if name.is_empty() || name.starts_with('=') || code_like {
+    if code_like || !(name.starts_with('=') || name.ends_with('=')) {
         return None;
     }
-    Some(name.trim_matches('=').trim().to_string())
+    let name = name.trim_matches('=').trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 pub fn load_niri_grouped() -> Vec<(String, Vec<Entry>)> {
@@ -371,12 +373,15 @@ mod tests {
     }
 
     #[test]
-    fn niri_group_names_skip_separators_and_commented_code() {
+    fn niri_group_names_only_from_marker_comments() {
         assert_eq!(
-            group_for_comment("    // Focus navigation"),
-            Some("Focus navigation".to_string())
+            group_for_comment("    // === Фокус окон ==="),
+            Some("Фокус окон".to_string())
         );
-        assert_eq!(group_for_comment("// === Launchers ==="), None);
+        // Проза и пояснения к бинду секцию не переключают.
+        assert_eq!(group_for_comment("    // Focus navigation"), None);
+        assert_eq!(group_for_comment("    // именем семёрки."), None);
+        assert_eq!(group_for_comment("    // ===  ==="), None);
         assert_eq!(
             group_for_comment("// super+Escape allow-inhibiting=false { x; }"),
             None

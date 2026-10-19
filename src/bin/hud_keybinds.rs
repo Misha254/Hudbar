@@ -53,8 +53,8 @@ mod shell;
 use repeat::Repeat;
 
 const SCALE: f32 = 2.0;
-const WIDTH: u32 = 900;
-const HEIGHT: u32 = 620;
+const WIDTH: u32 = 440;
+const HEIGHT: u32 = 482;
 const TITLE: &str = "Бинды";
 /// Плотность окна у композитора: вся отрисовка идёт в буфер непрозрачным,
 /// а в конце проход умножает альфу всех пикселей на эту долю — так же, как
@@ -63,15 +63,27 @@ const TITLE: &str = "Бинды";
 const CARD_ALPHA: f32 = 0.8;
 const PLACEHOLDER: &str = "Поиск бинда…";
 
+/// Поле поиска в шапке — размер и место как у поисковой строки меню.
+const SEARCH_W: f32 = 168.0;
+const SEARCH_H: f32 = 28.0;
+const SEARCH_ICON: &str = "\u{f002}";
+/// Подвал: подсказки слева, счётчик справа.
+const HINTS: &str = "↑↓ PgUp PgDn ЛИСТАТЬ   ESC ЗАКРЫТЬ";
+
+/// Подвал меню: высота полосы подсказок.
+const FOOTER_H: f32 = 40.0;
+
 // Поток строк в две колонки: заголовок группы занимает всю ширину,
 // бинд занимает ячейку. Без рамок — только акцентная полоса слева у выбранного.
-const COLS: usize = 2;
-const ITEM_H: f32 = 26.0;
-const COL_GAP: f32 = 28.0;
-const ROW_GAP: f32 = 2.0;
-const LIST_Y0: f32 = 118.0;
-const PAD_X: f32 = 28.0;
-const KEY_W: f32 = 150.0;
+const COLS: usize = 1;
+const ITEM_H: f32 = 30.0;
+const COL_GAP: f32 = 20.0;
+const ROW_GAP: f32 = 0.0;
+const LIST_Y0: f32 = 52.0;
+const PAD_X: f32 = 16.0;
+const KEY_W: f32 = 120.0;
+/// Отступ после блока секции, чтобы следующая группа не примыкала вплотную.
+const SECTION_GAP: f32 = 12.0;
 
 #[derive(Clone, Copy)]
 struct UiPalette {
@@ -86,13 +98,21 @@ struct UiPalette {
     on_primary: palette::Rgba,
 }
 
-/// Место бинда в потоке: колонка и координаты. Заголовков групп в окне нет.
+/// Место строки в окне: заголовок секции или бинд.
 struct Slot {
-    item: usize,
+    row: usize,
+    item: Option<usize>,
     x: f32,
     y: f32,
     w: f32,
     h: f32,
+}
+
+/// Строка списка: заголовок группы или выбираемый бинд.
+#[derive(Clone, PartialEq)]
+enum ListRow {
+    Header(String),
+    Item(usize),
 }
 
 struct BindsApp {
@@ -117,8 +137,10 @@ struct BindsApp {
     query: String,
     groups: Vec<(String, Vec<bind_data::Entry>)>,
     items: Vec<bind_data::Entry>,
+    rows: Vec<ListRow>,
     selected: usize,
-    top: usize,
+    /// Прокрутка в логических пикселях от начала списка.
+    top: f32,
     /// Остаток дробной дельты колеса: тачпад шлёт value120 меньше 120,
     /// без накопления одно деление давало step = 0 и скролл не работал.
     scroll_acc: f32,
@@ -185,63 +207,140 @@ impl BindsApp {
         PAD_X + c as f32 * (self.col_width() + COL_GAP)
     }
 
-    /// Раскладка потока: бинды текут газеткой по двум колонкам,
-    /// заголовок группы — полосой на всю ширину и выравнивает колонки.
-    /// Если вид начинается с середины группы, сверху подставляется
-    /// виртуальный заголовок с её именем, чтобы колонки не висели без контекста.
-    /// Раскладка потока: бинды газеткой по двум колонкам, колонка заполняется
-    /// до конца, потом берётся следующая. Заголовков групп нет — плоский список.
-    fn slots_at(&self, top: usize) -> Vec<Slot> {
+    /// Сколько биндов идёт в секции, если её заголовок стоит в строке `header`.
+    fn section_len(&self, header: usize) -> usize {
+        self.rows[header + 1..]
+            .iter()
+            .take_while(|r| matches!(r, ListRow::Item(_)))
+            .count()
+    }
+
+    /// Раскладка всего потока в абсолютных координатах, без прокрутки и без
+    /// отсечения по высоте окна. Секции — компактные блоки: заголовок во всю
+    /// ширину, бинды ниже, между блоками отступ. Одна колонка, поэтому бинды
+    /// других групп не встают рядом с секцией.
+    fn layout_slots(&self) -> Vec<Slot> {
         let col_w = self.col_width();
-        let bottom = self.height as f32 - 8.0;
         let mut slots: Vec<Slot> = Vec::new();
-        let mut col_y = [0.0f32; COLS];
-        for (i, _) in self.items.iter().enumerate().skip(top) {
-            // Берём первую колонку, где ещё есть место, — пустого места не оставляем.
-            let mut target = None;
-            for (c, y) in col_y.iter().enumerate() {
-                if LIST_Y0 + y + ITEM_H <= bottom {
-                    target = Some(c);
-                    break;
+        let mut offset = 0.0f32;
+        let mut row = 0;
+        while row < self.rows.len() {
+            match &self.rows[row] {
+                ListRow::Header(_) => {
+                    let hy = LIST_Y0 + offset;
+                    slots.push(Slot {
+                        row,
+                        item: None,
+                        x: PAD_X,
+                        y: hy,
+                        w: self.width as f32 - PAD_X * 2.0,
+                        h: ITEM_H,
+                    });
+                    let len = self.section_len(row);
+                    for (n, r) in (row + 1..=row + len).enumerate() {
+                        slots.push(Slot {
+                            row: r,
+                            item: match self.rows[r] {
+                                ListRow::Item(i) => Some(i),
+                                ListRow::Header(_) => None,
+                            },
+                            x: PAD_X,
+                            y: hy + ITEM_H + ROW_GAP + n as f32 * (ITEM_H + ROW_GAP),
+                            w: col_w,
+                            h: ITEM_H,
+                        });
+                    }
+                    offset += ITEM_H + len as f32 * (ITEM_H + ROW_GAP) + SECTION_GAP;
+                    row += 1 + len;
+                }
+                ListRow::Item(i) => {
+                    // Вне секции такого потока не бывает, но на случай —
+                    // как обычная строка списка.
+                    slots.push(Slot {
+                        row,
+                        item: Some(*i),
+                        x: PAD_X,
+                        y: LIST_Y0 + offset,
+                        w: col_w,
+                        h: ITEM_H,
+                    });
+                    offset += ITEM_H + ROW_GAP;
+                    row += 1;
                 }
             }
-            let Some(c) = target else { break };
-            slots.push(Slot {
-                item: i,
-                x: self.col_x(c),
-                y: LIST_Y0 + col_y[c],
-                w: col_w,
-                h: ITEM_H,
-            });
-            col_y[c] += ITEM_H + ROW_GAP;
         }
         slots
     }
 
+    /// Высота окна под список.
+    fn view_h(&self) -> f32 {
+        self.height as f32 - FOOTER_H - LIST_Y0
+    }
+
+    /// Нижняя кромка потока в абсолютных координатах.
+    fn content_h(&self) -> f32 {
+        self.layout_slots()
+            .iter()
+            .map(|s| s.y + s.h)
+            .fold(LIST_Y0, f32::max)
+    }
+
+    /// Строки, попавшие в окно при текущей прокрутке, уже в координатах окна.
     fn slots(&self) -> Vec<Slot> {
-        self.slots_at(self.top)
+        // Полоса списка: от LIST_Y0 до подвала. Сдвиг на `top` — целиком
+        // (без вычитания LIST_Y0), иначе список уезжал бы на шапку.
+        let band_y0 = LIST_Y0 + self.top;
+        let band_y1 = band_y0 + self.view_h();
+        self.layout_slots()
+            .into_iter()
+            // Только строки, целиком попавшие в полосу списка: иначе
+            // первая/последняя строка наезжала на шапку или подвал.
+            .filter(|s| s.y >= band_y0 && s.y + s.h <= band_y1)
+            .map(|mut s| {
+                s.y -= self.top;
+                s
+            })
+            .collect()
     }
 
-    /// Сколько строк потока помещается в окно, если смотреть с начала.
-    fn page_lines(&self) -> usize {
-        self.slots_at(0).len().max(1)
+    /// Абсолютная плашка бинда — по ней курсор держится в поле зрения.
+    fn slot_of(&self, item: usize) -> Option<Slot> {
+        self.layout_slots()
+            .into_iter()
+            .find(|s| s.item == Some(item))
     }
 
-    /// Предельная прокрутка: глубже список всё равно не покажется, а окно
-    /// останется полупустым (одна строка вместо двух колонок).
-    fn max_top(&self) -> usize {
-        self.items.len().saturating_sub(self.page_lines())
+    /// Предельная прокрутка: глубже последняя строка всё равно не видна.
+    fn max_top(&self) -> f32 {
+        (self.content_h() - self.height as f32 + FOOTER_H).max(0.0)
     }
 
     fn rebuild(&mut self) {
         let prev = self.items.get(self.selected).cloned();
-        self.items = binds_layout::entries_from_groups(&self.groups, &self.query);
+        // Группа с совпавшим именем остаётся целиком — иначе поиск по
+        // «навигации» показывал бы пару случайных биндов вместо всей секции.
+        let filtered = binds_layout::groups_matching_any(&self.groups, &[&self.query]);
+        self.items = filtered
+            .iter()
+            .flat_map(|(_, entries)| entries.iter())
+            .cloned()
+            .collect();
+        // Поток строк: у каждой группы свой заголовок, иначе секции сливаются.
+        self.rows.clear();
+        let mut item = 0;
+        for (name, entries) in &filtered {
+            self.rows.push(ListRow::Header(name.clone()));
+            for _ in entries {
+                self.rows.push(ListRow::Item(item));
+                item += 1;
+            }
+        }
         // Курсор держим за самим биндом, а не за номером строки: иначе после
         // каждой буквы в поиске он прыгал на произвольный бинд.
         self.selected = prev
             .and_then(|p| self.items.iter().position(|e| *e == p))
             .unwrap_or(0);
-        self.top = 0;
+        self.top = 0.0;
         self.dirty = true;
     }
 
@@ -317,11 +416,11 @@ impl BindsApp {
             return;
         }
         let slots = self.slots();
-        let in_column = |c: usize| -> Vec<usize> {
+        let in_column = |c: usize| -> Vec<Option<usize>> {
             let x = self.col_x(c);
             slots.iter().filter(|s| s.x == x).map(|s| s.item).collect()
         };
-        let Some(cur) = slots.iter().find(|s| s.item == self.selected) else {
+        let Some(cur) = slots.iter().find(|s| s.item == Some(self.selected)) else {
             return;
         };
         let from = if (cur.x - PAD_X).abs() < f32::EPSILON {
@@ -330,25 +429,17 @@ impl BindsApp {
             1
         };
         let col = in_column(from);
-        let Some(pos) = col.iter().position(|&i| i == cur.item) else {
+        let Some(pos) = col.iter().position(|&i| i == Some(self.selected)) else {
             return;
         };
         let other = from as isize - dx as isize;
         if other >= 0
             && (other as usize) < COLS
-            && let Some(&item) = in_column(other as usize).get(pos)
-            && item != self.selected
+            && let Some(Some(item)) = in_column(other as usize).get(pos)
+            && *item != self.selected
         {
-            self.select(item);
+            self.select(*item);
         }
-    }
-
-    /// Видна ли выбранная строка при прокрутке `top`.
-    fn selected_visible_at(&self, top: usize) -> bool {
-        let bottom = self.height as f32 - 8.0;
-        self.slots_at(top)
-            .iter()
-            .any(|s| s.item == self.selected && s.y + s.h <= bottom)
     }
 
     /// Держит выбранную строку в поле зрения, иначе подкручивает поток.
@@ -356,31 +447,34 @@ impl BindsApp {
         if self.items.is_empty() {
             return;
         }
-        if self.selected < self.top {
-            self.top = self.selected;
-        }
-        while !self.selected_visible_at(self.top) && self.top < self.selected {
-            self.top += 1;
-        }
-        // Не оставляем окно полупустым, если курсор виден и при меньшем top.
-        let cap = self.max_top();
-        if self.top > cap && self.selected_visible_at(cap) {
-            self.top = cap;
-        }
+        let Some(slot) = self.slot_of(self.selected) else {
+            return;
+        };
+        let band_y0 = LIST_Y0 + self.top;
+        let band_y1 = band_y0 + self.view_h();
+        let top = if slot.y < band_y0 {
+            slot.y - LIST_Y0
+        } else if slot.y + slot.h > band_y1 {
+            slot.y + slot.h - LIST_Y0 - self.view_h()
+        } else {
+            self.top
+        };
+        self.top = top.clamp(0.0, self.max_top());
     }
 
     fn scroll_by(&mut self, lines: i32) {
         if self.items.is_empty() {
             return;
         }
-        let max = self.max_top() as i32;
-        self.top = ((self.top as i32) + lines).clamp(0, max.max(0)) as usize;
+        self.top = (self.top + lines as f32 * (ITEM_H + ROW_GAP)).clamp(0.0, self.max_top());
         // Курсор не теряем: подтягиваем к ближайшей видимой строке.
-        let vis: Vec<usize> = self.slots().into_iter().map(|s| s.item).collect();
+        let vis: Vec<usize> = self.slots().into_iter().filter_map(|s| s.item).collect();
         if !vis.contains(&self.selected)
-            && let (Some(&first), Some(&last)) = (vis.first(), vis.last())
+            && let Some(&nearest) = vis
+                .iter()
+                .min_by_key(|&&i| (i as i32 - self.selected as i32).abs())
         {
-            self.selected = if self.selected < first { first } else { last };
+            self.selected = nearest;
         }
         self.dirty = true;
     }
@@ -420,7 +514,7 @@ impl BindsApp {
         self.slots()
             .into_iter()
             .find(|s| y >= s.y && y <= s.y + s.h && x >= s.x && x <= s.x + s.w)
-            .map(|s| s.item)
+            .and_then(|s| s.item)
     }
 
     fn layout(&mut self, text: &str, size: f32, line_h: f32) -> (f32, Vec<(CacheKey, i32, i32)>) {
@@ -571,86 +665,77 @@ impl BindsApp {
         };
         let p = ui_palette(self.palette);
         let k = SCALE;
-        let title_size = 21.0;
-        let row_size = 13.0;
-        let search_size = 13.0;
+        // Кегли меню: заголовок — section_title, строки — label, подписи — caption.
+        let title_size = 13.0;
+        let row_size = 12.0;
+        let caption_size = 12.0;
         pixmap.fill(p.panel.to_tiny());
 
-        // Тонкая акцентная линия сверху, без рамки окна.
-        fill_rect(&mut pixmap, 0.0, 0.0, pw as f32, 1.5, p.accent.with_a(0.7));
+        let list_bottom = self.height as f32 - FOOTER_H;
 
+        // Шапка: заголовок слева, по центру полосы; поиск справа — как в меню.
         self.draw_text(
             &mut pixmap,
             TITLE,
             title_size,
             p.text,
             PAD_X * k,
-            20.0 * k,
+            18.0 * k,
             28.0,
         );
-        let items = self.items.len();
-        let count = if self.query.is_empty() {
-            format!("{items}")
-        } else {
-            format!(
-                "{items} / {}",
-                self.groups.iter().map(|(_, e)| e.len()).sum::<usize>()
-            )
-        };
-        let cw = self.text_width(&count, row_size);
-        self.draw_text(
-            &mut pixmap,
-            &count,
-            row_size,
-            p.muted,
-            (self.width as f32 - PAD_X) * k - cw,
-            26.0 * k,
-            18.0,
-        );
 
-        // поиск
-        let sy = 56.0;
+        let sx = self.width as f32 - PAD_X - SEARCH_W;
+        let sy = (LIST_Y0 - SEARCH_H) / 2.0;
         fill_round_rect(
             &mut pixmap,
-            PAD_X * k,
+            sx * k,
             sy * k,
-            (self.width as f32 - PAD_X * 2.0) * k,
-            38.0 * k,
-            8.0 * k,
+            SEARCH_W * k,
+            SEARCH_H * k,
+            6.0 * k,
             p.idle_panel,
         );
-        // Рамка поля как у поисковой строки меню.
         stroke_rect(
             &mut pixmap,
-            PAD_X * k,
+            sx * k,
             sy * k,
-            (self.width as f32 - PAD_X * 2.0) * k,
-            38.0 * k,
+            SEARCH_W * k,
+            SEARCH_H * k,
             p.border,
+        );
+        self.draw_text(
+            &mut pixmap,
+            SEARCH_ICON,
+            caption_size,
+            p.muted,
+            (sx + 10.0) * k,
+            (sy + 8.0) * k,
+            20.0,
         );
         if self.query.is_empty() {
             self.draw_text(
                 &mut pixmap,
                 PLACEHOLDER,
-                search_size,
+                caption_size,
                 p.muted,
-                (PAD_X + 14.0) * k,
-                (sy + 9.0) * k,
+                (sx + 34.0) * k,
+                (sy + 8.0) * k,
                 20.0,
             );
         } else {
-            let shown = format!("{}▍", self.query);
+            let shown = self.query.clone();
             self.draw_text_boxed(
                 &mut pixmap,
                 &shown,
-                search_size,
+                row_size,
                 p.text,
-                self.width as f32 - PAD_X * 2.0 - 28.0,
-                (PAD_X + 14.0) * k,
-                (sy + 9.0) * k,
+                SEARCH_W - 44.0,
+                (sx + 34.0) * k,
+                (sy + 7.0) * k,
                 20.0,
             );
         }
+
         if self.items.is_empty() {
             self.draw_text(
                 &mut pixmap,
@@ -658,66 +743,97 @@ impl BindsApp {
                 row_size,
                 p.muted,
                 PAD_X * k,
-                LIST_Y0 * k,
+                (LIST_Y0 + 11.0) * k,
                 20.0,
             );
         }
 
-        // Поток биндов газеткой: клавиша и описание, выделение заливкой.
+        // Поток биндов одним столбцом: клавиша слева как подпись-«иконка»,
+        // описание справа; выделение — акцентной заливкой строки.
         let slots = self.slots();
         for slot in &slots {
-            let Some(e) = self.items.get(slot.item).cloned() else {
-                continue;
-            };
-            let selected = slot.item == self.selected;
-            if selected {
-                // Как в меню и лаунчере: выбранная строка залита акцентом
-                // целиком, ключ и описание на ней — тёмный `on_primary`.
-                // Полоски-метки и слабые подложки больше не нужны.
+            if let ListRow::Header(label) = &self.rows[slot.row] {
+                let label = label.clone();
+                // Заголовок секции: полоса во всю ширину плюс акцентная метка
+                // слева — как в окне биндов yazi.
                 fill_rect(
                     &mut pixmap,
                     slot.x * k,
                     slot.y * k,
                     slot.w * k,
-                    (slot.h - ROW_GAP) * k,
+                    slot.h * k,
+                    p.idle_panel,
+                );
+                fill_rect(
+                    &mut pixmap,
+                    slot.x * k,
+                    (slot.y + 9.0) * k,
+                    3.0 * k,
+                    (slot.h - 18.0) * k,
+                    p.accent,
+                );
+                self.draw_text(
+                    &mut pixmap,
+                    &label,
+                    caption_size,
+                    p.accent,
+                    (slot.x + 12.0) * k,
+                    (slot.y + 9.0) * k,
+                    20.0,
+                );
+                continue;
+            }
+            let Some(item) = slot.item else { continue };
+            let Some(e) = self.items.get(item).cloned() else {
+                continue;
+            };
+            let selected = item == self.selected;
+            if selected {
+                // Как выбранная строка меню: акцентная заливка с закруглением,
+                // текст на ней — тёмный `on_primary`.
+                fill_round_rect(
+                    &mut pixmap,
+                    slot.x * k,
+                    slot.y * k,
+                    slot.w * k,
+                    slot.h * k,
+                    6.0 * k,
                     p.accent,
                 );
             }
-            // Отступ постоянный: 10 = бывшая метка (2) плюс щель (8),
-            // текст не прыгает при смене выделения.
-            let text_x = slot.x + 10.0;
+            let key_x = slot.x + PAD_X;
+            let desc_x = key_x + KEY_W + PAD_X;
+            let desc_w = slot.x + slot.w - desc_x - PAD_X;
             self.draw_text_boxed(
                 &mut pixmap,
                 &e.key,
                 row_size,
                 if selected { p.on_primary } else { p.accent },
                 KEY_W,
-                (text_x + 2.0) * k,
-                (slot.y + 5.0) * k,
-                18.0,
+                key_x * k,
+                (slot.y + 9.0) * k,
+                20.0,
             );
             self.draw_text_boxed(
                 &mut pixmap,
                 &e.desc,
                 row_size,
                 if selected { p.on_primary } else { p.text },
-                slot.x + slot.w - (text_x + KEY_W + 12.0),
-                (text_x + KEY_W + 4.0) * k,
-                (slot.y + 5.0) * k,
-                18.0,
+                desc_w,
+                desc_x * k,
+                (slot.y + 9.0) * k,
+                20.0,
             );
         }
-
         // Скроллбар: трек во всю высоту списка и яркий бегунок — как в
         // привычном варианте, приглушённый одноцветный бегунок читался хуже.
-        if self.top > 0 || self.top + slots.len() < self.items.len() {
-            let track_h = self.height as f32 - LIST_Y0 - 8.0;
-            let total = self.items.len().max(1) as f32;
-            // размер — доля видимого, позиция — по прокрутке
-            let range = self.max_top().max(1) as f32;
-            let shown = (self.page_lines() as f32 / total).clamp(0.08, 1.0);
+        if self.max_top() > 0.5 {
+            let track_h = list_bottom - LIST_Y0;
+            let content = (self.content_h() - LIST_Y0).max(track_h);
+            let range = self.max_top().max(1.0);
+            let shown = (track_h / content).clamp(0.08, 1.0);
             let th = track_h * shown;
-            let ty = LIST_Y0 + self.top as f32 / range * (track_h - th);
+            let ty = LIST_Y0 + self.top / range * (track_h - th);
             let bx = self.width as f32 - 6.0;
             fill_rect(
                 &mut pixmap,
@@ -729,6 +845,44 @@ impl BindsApp {
             );
             fill_rect(&mut pixmap, bx * k, ty * k, 2.0 * k, th * k, p.accent);
         }
+
+        // Подвал с подсказками и счётчиком — как у меню.
+        fill_rect(
+            &mut pixmap,
+            0.0,
+            list_bottom * k,
+            self.width as f32 * k,
+            1.0,
+            p.border.with_a(0.6),
+        );
+        let items = self.items.len();
+        let count = if self.query.is_empty() {
+            format!("{items}")
+        } else {
+            format!(
+                "{items} / {}",
+                self.groups.iter().map(|(_, e)| e.len()).sum::<usize>()
+            )
+        };
+        let cw = self.text_width(&count, caption_size);
+        self.draw_text(
+            &mut pixmap,
+            &count,
+            caption_size,
+            p.muted,
+            (self.width as f32 - PAD_X) * k - cw,
+            (list_bottom + 14.0) * k,
+            20.0,
+        );
+        self.draw_text(
+            &mut pixmap,
+            HINTS,
+            caption_size,
+            p.muted,
+            PAD_X * k,
+            (list_bottom + 14.0) * k,
+            20.0,
+        );
 
         // Плотность карточки как у меню: вся отрисовка непрозрачна в буфере,
         // альфа mul'ится целиком прямо перед отправкой в композитор.
@@ -1159,8 +1313,9 @@ fn main() {
         query: String::new(),
         groups,
         items,
+        rows: Vec::new(),
         selected: 0,
-        top: 0,
+        top: 0.0,
         scroll_acc: 0.0,
         palette: palette::load(),
         stamps,
@@ -1172,6 +1327,7 @@ fn main() {
         dirty: true,
         exit,
     };
+    app.rebuild();
 
     while !app.exit.load(Ordering::Relaxed) {
         app.refresh_sources();

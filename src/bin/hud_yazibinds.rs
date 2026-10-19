@@ -55,8 +55,8 @@ use repeat::Repeat;
 use bind_data::Entry;
 
 const SCALE: f32 = 2.0;
-const WIDTH: u32 = 900;
-const HEIGHT: u32 = 620;
+const WIDTH: u32 = 440;
+const HEIGHT: u32 = 482;
 const TITLE: &str = "Yazi";
 /// Плотность окна у композитора: вся отрисовка идёт в буфер непрозрачным,
 /// а в конце проход умножает альфу всех пикселей на эту долю — так же, как
@@ -65,15 +65,25 @@ const TITLE: &str = "Yazi";
 const CARD_ALPHA: f32 = 0.8;
 const PLACEHOLDER: &str = "Поиск…";
 
+/// Поле поиска в шапке — размер и место как у поисковой строки меню.
+const SEARCH_W: f32 = 168.0;
+const SEARCH_H: f32 = 28.0;
+const SEARCH_ICON: &str = "\u{f002}";
+/// Подвал: подсказки слева, счётчик справа.
+const HINTS: &str = "↑↓ PgUp PgDn ЛИСТАТЬ   ESC ЗАКРЫТЬ";
+
+/// Подвал меню: высота полосы подсказок.
+const FOOTER_H: f32 = 40.0;
+
 // Поток строк в две колонки, как в окне биндов niri: заголовок группы на всю
 // ширину, бинд — клавиша и описание, рамок нет.
-const COLS: usize = 2;
-const ITEM_H: f32 = 26.0;
-const COL_GAP: f32 = 28.0;
-const ROW_GAP: f32 = 2.0;
-const LIST_Y0: f32 = 118.0;
-const PAD_X: f32 = 28.0;
-const KEY_W: f32 = 132.0;
+const COLS: usize = 1;
+const ITEM_H: f32 = 30.0;
+const COL_GAP: f32 = 20.0;
+const ROW_GAP: f32 = 0.0;
+const LIST_Y0: f32 = 52.0;
+const PAD_X: f32 = 16.0;
+const KEY_W: f32 = 120.0;
 /// Отступ после блока секции, чтобы следующая группа не примыкала вплотную.
 const SECTION_GAP: f32 = 12.0;
 
@@ -223,7 +233,7 @@ impl YaziApp {
         while row < self.rows.len() {
             match &self.rows[row] {
                 ListRow::Header(_) => {
-                    let y = LIST_Y0 + col_y[0].max(col_y[1]);
+                    let y = LIST_Y0 + col_y[0].max(*col_y.get(1).unwrap_or(&0.0));
                     slots.push(Slot {
                         row,
                         item: None,
@@ -261,7 +271,7 @@ impl YaziApp {
                 ListRow::Item(_) => {
                     // Вне секции такого в keymap нет, но на случай: газеткой в
                     // колонку с меньшей высотой.
-                    let c = usize::from(col_y[1] < col_y[0]);
+                    let c = usize::from(col_y.get(1).is_some_and(|&y| y < col_y[0]));
                     let item = match self.rows[row] {
                         ListRow::Item(i) => i,
                         ListRow::Header(_) => unreachable!(),
@@ -284,7 +294,7 @@ impl YaziApp {
 
     /// Высота окна под список.
     fn view_h(&self) -> f32 {
-        self.height as f32 - 8.0 - LIST_Y0
+        self.height as f32 - FOOTER_H - LIST_Y0
     }
 
     /// Нижняя кромка потока в абсолютных координатах.
@@ -303,7 +313,9 @@ impl YaziApp {
         let band_y1 = band_y0 + self.view_h();
         self.layout_slots()
             .into_iter()
-            .filter(|s| s.y + s.h > band_y0 && s.y < band_y1)
+            // Только строки, целиком попавшие в полосу списка: иначе
+            // первая/последняя строка наезжала на шапку или подвал.
+            .filter(|s| s.y >= band_y0 && s.y + s.h <= band_y1)
             .map(|mut s| {
                 s.y -= self.top;
                 s
@@ -325,7 +337,7 @@ impl YaziApp {
 
     /// Предельная прокрутки: глубже последняя строка всё равно не видна.
     fn max_top(&self) -> f32 {
-        (self.content_h() - self.height as f32 + 8.0).max(0.0)
+        (self.content_h() - self.height as f32 + FOOTER_H).max(0.0)
     }
 
     /// Пересобирает список и поток строк под текущий запрос: в потоке у каждой
@@ -674,82 +686,73 @@ impl YaziApp {
         };
         let p = ui_palette(self.palette);
         let k = SCALE;
-        let title_size = 21.0;
-        let row_size = 13.0;
-        let search_size = 13.0;
+        // Кегли меню: заголовок — section_title, строки — label, подписи — caption.
+        let title_size = 13.0;
+        let row_size = 12.0;
+        let caption_size = 12.0;
         pixmap.fill(p.panel.to_tiny());
-        fill_rect(&mut pixmap, 0.0, 0.0, pw as f32, 1.5, p.accent.with_a(0.7));
 
+        let list_bottom = self.height as f32 - FOOTER_H;
+
+        // Шапка: заголовок слева, по центру полосы; поиск справа — как в меню.
         self.draw_text(
             &mut pixmap,
             TITLE,
             title_size,
             p.text,
             PAD_X * k,
-            20.0 * k,
+            18.0 * k,
             28.0,
         );
-        let items = self.items.len();
-        let count = if self.query.is_empty() {
-            format!("{items}")
-        } else {
-            // Знаменатель — разделы keymap: блок «Частые» при поиске скрыт.
-            let total: usize = strip_favorites(&self.groups)
-                .iter()
-                .map(|(_, e)| e.len())
-                .sum();
-            format!("{items} / {total}")
-        };
-        let cw = self.text_width(&count, row_size);
-        self.draw_text(
-            &mut pixmap,
-            &count,
-            row_size,
-            p.muted,
-            (self.width as f32 - PAD_X) * k - cw,
-            26.0 * k,
-            18.0,
-        );
 
-        let sy = 56.0;
+        let sx = self.width as f32 - PAD_X - SEARCH_W;
+        let sy = (LIST_Y0 - SEARCH_H) / 2.0;
         fill_round_rect(
             &mut pixmap,
-            PAD_X * k,
+            sx * k,
             sy * k,
-            (self.width as f32 - PAD_X * 2.0) * k,
-            38.0 * k,
-            8.0 * k,
+            SEARCH_W * k,
+            SEARCH_H * k,
+            6.0 * k,
             p.idle_panel,
         );
-        // Рамка поля как у поисковой строки меню.
         stroke_rect(
             &mut pixmap,
-            PAD_X * k,
+            sx * k,
             sy * k,
-            (self.width as f32 - PAD_X * 2.0) * k,
-            38.0 * k,
+            SEARCH_W * k,
+            SEARCH_H * k,
             p.border,
+        );
+        self.draw_text(
+            &mut pixmap,
+            SEARCH_ICON,
+            caption_size,
+            p.muted,
+            (sx + 10.0) * k,
+            (sy + 8.0) * k,
+            20.0,
         );
         if self.query.is_empty() {
             self.draw_text(
                 &mut pixmap,
                 PLACEHOLDER,
-                search_size,
+                caption_size,
                 p.muted,
-                (PAD_X + 14.0) * k,
-                (sy + 9.0) * k,
+                (sx + 34.0) * k,
+                (sy + 8.0) * k,
                 20.0,
             );
         } else {
-            let shown = format!("{}▍", self.query);
+            let shown = self.query.clone();
             self.draw_text_boxed(
                 &mut pixmap,
                 &shown,
-                search_size,
+                row_size,
                 p.text,
-                self.width as f32 - PAD_X * 2.0 - 28.0,
-                (PAD_X + 14.0) * k,
-                (sy + 9.0) * k,
+                SEARCH_W - 44.0,
+                (sx + 34.0) * k,
+                (sy + 7.0) * k,
                 20.0,
             );
         }
@@ -761,42 +764,41 @@ impl YaziApp {
                 row_size,
                 p.muted,
                 PAD_X * k,
-                LIST_Y0 * k,
+                (LIST_Y0 + 11.0) * k,
                 20.0,
             );
         }
 
-        // Поток биндов газеткой: клавиша и описание, выделение заливкой.
+        // Поток: заголовок секции — полоса с акцентной меткой слева,
+        // бинд — клавиша и описание, выделение как в меню.
         let slots = self.slots();
         for slot in &slots {
             if let ListRow::Header(label) = &self.rows[slot.row] {
                 let label = label.clone();
-                // Заголовок секции: полоса во всю ширину плюс акцентная метка
-                // слева — без них блок сливается с общим списком.
                 fill_rect(
                     &mut pixmap,
                     slot.x * k,
                     slot.y * k,
                     slot.w * k,
-                    (slot.h - ROW_GAP) * k,
+                    slot.h * k,
                     p.idle_panel,
                 );
                 fill_rect(
                     &mut pixmap,
                     slot.x * k,
-                    (slot.y + 4.0) * k,
+                    (slot.y + 9.0) * k,
                     3.0 * k,
-                    (slot.h - ROW_GAP - 8.0) * k,
+                    (slot.h - 18.0) * k,
                     p.accent,
                 );
                 self.draw_text(
                     &mut pixmap,
                     &label,
-                    row_size,
+                    caption_size,
                     p.accent,
-                    (slot.x + 10.0) * k,
-                    (slot.y + 5.0) * k,
-                    18.0,
+                    (slot.x + 12.0) * k,
+                    (slot.y + 9.0) * k,
+                    20.0,
                 );
                 continue;
             }
@@ -806,41 +808,42 @@ impl YaziApp {
             };
             let selected = item == self.selected;
             if selected {
-                // Как в меню и лаунчере: выбранная строка залита акцентом
-                // целиком, ключ и описание на ней — тёмный `on_primary`.
-                fill_rect(
+                // Как выбранная строка меню: акцентная заливка с закруглением,
+                // текст на ней — тёмный `on_primary`.
+                fill_round_rect(
                     &mut pixmap,
                     slot.x * k,
                     slot.y * k,
                     slot.w * k,
-                    (slot.h - ROW_GAP) * k,
+                    slot.h * k,
+                    6.0 * k,
                     p.accent,
                 );
             }
-            // Отступ постоянный: 10 = бывшая метка (2) плюс щель (8).
-            let text_x = slot.x + 10.0;
+            let key_x = slot.x + PAD_X;
+            let desc_x = key_x + KEY_W + PAD_X;
+            let desc_w = slot.x + slot.w - desc_x - PAD_X;
             self.draw_text_boxed(
                 &mut pixmap,
                 &e.key,
                 row_size,
                 if selected { p.on_primary } else { p.accent },
                 KEY_W,
-                (text_x + 2.0) * k,
-                (slot.y + 5.0) * k,
-                18.0,
+                key_x * k,
+                (slot.y + 9.0) * k,
+                20.0,
             );
             self.draw_text_boxed(
                 &mut pixmap,
                 &e.desc,
                 row_size,
                 if selected { p.on_primary } else { p.text },
-                slot.x + slot.w - (text_x + KEY_W + 12.0),
-                (text_x + KEY_W + 4.0) * k,
-                (slot.y + 5.0) * k,
-                18.0,
+                desc_w,
+                desc_x * k,
+                (slot.y + 9.0) * k,
+                20.0,
             );
         }
-
         // Скроллбар: трек во всю высоту списка и яркий бегунок — как в
         // привычном варианте, приглушённый одноцветный бегунок читался хуже.
         if self.max_top() > 0.5 {
@@ -861,6 +864,46 @@ impl YaziApp {
             );
             fill_rect(&mut pixmap, bx * k, ty * k, 2.0 * k, th * k, p.accent);
         }
+
+        // Подвал с подсказками и счётчиком — как у меню.
+        fill_rect(
+            &mut pixmap,
+            0.0,
+            list_bottom * k,
+            self.width as f32 * k,
+            1.0,
+            p.border.with_a(0.6),
+        );
+        let items = self.items.len();
+        let count = if self.query.is_empty() {
+            format!("{items}")
+        } else {
+            // Знаменатель — разделы keymap: блок «Частые» при поиске скрыт.
+            let total: usize = strip_favorites(&self.groups)
+                .iter()
+                .map(|(_, e)| e.len())
+                .sum();
+            format!("{items} / {total}")
+        };
+        let cw = self.text_width(&count, caption_size);
+        self.draw_text(
+            &mut pixmap,
+            &count,
+            caption_size,
+            p.muted,
+            (self.width as f32 - PAD_X) * k - cw,
+            (list_bottom + 14.0) * k,
+            20.0,
+        );
+        self.draw_text(
+            &mut pixmap,
+            HINTS,
+            caption_size,
+            p.muted,
+            PAD_X * k,
+            (list_bottom + 14.0) * k,
+            20.0,
+        );
 
         // Плотность карточки как у меню: вся отрисовка непрозрачна в буфере,
         // альфа mul'ится целиком прямо перед отправкой в композитор.

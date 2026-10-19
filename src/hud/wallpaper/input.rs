@@ -65,8 +65,6 @@ pub enum WpInput {
     Activate,
     /// Закрыть окно.
     Close,
-    /// Очистить запрос целиком.
-    ClearQuery,
     /// Стереть последний символ запроса.
     Erase,
     /// Дописать символ к запросу.
@@ -145,13 +143,10 @@ pub fn translate(event: KeyEvent, query: &str) -> WpInput {
         Key::End => WpInput::Move(Dir::End),
         Key::Tab => WpInput::Tab(!event.shift),
         Key::Enter => WpInput::Activate,
-        Key::Escape => {
-            if query.is_empty() {
-                WpInput::Close
-            } else {
-                WpInput::ClearQuery
-            }
-        }
+        // Esc закрывает всегда: окно держит клавиатуру эксклюзивно, и второй
+        // «закрывающий» Esc после чистки запроса — ловушка. Запрос чистит
+        // крестик в поле поиска.
+        Key::Escape => WpInput::Close,
         Key::Backspace => {
             if query.is_empty() {
                 WpInput::Ignore
@@ -181,11 +176,6 @@ pub fn apply(state: &mut State, input: WpInput) -> Outcome {
         }
         WpInput::Activate => state.enter(),
         WpInput::Close => Outcome::Close,
-        WpInput::ClearQuery => {
-            state.clear();
-            state.grid.select_first();
-            Outcome::None
-        }
         WpInput::Erase => {
             state.backspace();
             Outcome::None
@@ -387,7 +377,7 @@ mod tests {
     /// Esc чистит запрос, иначе закрывает; Backspace на пустом — мимо.
     #[test]
     fn escape_clears_before_closing() {
-        assert_eq!(translate(press(Key::Escape), "ани"), WpInput::ClearQuery);
+        assert_eq!(translate(press(Key::Escape), "ани"), WpInput::Close);
         assert_eq!(translate(press(Key::Escape), ""), WpInput::Close);
         assert_eq!(translate(press(Key::Backspace), "а"), WpInput::Erase);
         assert_eq!(translate(press(Key::Backspace), ""), WpInput::Ignore);
