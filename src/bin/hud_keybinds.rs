@@ -403,7 +403,11 @@ fn render(
         let key_x = rect.x + PAD_X;
         let desc_x = key_x + key_w + PAD_X;
         let desc_w = rect.right() - desc_x - PAD_X;
-        painter.paint_boxed(
+        // Общая базовая линия строки: клавиша и описание садятся на одну
+        // линейку письма — контур глифов отдельного текста её не крутит
+        // (KB2.1.1: «gg» и «Начало списка» разъезжались на 1–3 px).
+        let baseline = painter.shared_baseline(rect, scale.label);
+        painter.paint_boxed_on_baseline(
             pixmap,
             display_key(&e.key),
             scale.label,
@@ -413,8 +417,9 @@ fn render(
                 scale.label * 2.0,
             ),
             text::Align::Start,
+            baseline,
         );
-        painter.paint_boxed(
+        painter.paint_boxed_on_baseline(
             pixmap,
             &e.desc,
             scale.label,
@@ -424,6 +429,7 @@ fn render(
                 scale.label * 2.0,
             ),
             text::Align::Start,
+            baseline,
         );
     }
 
@@ -1355,5 +1361,36 @@ mod tests {
         }
         // И потолок уважен: колонка не тянет атмосферу шире 45% карточки.
         assert!(key_w <= card_frame::CARD_W * 0.45 + f32::EPSILON);
+    }
+
+    /// Клавиша и описание демо-строки садятся на одну базовую линию:
+    /// строки идут по «линейке письма», а не по центру контура глифов
+    /// (KB2.1.1). Полосы centerY одинаковы, x и ширина различаются —
+    /// на baseline это влиять не должно.
+    #[test]
+    fn demo_key_and_desc_share_baseline() {
+        let items = binds_layout::entries_from_groups(&demo_groups(), "");
+        let mut painter = text::TextPainter::new(&ui_tokens::font_name());
+        let size = ui_tokens::type_scale().label;
+        let key_w = card_frame::CARD_W * 0.45;
+        let key_band =
+            card_frame::center_band(geom::Rect::new(PAD_X, 0.0, key_w, ITEM_H), size * 2.0);
+        let desc_band = card_frame::center_band(
+            geom::Rect::new(
+                PAD_X + key_w + PAD_X,
+                0.0,
+                card_frame::CARD_W - PAD_X * 3.0 - key_w,
+                ITEM_H,
+            ),
+            size * 2.0,
+        );
+        for entry in &items {
+            assert_eq!(
+                painter.shared_baseline(key_band, size),
+                painter.shared_baseline(desc_band, size),
+                "клавиша {} и её описание разъехались по высоте",
+                entry.key
+            );
+        }
     }
 }
