@@ -1007,7 +1007,27 @@ fn demo_groups() -> Vec<(String, Vec<bind_data::Entry>)> {
 /// Карточка кладётся на сцену настоящим альфа-смешиванием: как после
 /// композитора в живом окне, пиксели снимка непрозрачные.
 fn snapshot(out: &str) {
-    // Цвета сцены — из menu/snapshot.rs (:35-37): верх и горизонт градиента.
+    // Палитра конфига передаётся в сцену только формально: сцена всегда
+    // рисуется встроенной (`scene_pixmap`), поэтому PNG не меняется при
+    // смене обоев (matugen перезаписывает colors.css).
+    let pixmap = scene_pixmap(&palette::load());
+    if let Err(error) = canvas::write_png(&pixmap, std::path::Path::new(out)) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+    println!("бинды {}x{} → {out}", pixmap.width(), pixmap.height());
+}
+
+/// Сцена снимка: тот же `render`, что у живого окна, без Wayland и записи
+/// файла. Палитра карточки всегда встроенная (`Palette::default()`) —
+/// снимок строится от фиксированной темы, конфиг (matugen) на него не
+/// влияет. Аргумент — палитра конфига: тест прогоняет сцену с разными
+/// конфигами и обязан получать один и тот же PNG, поэтому вход есть, а
+/// сцена его осознанно не юзает.
+fn scene_pixmap(_config_palette: &palette::Palette) -> tiny_skia::Pixmap {
+    // Встроенная палитра сцены: если рендер начнёт юзать конфиг,
+    // тест snapshot_ignores_config_palette упадёт — и это правильно.
+    // Цвета фона — из menu/snapshot.rs (:35-37): верх и горизонт градиента.
     const BACKDROP_TOP: palette::Rgba = palette::Rgba(0x1a, 0x1f, 0x30, 255);
     const BACKDROP_HORIZON: palette::Rgba = palette::Rgba(0x11, 0x15, 0x24, 255);
     const SCENE_W: f32 = 1200.0;
@@ -1025,7 +1045,7 @@ fn snapshot(out: &str) {
         }
     }
     let r = Render {
-        palette: palette::load(),
+        palette: palette::Palette::default(),
         rows: &rows,
         items: &items,
         selected: 5,
@@ -1091,11 +1111,7 @@ fn snapshot(out: &str) {
         (card.x * text::SCALE) as i32,
         (card.y * text::SCALE) as i32,
     );
-    if let Err(error) = canvas::write_png(&pixmap, std::path::Path::new(out)) {
-        eprintln!("{error}");
-        std::process::exit(1);
-    }
-    println!("бинды {}x{} → {out}", pixmap.width(), pixmap.height());
+    pixmap
 }
 
 fn main() {
@@ -1205,6 +1221,26 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Два прогона снимка с разными палитрами конфига дают один и тот же
+    /// PNG: сцена юзает встроенную палитру (`scene_pixmap`), colors.css
+    /// (matugen) в рендер не попадает — смена обоев снимок не меняет.
+    #[test]
+    fn snapshot_ignores_config_palette() {
+        // «Палитры конфига»: текущая gold-тема и built-in лавандовая
+        // (значения как из реально возможного colors.css).
+        let mut gold = palette::Palette::default();
+        gold.primary = palette::Rgba(0xdf, 0xc5, 0x6d, 255);
+        gold.on_primary = palette::Rgba(0x39, 0x2e, 0x00, 255);
+        let mut lavender = palette::Palette::default();
+        lavender.primary = palette::Rgba(0x8f, 0xa9, 0xff, 255);
+        lavender.on_primary = palette::Rgba(0x1a, 0x2c, 0x5f, 255);
+        assert_eq!(
+            scene_pixmap(&gold).data(),
+            scene_pixmap(&lavender).data(),
+            "снимки с разными палитрами конфига обязаны совпасть"
+        );
+    }
 
     /// В демо-данных снапшота после срезания «XF86» ни одна клавиша не
     /// усечена: самая длинная ниже потолка 45% ширины карточки.
