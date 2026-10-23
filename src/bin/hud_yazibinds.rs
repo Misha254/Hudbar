@@ -54,6 +54,9 @@ mod card_frame;
 #[allow(dead_code)]
 #[path = "../hud/geom.rs"]
 mod geom;
+
+#[path = "../hud/key_display.rs"]
+mod key_display;
 #[path = "../hud/palette.rs"]
 mod palette;
 #[path = "../hud/repeat.rs"]
@@ -321,17 +324,10 @@ fn render(
         );
     }
 
-    // Колонка клавиш по самой длинной клавише текущего списка — как в окне
-    // биндов niri, не шире 45% карточки. Хелпер `display_key` я туда не
-    // копирую: в keymap yazi префикса «XF86» нет, так что ширина по
-    // «сырой» клавише даёт тот же результат. Вынесение общего хелпера —
-    // предмет отдельного решения (см. отчёт KB2).
-    let key_w = r
-        .items
-        .iter()
-        .map(|e| painter.text_width(e.key.as_str(), scale.label))
-        .fold(0.0f32, f32::max)
-        .min(card.w * 0.45);
+    // Колонка клавиш: общий хелпер key_display (по самой длинной клавише
+    // списка, не шире 45% карточки). Срез «XF86» внутри хелпера для
+    // keymap yazi нейтрален — префикс в ключах не встречается.
+    let key_w = key_display::key_column_width(r.items, painter, scale.label, card.w);
 
     // Поток биндов одним столбцом: клавиша слева, описание справа;
     // выделение — акцентной заливкой строки.
@@ -375,7 +371,7 @@ fn render(
         let baseline = painter.shared_baseline(rect, scale.label);
         painter.paint_boxed_on_baseline(
             pixmap,
-            e.key.as_str(),
+            key_display::display_key(e.key.as_str()),
             scale.label,
             if selected { ui.on_primary } else { ui.accent },
             card_frame::center_band(
@@ -1227,14 +1223,10 @@ mod tests {
         let items = binds_layout::entries_from_groups(&demo_groups(), "");
         let mut painter = text::TextPainter::new(&ui_tokens::font_name());
         let size = ui_tokens::type_scale().label;
-        let key_w = items
-            .iter()
-            .map(|e| painter.text_width(e.key.as_str(), size))
-            .fold(0.0f32, f32::max)
-            .min(card_frame::CARD_W * 0.45);
+        let key_w = key_display::key_column_width(&items, &mut painter, size, card_frame::CARD_W);
         for entry in &items {
             assert!(
-                painter.text_width(entry.key.as_str(), size) <= key_w,
+                painter.text_width(key_display::display_key(entry.key.as_str()), size) <= key_w,
                 "{} не влезает в колонку {key_w:.1}",
                 entry.key
             );

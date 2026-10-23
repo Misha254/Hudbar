@@ -50,6 +50,9 @@ mod card_frame;
 #[allow(dead_code)]
 #[path = "../hud/geom.rs"]
 mod geom;
+
+#[path = "../hud/key_display.rs"]
+mod key_display;
 #[path = "../hud/palette.rs"]
 mod palette;
 #[path = "../hud/repeat.rs"]
@@ -90,29 +93,6 @@ const LIST_Y0: f32 = 52.0;
 const PAD_X: f32 = 16.0;
 /// Отступ после блока секции, чтобы следующая группа не примыкала вплотную.
 const SECTION_GAP: f32 = 12.0;
-
-/// Показ имени клавиши: префикс «XF86» — жаргон аппаратных кодов ядра,
-/// в интерфейсе он только шумит (XF86AudioRaiseVolume → AudioRaiseVolume).
-/// Только отображение: ключи в bind_data и поиск по ним не меняются.
-fn display_key(key: &str) -> &str {
-    key.strip_prefix("XF86").unwrap_or(key)
-}
-
-/// Ширина колонки клавиш: по самой длинной клавише списка, но не больше
-/// 45% ширины карточки — описаниям остаётся место. Клавиши шире потолка
-/// честно усекаются painter'ом, «…» остаётся запасом.
-fn key_column_width(
-    items: &[bind_data::Entry],
-    painter: &mut text::TextPainter,
-    size: f32,
-    card_w: f32,
-) -> f32 {
-    items
-        .iter()
-        .map(|e| painter.text_width(display_key(&e.key), size))
-        .fold(0.0f32, f32::max)
-        .min(card_w * 0.45)
-}
 
 /// Место строки в окне: заголовок секции или бинд.
 struct Slot {
@@ -338,7 +318,7 @@ fn render(
 
     // Колонка клавиш: по самой длинной клавише текущего списка, но не
     // шире 45% карточки — описания не должны съедаться.
-    let key_w = key_column_width(r.items, painter, scale.label, card.w);
+    let key_w = key_display::key_column_width(r.items, painter, scale.label, card.w);
 
     // Поток биндов одним столбцом: клавиша слева, описание справа;
     // выделение — акцентной заливкой строки.
@@ -382,7 +362,7 @@ fn render(
         let baseline = painter.shared_baseline(rect, scale.label);
         painter.paint_boxed_on_baseline(
             pixmap,
-            display_key(&e.key),
+            key_display::display_key(&e.key),
             scale.label,
             if selected { ui.on_primary } else { ui.accent },
             card_frame::center_band(
@@ -1226,16 +1206,6 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// «XF86» срезается только на отображении: прочие клавиши не тронуты,
-    /// данные в bind_data остаются как есть.
-    #[test]
-    fn display_key_strips_only_the_xf86_prefix() {
-        assert_eq!(display_key("XF86AudioRaiseVolume"), "AudioRaiseVolume");
-        assert_eq!(display_key("XF86ScreenSaver"), "ScreenSaver");
-        assert_eq!(display_key("Super+T"), "Super+T");
-        assert_eq!(display_key("KP_8"), "KP_8");
-    }
-
     /// В демо-данных снапшота после срезания «XF86» ни одна клавиша не
     /// усечена: самая длинная ниже потолка 45% ширины карточки.
     #[test]
@@ -1243,10 +1213,10 @@ mod tests {
         let items = binds_layout::entries_from_groups(&demo_groups(), "");
         let mut painter = text::TextPainter::new(&ui_tokens::font_name());
         let size = ui_tokens::type_scale().label;
-        let key_w = key_column_width(&items, &mut painter, size, card_frame::CARD_W);
+        let key_w = key_display::key_column_width(&items, &mut painter, size, card_frame::CARD_W);
         for entry in &items {
             assert!(
-                painter.text_width(display_key(&entry.key), size) <= key_w,
+                painter.text_width(key_display::display_key(&entry.key), size) <= key_w,
                 "{} не влезает в колонку {key_w:.1}",
                 entry.key
             );
