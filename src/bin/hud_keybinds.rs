@@ -351,9 +351,12 @@ fn render(
             s
         })
         .collect();
+    // Подсветка строк — прямая, как в меню: полоса с отступом CARD_INSET=1
+    // лог. px от краёв строки (menu/view/geometry.rs:141). Hover — той же
+    // формы, расхождений между ними не оставляем.
     let style = card_frame::RowHighlightStyle {
-        rounded: true,
-        inset: 0.0,
+        rounded: false,
+        inset: 1.0,
     };
     for slot in &slots {
         let rect = geom::Rect::new(card.x + slot.x, card.y + slot.y, slot.w, slot.h);
