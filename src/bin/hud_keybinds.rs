@@ -970,17 +970,9 @@ impl ProvidesRegistryState for BindsApp {
 delegate_registry!(BindsApp);
 smithay_client_toolkit::delegate_dispatch2!(BindsApp);
 
-/// `hud-keybinds-rs --snapshot <out.png>`: тот же `render`, что у живого
-/// окна, но без Wayland. Демо-данных хватает на прокрутку: две секции,
-/// 14 биндов, выбран пятый, список прокручен на три строки. Фон сцены —
-/// как у снимков меню (menu/snapshot.rs): градиент, карточка по центру.
-fn snapshot(out: &str) {
-    // Цвета сцены — из menu/snapshot.rs (:35-37): верх и горизонт градиента.
-    const BACKDROP_TOP: palette::Rgba = palette::Rgba(0x1a, 0x1f, 0x30, 255);
-    const BACKDROP_HORIZON: palette::Rgba = palette::Rgba(0x11, 0x15, 0x24, 255);
-    const SCENE_W: f32 = 1200.0;
-    const SCENE_H: f32 = 800.0;
-
+/// Демо-данные снимка: две секции, 14 биндов. Питают и снапшот, и тесты
+/// колонки клавиш.
+fn demo_groups() -> Vec<(String, Vec<bind_data::Entry>)> {
     let keys = [
         (
             "Окна и обзор",
@@ -1007,8 +999,7 @@ fn snapshot(out: &str) {
             ],
         ),
     ];
-    let groups: Vec<(String, Vec<bind_data::Entry>)> = keys
-        .iter()
+    keys.iter()
         .map(|(name, pairs)| {
             (
                 name.to_string(),
@@ -1018,7 +1009,66 @@ fn snapshot(out: &str) {
                     .collect(),
             )
         })
-        .collect();
+        .collect()
+}
+
+/// Накладывает полупрозрачную карточку на непрозрачную сцену настоящим
+/// source-over смешиванием. Рисовать карточку прямо в сцену нельзя:
+/// premultiplied-каналы остались бы полупрозрачными пикселями снимка, а
+/// живое окно отдаёт эту полупрозрачность композитору, который кладёт её
+/// на обои. Здесь роль композитора берём на себя: каналы карточки
+/// домешивают фон, альфу результата фиксируем в 255.
+fn blend_card(scene: &mut tiny_skia::Pixmap, card: &tiny_skia::Pixmap, x: i32, y: i32) {
+    let width = scene.width() as i32;
+    let height = scene.height() as i32;
+    let card_w = card.width() as i32;
+    let card_h = card.height() as i32;
+    let scene_pixels = scene.pixels_mut();
+    let card_pixels = card.pixels();
+    for cy in 0..card_h {
+        let sy = y + cy;
+        if sy < 0 || sy >= height {
+            continue;
+        }
+        for cx in 0..card_w {
+            let sx = x + cx;
+            if sx < 0 || sx >= width {
+                continue;
+            }
+            let src = card_pixels[(cy * card_w + cx) as usize];
+            let alpha = src.alpha() as u32;
+            if alpha == 0 {
+                continue;
+            }
+            // out = src + dst * (1 — alpha/255) по каждому каналу.
+            let mix = |s: u8, d: u8| (s as u32 + d as u32 * (255 - alpha) / 255) as u8;
+            let dst = &mut scene_pixels[(sy * width + sx) as usize];
+            if let Some(color) = tiny_skia::PremultipliedColorU8::from_rgba(
+                mix(src.red(), dst.red()),
+                mix(src.green(), dst.green()),
+                mix(src.blue(), dst.blue()),
+                255,
+            ) {
+                *dst = color;
+            }
+        }
+    }
+}
+
+/// `hud-keybinds-rs --snapshot <out.png>`: тот же `render`, что у живого
+/// окна, но без Wayland. Демо-данных хватает на прокрутку: две секции,
+/// 14 биндов, выбран пятый, список прокручен на три строки. Фон сцены —
+/// как у снимков меню (menu/snapshot.rs): градиент, карточка по центру.
+/// Карточка кладётся на сцену настоящим альфа-смешиванием: как после
+/// композитора в живом окне, пиксели снимка непрозрачные.
+fn snapshot(out: &str) {
+    // Цвета сцены — из menu/snapshot.rs (:35-37): верх и горизонт градиента.
+    const BACKDROP_TOP: palette::Rgba = palette::Rgba(0x1a, 0x1f, 0x30, 255);
+    const BACKDROP_HORIZON: palette::Rgba = palette::Rgba(0x11, 0x15, 0x24, 255);
+    const SCENE_W: f32 = 1200.0;
+    const SCENE_H: f32 = 800.0;
+
+    let groups = demo_groups();
     let items = binds_layout::entries_from_groups(&groups, "");
     let mut rows: Vec<ListRow> = Vec::new();
     let mut item = 0;
@@ -1080,8 +1130,22 @@ fn snapshot(out: &str) {
     }
     let mut painter = text::TextPainter::new(&ui_tokens::font_name());
     let mut icons = text::TextPainter::new(settings_icons::FONT);
-    render(&mut pixmap, card, &r, &mut painter, &mut icons);
-    card_frame::apply_card_alpha(&mut pixmap, card, card_frame::CARD_ALPHA);
+    // Карточка рисуется в отдельный буфер тем же кодом, что и живое окно,
+    // с той же плотностью (`apply_card_alpha`), и уже полупрозрачной
+    // смешивается на непрозрачную сцену — пиксели снимка выходят
+    // непрозрачными, как после композитора.
+    let mut card_pixmap =
+        tiny_skia::Pixmap::new((card.w * text::SCALE) as u32, (card.h * text::SCALE) as u32)
+            .expect("card pixmap");
+    let card_rect = geom::Rect::new(0.0, 0.0, card.w, card.h);
+    render(&mut card_pixmap, card_rect, &r, &mut painter, &mut icons);
+    card_frame::apply_card_alpha(&mut card_pixmap, card_rect, card_frame::CARD_ALPHA);
+    blend_card(
+        &mut pixmap,
+        &card_pixmap,
+        (card.x * text::SCALE) as i32,
+        (card.y * text::SCALE) as i32,
+    );
     if let Err(error) = canvas::write_png(&pixmap, std::path::Path::new(out)) {
         eprintln!("{error}");
         std::process::exit(1);
@@ -1190,5 +1254,48 @@ fn main() {
             app.dirty = false;
             app.draw();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Наложение полупрозрачной карточки на непрозрачную сцену: пикселей
+    /// с альфой меньше 255 не остаётся, под карточкой — смесь, вне
+    /// карточки фон не меняется.
+    #[test]
+    fn blend_card_leaves_no_translucent_pixels() {
+        let mut scene = tiny_skia::Pixmap::new(4, 4).expect("scene");
+        for pixel in scene.pixels_mut() {
+            *pixel = tiny_skia::PremultipliedColorU8::from_rgba(10, 20, 30, 255).expect("color");
+        }
+        let mut card = tiny_skia::Pixmap::new(2, 2).expect("card");
+        for pixel in card.pixels_mut() {
+            // premultiplied: каналы не могут быть больше альфы
+            *pixel = tiny_skia::PremultipliedColorU8::from_rgba(64, 64, 64, 128).expect("color");
+        }
+        blend_card(&mut scene, &card, 1, 1);
+        for pixel in scene.pixels() {
+            assert_eq!(pixel.alpha(), 255, "сцена обязана остаться непрозрачной");
+        }
+        let over = scene.pixel(1, 1).expect("пиксель под карточкой");
+        // Сравнение в u32: в u8 промежуточное 10 * 127 не влезает.
+        let expected = |accent: u8| u32::from(accent) * (255 - 128) / 255;
+        assert_eq!(
+            u32::from(over.red()),
+            64 + expected(10),
+            "смесь по красному"
+        );
+        assert_eq!(
+            u32::from(over.green()),
+            64 + expected(20),
+            "смесь по зелёному"
+        );
+        assert_eq!(u32::from(over.blue()), 64 + expected(30), "смесь по синему");
+        let outside = scene.pixel(0, 3).expect("пиксель вне карточки");
+        assert_eq!(outside.red(), 10, "фон вне карточки не трогается");
+        assert_eq!(outside.green(), 20);
+        assert_eq!(outside.blue(), 30);
     }
 }
