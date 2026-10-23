@@ -1,16 +1,18 @@
 //! Нативное окно биндов yazi (KP_9). Замена `yazibind.sh`+rofi.
-//! Основные бинды и раздел «Операции с файлами».
+//! Каркас карточки (фон, шапка, подвал, скроллбар, подсветка) — общий
+//! `card_frame`, строки с клавишей и описанием рисуются здесь же. Размер
+//! окна и кегли — как у окна биндов niri: 440×452, `type_scale`.
+//!
+//! Отличия от окна биндов niri: источник данных — keymap.toml yazi,
+//! при поиске запрос транслитерируется («копир» ищет и по «kopir»),
+//! блок «Частые» при поиске скрывается, счётчик ищет знаменатель без него.
 
-use std::collections::HashMap;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
-use cosmic_text::{
-    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent,
-};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_registry,
@@ -43,52 +45,59 @@ mod bind_data;
 #[allow(dead_code)]
 #[path = "../hud/binds_layout.rs"]
 mod binds_layout;
+#[allow(dead_code)]
+#[path = "../hud/canvas.rs"]
+mod canvas;
+#[allow(dead_code)]
+#[path = "../hud/card_frame.rs"]
+mod card_frame;
+#[allow(dead_code)]
+#[path = "../hud/geom.rs"]
+mod geom;
 #[path = "../hud/palette.rs"]
 mod palette;
 #[path = "../hud/repeat.rs"]
 mod repeat;
+#[allow(dead_code)]
+#[path = "../hud/settings_icons.rs"]
+mod settings_icons;
 #[path = "../hud/shell.rs"]
 mod shell;
+#[allow(dead_code)]
+#[path = "../hud/text.rs"]
+mod text;
+#[allow(dead_code)]
+#[path = "../hud/ui_tokens.rs"]
+mod ui_tokens;
 
 use repeat::Repeat;
 
 use bind_data::Entry;
 
-const SCALE: f32 = 2.0;
-const WIDTH: u32 = 440;
-const HEIGHT: u32 = 482;
 const TITLE: &str = "Yazi";
-/// Плотность окна у композитора: вся отрисовка идёт в буфер непрозрачным,
-/// а в конце проход умножает альфу всех пикселей на эту долю — так же, как
-/// `apply_card_alpha` меню и `p.base.with_a(0.8)` панели. Значение то же,
-/// что у `menu::view::geometry::CARD_ALPHA`.
-const CARD_ALPHA: f32 = 0.8;
 const PLACEHOLDER: &str = "Поиск…";
 
-/// Поле поиска в шапке — размер и место как у поисковой строки меню.
-const SEARCH_W: f32 = 168.0;
-const SEARCH_H: f32 = 28.0;
-const SEARCH_ICON: &str = "\u{f002}";
+/// Размеры окна — как у окна биндов niri: 440×452 =
+/// `card_frame::card_height(9)` — 52 шапка + 9×40 строк + 40 подвал.
+/// Формула живёт в `card_frame` с тестом, числа здесь — для
+/// `set_min_size`/`set_max_size` и отката конфигурации.
+const WIDTH: u32 = 440;
+const HEIGHT: u32 = 452;
 /// Подвал: подсказки слева, счётчик справа.
 const HINTS: &str = "↑↓ PgUp PgDn ЛИСТАТЬ   ESC ЗАКРЫТЬ";
 
-/// Подвал меню: высота полосы подсказок.
-const FOOTER_H: f32 = 40.0;
-
-// Поток строк в две колонки, как в окне биндов niri: заголовок группы на всю
-// ширину, бинд — клавиша и описание, рамок нет.
+// Поток строк одной колонкой: заголовок группы занимает всю ширину,
+// бинд занимает ячейку. Без рамок — только заливка у выбранной строки.
 const COLS: usize = 1;
 const ITEM_H: f32 = 30.0;
 const COL_GAP: f32 = 20.0;
 const ROW_GAP: f32 = 0.0;
 const LIST_Y0: f32 = 52.0;
 const PAD_X: f32 = 16.0;
-const KEY_W: f32 = 120.0;
 /// Отступ после блока секции, чтобы следующая группа не примыкала вплотную.
 const SECTION_GAP: f32 = 12.0;
 
-/// Строка списка: заголовок группы или выбираемый бинд.
-#[derive(Clone, Copy)]
+/// Место строки в окне: заголовок секции или бинд.
 struct Slot {
     row: usize,
     item: Option<usize>,
@@ -98,17 +107,11 @@ struct Slot {
     h: f32,
 }
 
-#[derive(Clone, Copy)]
-struct UiPalette {
-    /// Фон карточки: тот же слэб, что fill_round_rect у карточки меню.
-    panel: palette::Rgba,
-    idle_panel: palette::Rgba,
-    border: palette::Rgba,
-    accent: palette::Rgba,
-    text: palette::Rgba,
-    muted: palette::Rgba,
-    /// Текст на заливке акцентом — тёмный, как роль `on_primary` у схем.
-    on_primary: palette::Rgba,
+/// Строка списка: заголовок группы или выбираемый бинд.
+#[derive(Clone, PartialEq)]
+enum ListRow {
+    Header(String),
+    Item(usize),
 }
 
 struct YaziApp {
@@ -123,16 +126,17 @@ struct YaziApp {
     /// Клиентский автоповтор удержанной стрелки: композитор повторы не шлёт.
     repeat: Repeat,
     mods: Modifiers,
-    font_system: FontSystem,
-    swash: SwashCache,
-    /// Замеренный верх глифов (logical px) для (шрифт, размер, интерлиньяж).
-    top_cache: HashMap<(String, u32, u32), f32>,
-    font: String,
+    /// Painter общего текстового модуля: один на окно, кэш шейпов внутри.
+    text: text::TextPainter,
+    /// Отдельный painter с Nerd Font — только для глифов.
+    icons: text::TextPainter,
     query: String,
     groups: Vec<(String, Vec<Entry>)>,
     items: Vec<Entry>,
     rows: Vec<ListRow>,
     selected: usize,
+    /// Строка под указателем: подложка `hover_bg`, выбор не переносит.
+    hover: Option<usize>,
     /// Прокрутка в логических пикселях от начала списка.
     top: f32,
     /// Остаток дробной дельты колеса: тачпад шлёт value120 меньше 120,
@@ -145,12 +149,6 @@ struct YaziApp {
     configured: bool,
     dirty: bool,
     exit: Arc<AtomicBool>,
-}
-
-#[derive(Clone, PartialEq)]
-enum ListRow {
-    Header(String),
-    Item(usize),
 }
 
 fn stamp(path: &std::path::Path) -> Option<SystemTime> {
@@ -166,27 +164,6 @@ fn watch_paths() -> Vec<PathBuf> {
     ]
 }
 
-fn mix(a: palette::Rgba, b: palette::Rgba, t: f32) -> palette::Rgba {
-    palette::Rgba(
-        (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t) as u8,
-        (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
-        (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
-        255,
-    )
-}
-
-fn ui_palette(p: palette::Palette) -> UiPalette {
-    UiPalette {
-        panel: mix(p.base, p.secondary, 0.10),
-        idle_panel: mix(p.base, p.secondary, 0.05),
-        border: mix(p.base, p.primary, 0.55),
-        accent: p.primary,
-        text: p.text,
-        muted: p.text.with_a(0.58),
-        on_primary: p.on_primary,
-    }
-}
-
 fn load_groups() -> Vec<(String, Vec<Entry>)> {
     bind_data::load_yazi_grouped()
 }
@@ -200,118 +177,292 @@ fn strip_favorites(groups: &[(String, Vec<Entry>)]) -> &[(String, Vec<Entry>)] {
     &groups[first..]
 }
 
-impl YaziApp {
-    fn col_width(&self) -> f32 {
-        (self.width as f32 - PAD_X * 2.0 - COL_GAP * (COLS - 1) as f32) / COLS as f32
-    }
+/// Ширина колонки списка.
+fn col_width(w: f32) -> f32 {
+    (w - PAD_X * 2.0 - COL_GAP * (COLS - 1) as f32) / COLS as f32
+}
 
-    fn col_x(&self, c: usize) -> f32 {
-        PAD_X + c as f32 * (self.col_width() + COL_GAP)
-    }
+/// X-координата колонки.
+fn col_x(c: usize, w: f32) -> f32 {
+    PAD_X + c as f32 * (col_width(w) + COL_GAP)
+}
 
-    /// Сколько биндов идёт в секции, если её заголовок стоит в строке `header`.
-    fn section_len(&self, header: usize) -> usize {
-        self.rows[header + 1..]
-            .iter()
-            .take_while(|r| matches!(r, ListRow::Item(_)))
-            .count()
-    }
+/// Сколько биндов идёт в секции, если её заголовок стоит в строке `header`.
+fn section_len(rows: &[ListRow], header: usize) -> usize {
+    rows[header + 1..]
+        .iter()
+        .take_while(|r| matches!(r, ListRow::Item(_)))
+        .count()
+}
 
-    /// Раскладка всего потока в абсолютных координатах, без прокрутки и без
-    /// отсечения по высоте окна. Секции — компактные блоки: заголовок во всю
-    /// ширину, бинды по COLS в ряд начиная с левой колонки. Обе колонки после
-    /// блока продолжаются с одной высоты, поэтому бинды других групп не
-    /// встают рядом с секцией.
-    ///
-    /// Раскладка всегда от начала списка — иначе прокрутка внутрь секции
-    /// переставляла её бинды в газетную колонку и список дёргался.
-    fn layout_slots(&self) -> Vec<Slot> {
-        let col_w = self.col_width();
-        let mut slots: Vec<Slot> = Vec::new();
-        let mut col_y = [0.0f32; COLS];
-        let mut row = 0;
-        while row < self.rows.len() {
-            match &self.rows[row] {
-                ListRow::Header(_) => {
-                    let y = LIST_Y0 + col_y[0].max(*col_y.get(1).unwrap_or(&0.0));
+/// Раскладка всего потока в координатах карточки, без прокрутки и без
+/// отсечения по высоте. Секции — компактные блоки: заголовок во всю ширину,
+/// бинды ниже, между блоками отступ. Одна колонка, поэтому бинды других
+/// групп не встают рядом с секцией.
+fn layout_slots(rows: &[ListRow], width: f32) -> Vec<Slot> {
+    let col_w = col_width(width);
+    let mut slots: Vec<Slot> = Vec::new();
+    let mut offset = 0.0f32;
+    let mut row = 0;
+    while row < rows.len() {
+        match &rows[row] {
+            ListRow::Header(_) => {
+                let hy = LIST_Y0 + offset;
+                slots.push(Slot {
+                    row,
+                    item: None,
+                    x: PAD_X,
+                    y: hy,
+                    w: width - PAD_X * 2.0,
+                    h: ITEM_H,
+                });
+                let len = section_len(rows, row);
+                for (n, r) in (row + 1..=row + len).enumerate() {
                     slots.push(Slot {
-                        row,
-                        item: None,
+                        row: r,
+                        item: match rows[r] {
+                            ListRow::Item(i) => Some(i),
+                            ListRow::Header(_) => None,
+                        },
                         x: PAD_X,
-                        y,
-                        w: self.width as f32 - PAD_X * 2.0,
-                        h: ITEM_H,
-                    });
-                    let len = self.section_len(row);
-                    let block_rows = len.div_ceil(COLS);
-                    for (n, r) in (row + 1..=row + len).enumerate() {
-                        // Все секции газеткой как «Частые»: колонки —
-                        // вертикальные списки, чтение идёт сначала вниз по
-                        // первой колонке, потом по второй. Построчная разметка
-                        // заставляла прокрутку с выделением зигзагом менять
-                        // колонку на каждом шаге.
-                        let c = n / block_rows;
-                        let row_in_block = n % block_rows;
-                        slots.push(Slot {
-                            row: r,
-                            item: match self.rows[r] {
-                                ListRow::Item(i) => Some(i),
-                                ListRow::Header(_) => None,
-                            },
-                            x: self.col_x(c),
-                            y: y + ITEM_H + ROW_GAP + row_in_block as f32 * (ITEM_H + ROW_GAP),
-                            w: col_w,
-                            h: ITEM_H,
-                        });
-                    }
-                    let used = ITEM_H + block_rows as f32 * (ITEM_H + ROW_GAP) + SECTION_GAP;
-                    col_y = [y - LIST_Y0 + used; COLS];
-                    row += 1 + len;
-                }
-                ListRow::Item(_) => {
-                    // Вне секции такого в keymap нет, но на случай: газеткой в
-                    // колонку с меньшей высотой.
-                    let c = usize::from(col_y.get(1).is_some_and(|&y| y < col_y[0]));
-                    let item = match self.rows[row] {
-                        ListRow::Item(i) => i,
-                        ListRow::Header(_) => unreachable!(),
-                    };
-                    slots.push(Slot {
-                        row,
-                        item: Some(item),
-                        x: self.col_x(c),
-                        y: LIST_Y0 + col_y[c],
+                        y: hy + ITEM_H + ROW_GAP + n as f32 * (ITEM_H + ROW_GAP),
                         w: col_w,
                         h: ITEM_H,
                     });
-                    col_y[c] += ITEM_H + ROW_GAP;
-                    row += 1;
                 }
+                offset += ITEM_H + len as f32 * (ITEM_H + ROW_GAP) + SECTION_GAP;
+                row += 1 + len;
+            }
+            ListRow::Item(i) => {
+                // Вне секции такого потока не бывает, но на случай —
+                // как обычная строка списка.
+                slots.push(Slot {
+                    row,
+                    item: Some(*i),
+                    x: PAD_X,
+                    y: LIST_Y0 + offset,
+                    w: col_w,
+                    h: ITEM_H,
+                });
+                offset += ITEM_H + ROW_GAP;
+                row += 1;
             }
         }
-        slots
+    }
+    slots
+}
+
+/// Высота потока от начала списка до его конца.
+fn content_h(rows: &[ListRow], width: f32) -> f32 {
+    layout_slots(rows, width)
+        .iter()
+        .map(|s| s.y + s.h)
+        .fold(LIST_Y0, f32::max)
+}
+
+/// Данные кадра, не зависящие от Wayland: живое окно и снимок рисуют их
+/// одинаковым кодом.
+struct Render<'a> {
+    palette: palette::Palette,
+    rows: &'a [ListRow],
+    items: &'a [Entry],
+    selected: usize,
+    top: f32,
+    query: &'a str,
+    hover: Option<usize>,
+    /// Знаменатель счётчика при поиске — разделы keymap без блока «Частые».
+    groups_total: usize,
+}
+
+/// Отрисовка карточки биндов в `card`. Живое окно даёт карточку во весь буфер,
+/// снимок — по центру сцены. Каркас, шапка и подвал — из `card_frame`, строки
+/// с клавишей и описанием — локальная надстройка.
+fn render(
+    pixmap: &mut tiny_skia::Pixmap,
+    card: geom::Rect,
+    r: &Render<'_>,
+    painter: &mut text::TextPainter,
+    icons: &mut text::TextPainter,
+) {
+    let ui = ui_tokens::ui_palette(r.palette);
+    let scale = ui_tokens::type_scale();
+    let k = text::SCALE;
+
+    card_frame::card(pixmap, card, &ui);
+    card_frame::header(
+        pixmap,
+        painter,
+        icons,
+        card,
+        &ui,
+        TITLE,
+        r.query,
+        PLACEHOLDER,
+    );
+
+    let list_y = card.y + LIST_Y0;
+    let view_h = card.h - card_frame::FOOTER_H - LIST_Y0;
+
+    if r.items.is_empty() {
+        painter.paint(
+            pixmap,
+            "Ничего не найдено",
+            scale.label,
+            ui.muted,
+            card_frame::center_band(
+                geom::Rect::new(
+                    card.x + PAD_X,
+                    list_y,
+                    card.w - PAD_X * 2.0,
+                    view_h.min(ITEM_H),
+                ),
+                scale.label * 2.0,
+            ),
+            text::Align::Start,
+        );
     }
 
-    /// Высота окна под список.
+    // Колонка клавиш по самой длинной клавише текущего списка — как в окне
+    // биндов niri, не шире 45% карточки. Хелпер `display_key` я туда не
+    // копирую: в keymap yazi префикса «XF86» нет, так что ширина по
+    // «сырой» клавише даёт тот же результат. Вынесение общего хелпера —
+    // предмет отдельного решения (см. отчёт KB2).
+    let key_w = r
+        .items
+        .iter()
+        .map(|e| painter.text_width(e.key.as_str(), scale.label))
+        .fold(0.0f32, f32::max)
+        .min(card.w * 0.45);
+
+    // Поток биндов одним столбцом: клавиша слева, описание справа;
+    // выделение — акцентной заливкой строки.
+    let slots: Vec<Slot> = layout_slots(r.rows, card.w)
+        .into_iter()
+        .filter(|s| s.y >= LIST_Y0 + r.top && s.y + s.h <= LIST_Y0 + r.top + view_h)
+        .map(|mut s| {
+            s.y -= r.top;
+            s
+        })
+        .collect();
+    // Подсветка строк — прямая, как в меню: полоса с отступом CARD_INSET=1
+    // лог. px от краёв строки. Hover — той же формы: расхождений между ними
+    // не оставляем.
+    let style = card_frame::RowHighlightStyle {
+        rounded: false,
+        inset: 1.0,
+    };
+    for slot in &slots {
+        let rect = geom::Rect::new(card.x + slot.x, card.y + slot.y, slot.w, slot.h);
+        if let ListRow::Header(label) = &r.rows[slot.row] {
+            // Заголовок секции: полоса во всю ширину плюс акцентная метка
+            // слева.
+            canvas::fill_rect(
+                pixmap,
+                rect.x * k,
+                rect.y * k,
+                rect.w * k,
+                rect.h * k,
+                ui.idle_panel,
+            );
+            canvas::fill_rect(
+                pixmap,
+                rect.x * k,
+                (rect.y + 9.0) * k,
+                3.0 * k,
+                (rect.h - 18.0) * k,
+                ui.accent,
+            );
+            painter.paint_boxed(
+                pixmap,
+                label,
+                scale.caption,
+                ui.accent,
+                card_frame::center_band(
+                    geom::Rect::new(rect.x + 12.0, rect.y, rect.w - 12.0, rect.h),
+                    scale.caption * 2.0,
+                ),
+                text::Align::Start,
+            );
+            continue;
+        }
+        let Some(item) = slot.item else { continue };
+        let Some(e) = r.items.get(item) else { continue };
+        let selected = item == r.selected;
+        if selected {
+            card_frame::select_band(pixmap, rect, &ui, style);
+        } else if r.hover == Some(item) {
+            card_frame::hover_band(pixmap, rect, &ui, style);
+        }
+        let key_x = rect.x + PAD_X;
+        let desc_x = key_x + key_w + PAD_X;
+        let desc_w = rect.right() - desc_x - PAD_X;
+        painter.paint_boxed(
+            pixmap,
+            e.key.as_str(),
+            scale.label,
+            if selected { ui.on_primary } else { ui.accent },
+            card_frame::center_band(
+                geom::Rect::new(key_x, rect.y, key_w, rect.h),
+                scale.label * 2.0,
+            ),
+            text::Align::Start,
+        );
+        painter.paint_boxed(
+            pixmap,
+            e.desc.as_str(),
+            scale.label,
+            if selected { ui.on_primary } else { ui.text },
+            card_frame::center_band(
+                geom::Rect::new(desc_x, rect.y, desc_w, rect.h),
+                scale.label * 2.0,
+            ),
+            text::Align::Start,
+        );
+    }
+
+    // Скроллбар: трек во всю высоту списка и яркий бегунок — как в
+    // привычном варианте, приглушённый одноцветный бегунок читался хуже.
+    let content = (content_h(r.rows, card.w) - LIST_Y0).max(view_h);
+    let overflow = content - view_h;
+    if overflow > 0.5 {
+        card_frame::scrollbar(
+            pixmap,
+            geom::Rect::new(card.x, list_y, card.w, view_h),
+            &ui,
+            content,
+            view_h,
+            r.top,
+            card_frame::ScrollbarStyle {
+                track: true,
+                inset: 6.0,
+                thumb_accent: true,
+            },
+        );
+    }
+
+    // Подвал со подсказками и счётчиком. Контент — счётчик, как и был:
+    // без запроса — число биндов, с запросом — найденное из общего.
+    let items_total = r.items.len();
+    let count = if r.query.is_empty() {
+        format!("{items_total}")
+    } else {
+        format!("{items_total} / {}", r.groups_total)
+    };
+    card_frame::footer(pixmap, painter, card, &ui, HINTS, Some(&count));
+}
+
+impl YaziApp {
     fn view_h(&self) -> f32 {
-        self.height as f32 - FOOTER_H - LIST_Y0
-    }
-
-    /// Нижняя кромка потока в абсолютных координатах.
-    fn content_h(&self) -> f32 {
-        self.layout_slots()
-            .iter()
-            .map(|s| s.y + s.h)
-            .fold(LIST_Y0, f32::max)
+        self.height as f32 - card_frame::FOOTER_H - LIST_Y0
     }
 
     /// Строки, попавшие в окно при текущей прокрутке, уже в координатах окна.
     fn slots(&self) -> Vec<Slot> {
-        // Полоса списка: от LIST_Y0 до низа окна. Сдвиг на `top` — целиком
+        // Полоса списка: от LIST_Y0 до подвала. Сдвиг на `top` — целиком
         // (без вычитания LIST_Y0), иначе список уезжал бы на шапку.
         let band_y0 = LIST_Y0 + self.top;
         let band_y1 = band_y0 + self.view_h();
-        self.layout_slots()
+        layout_slots(&self.rows, self.width as f32)
             .into_iter()
             // Только строки, целиком попавшие в полосу списка: иначе
             // первая/последняя строка наезжала на шапку или подвал.
@@ -325,19 +476,23 @@ impl YaziApp {
 
     /// Абсолютная плашка бинда — по ней курсор держится в поле зрения.
     fn slot_of(&self, item: usize) -> Option<Slot> {
-        self.layout_slots()
+        layout_slots(&self.rows, self.width as f32)
             .into_iter()
             .find(|s| s.item == Some(item))
+    }
+
+    /// Предельная прокрутка: глубже последняя строка всё равно не видна.
+    fn max_top(&self) -> f32 {
+        (self.content_h() - self.height as f32 + card_frame::FOOTER_H).max(0.0)
+    }
+
+    fn content_h(&self) -> f32 {
+        content_h(&self.rows, self.width as f32)
     }
 
     /// Строк на страницу — по высоте окна.
     fn page_lines(&self) -> i32 {
         ((self.view_h() / (ITEM_H + ROW_GAP)).floor() as i32).max(1)
-    }
-
-    /// Предельная прокрутки: глубже последняя строка всё равно не видна.
-    fn max_top(&self) -> f32 {
-        (self.content_h() - self.height as f32 + FOOTER_H).max(0.0)
     }
 
     /// Пересобирает список и поток строк под текущий запрос: в потоке у каждой
@@ -377,6 +532,52 @@ impl YaziApp {
         self.dirty = true;
     }
 
+    /// Общая обработка клавиши для `press_key` и `repeat_key`.
+    fn on_key(&mut self, event: KeyEvent) {
+        match event.keysym {
+            Keysym::Escape => self.exit.store(true, Ordering::Relaxed),
+            Keysym::Return | Keysym::KP_Enter => self.exit.store(true, Ordering::Relaxed),
+            Keysym::Up => self.move_sel(0, -1),
+            Keysym::Down => self.move_sel(0, 1),
+            Keysym::Left => self.move_sel(-1, 0),
+            Keysym::Right => self.move_sel(1, 0),
+            Keysym::Page_Up => self.scroll_by(-self.page_lines()),
+            Keysym::Page_Down => self.scroll_by(self.page_lines()),
+            Keysym::Home => {
+                if !self.items.is_empty() {
+                    self.select(0);
+                }
+            }
+            Keysym::End => {
+                if let Some(i) = self.items.len().checked_sub(1) {
+                    self.select(i);
+                }
+            }
+            Keysym::BackSpace => {
+                self.query.pop();
+                self.rebuild();
+            }
+            _ => {
+                // Ctrl и Super — служебные: на русской раскладке Alt даёт
+                // AltGr-символы («<», «;»), их вводим.
+                if self.mods.ctrl || self.mods.logo {
+                    if (event.keysym == Keysym::u || event.keysym == Keysym::U) && self.mods.ctrl {
+                        self.query.clear();
+                        self.rebuild();
+                    }
+                    return;
+                }
+                if let Some(text) = &event.utf8 {
+                    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+                    if !clean.is_empty() {
+                        self.query.push_str(&clean);
+                        self.rebuild();
+                    }
+                }
+            }
+        }
+    }
+
     fn select(&mut self, item: usize) {
         self.selected = item;
         self.ensure_visible();
@@ -399,13 +600,9 @@ impl YaziApp {
             return;
         }
         let slots = self.slots();
-        let in_column = |c: usize| -> Vec<usize> {
-            let x = self.col_x(c);
-            slots
-                .iter()
-                .filter(|s| s.x == x)
-                .filter_map(|s| s.item)
-                .collect()
+        let in_column = |c: usize| -> Vec<Option<usize>> {
+            let x = col_x(c, self.width as f32);
+            slots.iter().filter(|s| s.x == x).map(|s| s.item).collect()
         };
         let Some(cur) = slots.iter().find(|s| s.item == Some(self.selected)) else {
             return;
@@ -416,16 +613,16 @@ impl YaziApp {
             1
         };
         let col = in_column(from);
-        let Some(pos) = col.iter().position(|&i| Some(i) == cur.item) else {
+        let Some(pos) = col.iter().position(|&i| i == Some(self.selected)) else {
             return;
         };
         let other = from as isize - dx as isize;
         if other >= 0
             && (other as usize) < COLS
-            && let Some(&item) = in_column(other as usize).get(pos)
-            && item != self.selected
+            && let Some(Some(item)) = in_column(other as usize).get(pos)
+            && *item != self.selected
         {
-            self.select(item);
+            self.select(*item);
         }
     }
 
@@ -486,52 +683,6 @@ impl YaziApp {
         }
     }
 
-    /// Общая обработка клавиши для `press_key` и `repeat_key`.
-    fn on_key(&mut self, event: KeyEvent) {
-        match event.keysym {
-            Keysym::Escape => self.exit.store(true, Ordering::Relaxed),
-            Keysym::Return | Keysym::KP_Enter => self.exit.store(true, Ordering::Relaxed),
-            Keysym::Up => self.move_sel(0, -1),
-            Keysym::Down => self.move_sel(0, 1),
-            Keysym::Left => self.move_sel(-1, 0),
-            Keysym::Right => self.move_sel(1, 0),
-            Keysym::Page_Up => self.scroll_by(-self.page_lines()),
-            Keysym::Page_Down => self.scroll_by(self.page_lines()),
-            Keysym::Home => {
-                if !self.items.is_empty() {
-                    self.select(0);
-                }
-            }
-            Keysym::End => {
-                if let Some(i) = self.items.len().checked_sub(1) {
-                    self.select(i);
-                }
-            }
-            Keysym::BackSpace => {
-                self.query.pop();
-                self.rebuild();
-            }
-            _ => {
-                // Ctrl и Super — служебные: на русской раскладке Alt даёт
-                // AltGr-символы («<», «;»), их вводим.
-                if self.mods.ctrl || self.mods.logo {
-                    if (event.keysym == Keysym::u || event.keysym == Keysym::U) && self.mods.ctrl {
-                        self.query.clear();
-                        self.rebuild();
-                    }
-                    return;
-                }
-                if let Some(text) = &event.utf8 {
-                    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
-                    if !clean.is_empty() {
-                        self.query.push_str(&clean);
-                        self.rebuild();
-                    }
-                }
-            }
-        }
-    }
-
     /// Какая строка под курсором. Заголовки не выбираются.
     fn row_at(&self, x: f32, y: f32) -> Option<usize> {
         self.slots()
@@ -540,374 +691,42 @@ impl YaziApp {
             .and_then(|s| s.item)
     }
 
-    fn layout(&mut self, text: &str, size: f32, line_h: f32) -> (f32, Vec<(CacheKey, i32, i32)>) {
-        let mut buffer = Buffer::new_empty(Metrics::new(size * SCALE, line_h * SCALE));
-        let attrs = Attrs::new().family(Family::Name(&self.font));
-        let mut width: f32 = 0.0;
-        let mut glyphs = Vec::new();
-        {
-            let mut b = buffer.borrow_with(&mut self.font_system);
-            b.set_text(text, &attrs, Shaping::Advanced, None);
-            b.set_size(None, None);
-            b.shape_until_scroll(false);
-            for run in b.layout_runs() {
-                width = width.max(run.line_w);
-                for glyph in run.glyphs {
-                    let physical = glyph.physical((0.0, run.line_y), 1.0);
-                    glyphs.push((physical.cache_key, physical.x, physical.y));
-                }
-            }
-        }
-        (width, glyphs)
-    }
-
-    fn text_width(&mut self, text: &str, size: f32) -> f32 {
-        self.layout(text, size, size + 8.0).0
-    }
-
     /// Дельта колеса в целых строках. Формула общая (`shell::axis_steps`):
     /// дробный остаток тачпада копится и отдаётся по целой строке.
     fn axis_step(&mut self, v: &AxisScroll) -> i32 {
         shell::axis_steps(&mut self.scroll_acc, v) as i32
     }
 
-    /// Фактический верх глифов относительно переданного y (logical px).
-    fn visual_top(&mut self, size: f32, line_h: f32) -> f32 {
-        let key = (
-            self.font.clone(),
-            (size * 256.0) as u32,
-            (line_h * 256.0) as u32,
-        );
-        if let Some(&v) = self.top_cache.get(&key) {
-            return v;
-        }
-        let mut buffer = Buffer::new_empty(Metrics::new(size * SCALE, line_h * SCALE));
-        let attrs = Attrs::new().family(Family::Name(&self.font));
-        let mut probes = Vec::new();
-        {
-            let mut b = buffer.borrow_with(&mut self.font_system);
-            b.set_text("AQБДЖ019+/", &attrs, Shaping::Advanced, None);
-            b.set_size(None, None);
-            b.shape_until_scroll(false);
-            for run in b.layout_runs() {
-                for glyph in run.glyphs {
-                    let physical = glyph.physical((0.0, run.line_y), 1.0);
-                    probes.push((physical.cache_key, physical.x, physical.y));
-                }
-            }
-        }
-        let mut top = f32::MAX;
-        for (ck, _, gy) in probes {
-            if let Some(image) = self.swash.get_image_uncached(&mut self.font_system, ck)
-                && matches!(image.content, SwashContent::Mask)
-            {
-                top = top.min(gy as f32 - image.placement.top as f32);
-            }
-        }
-        let top = if top == f32::MAX { 0.0 } else { top / SCALE };
-        self.top_cache.insert(key, top);
-        top
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn draw_text(
-        &mut self,
-        pixmap: &mut tiny_skia::Pixmap,
-        text: &str,
-        size: f32,
-        color: palette::Rgba,
-        x: f32,
-        y: f32,
-        line_h: f32,
-    ) {
-        // y — визуальный верх текста, а не baseline первой строки.
-        let y0 = y - self.visual_top(size, line_h);
-        let (_, glyphs) = self.layout(text, size, line_h);
-        for (key, gx, gy) in glyphs {
-            if let Some(image) = self.swash.get_image_uncached(&mut self.font_system, key)
-                && matches!(image.content, SwashContent::Mask)
-            {
-                blend(
-                    pixmap,
-                    x as i32 + gx,
-                    y0 as i32 + gy - image.placement.top,
-                    image.placement.width,
-                    image.placement.height,
-                    color,
-                    &image.data,
-                );
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// Обрезает по ширине, добавляя «…». Ширину меряем делением пополам:
-    /// перебор по одному символу шейпил строку десятки раз на каждую строку окна.
-    fn draw_text_boxed(
-        &mut self,
-        pixmap: &mut tiny_skia::Pixmap,
-        text: &str,
-        size: f32,
-        color: palette::Rgba,
-        max_width: f32,
-        x: f32,
-        y: f32,
-        line_h: f32,
-    ) {
-        let max_width_px = max_width * SCALE;
-        let mut shown = text.to_string();
-        if self.text_width(&shown, size) > max_width_px {
-            let chars: Vec<char> = shown.chars().collect();
-            let (mut lo, mut hi) = (0usize, chars.len());
-            while lo < hi {
-                let mid = (lo + hi).div_ceil(2);
-                let candidate: String = chars[..mid].iter().collect();
-                let candidate = format!("{candidate}…");
-                if self.text_width(&candidate, size) <= max_width_px {
-                    lo = mid;
-                } else {
-                    hi = mid - 1;
-                }
-            }
-            shown = chars[..lo].iter().collect();
-            shown.push('…');
-        }
-        self.draw_text(pixmap, &shown, size, color, x, y, line_h);
-    }
-
     fn draw(&mut self) {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
-        let pw = (self.width as f32 * SCALE) as u32;
-        let ph = (self.height as f32 * SCALE) as u32;
+        let pw = (self.width as f32 * text::SCALE) as u32;
+        let ph = (self.height as f32 * text::SCALE) as u32;
         let Some(mut pixmap) = tiny_skia::Pixmap::new(pw, ph) else {
             return;
         };
-        let p = ui_palette(self.palette);
-        let k = SCALE;
-        // Кегли меню: заголовок — section_title, строки — label, подписи — caption.
-        let title_size = 13.0;
-        let row_size = 12.0;
-        let caption_size = 12.0;
-        pixmap.fill(p.panel.to_tiny());
-
-        let list_bottom = self.height as f32 - FOOTER_H;
-
-        // Шапка: заголовок слева, по центру полосы; поиск справа — как в меню.
-        self.draw_text(
-            &mut pixmap,
-            TITLE,
-            title_size,
-            p.text,
-            PAD_X * k,
-            18.0 * k,
-            28.0,
-        );
-
-        let sx = self.width as f32 - PAD_X - SEARCH_W;
-        let sy = (LIST_Y0 - SEARCH_H) / 2.0;
-        fill_round_rect(
-            &mut pixmap,
-            sx * k,
-            sy * k,
-            SEARCH_W * k,
-            SEARCH_H * k,
-            6.0 * k,
-            p.idle_panel,
-        );
-        stroke_rect(
-            &mut pixmap,
-            sx * k,
-            sy * k,
-            SEARCH_W * k,
-            SEARCH_H * k,
-            p.border,
-        );
-        self.draw_text(
-            &mut pixmap,
-            SEARCH_ICON,
-            caption_size,
-            p.muted,
-            (sx + 10.0) * k,
-            (sy + 8.0) * k,
-            20.0,
-        );
-        if self.query.is_empty() {
-            self.draw_text(
-                &mut pixmap,
-                PLACEHOLDER,
-                caption_size,
-                p.muted,
-                (sx + 34.0) * k,
-                (sy + 8.0) * k,
-                20.0,
-            );
-        } else {
-            let shown = self.query.clone();
-            self.draw_text_boxed(
-                &mut pixmap,
-                &shown,
-                row_size,
-                p.text,
-                SEARCH_W - 44.0,
-                (sx + 34.0) * k,
-                (sy + 7.0) * k,
-                20.0,
-            );
-        }
-
-        if self.items.is_empty() {
-            self.draw_text(
-                &mut pixmap,
-                "Ничего не найдено",
-                row_size,
-                p.muted,
-                PAD_X * k,
-                (LIST_Y0 + 11.0) * k,
-                20.0,
-            );
-        }
-
-        // Поток: заголовок секции — полоса с акцентной меткой слева,
-        // бинд — клавиша и описание, выделение как в меню.
-        let slots = self.slots();
-        for slot in &slots {
-            if let ListRow::Header(label) = &self.rows[slot.row] {
-                let label = label.clone();
-                fill_rect(
-                    &mut pixmap,
-                    slot.x * k,
-                    slot.y * k,
-                    slot.w * k,
-                    slot.h * k,
-                    p.idle_panel,
-                );
-                fill_rect(
-                    &mut pixmap,
-                    slot.x * k,
-                    (slot.y + 9.0) * k,
-                    3.0 * k,
-                    (slot.h - 18.0) * k,
-                    p.accent,
-                );
-                self.draw_text(
-                    &mut pixmap,
-                    &label,
-                    caption_size,
-                    p.accent,
-                    (slot.x + 12.0) * k,
-                    (slot.y + 9.0) * k,
-                    20.0,
-                );
-                continue;
-            }
-            let Some(item) = slot.item else { continue };
-            let Some(e) = self.items.get(item).cloned() else {
-                continue;
-            };
-            let selected = item == self.selected;
-            if selected {
-                // Как выбранная строка меню: акцентная заливка с закруглением,
-                // текст на ней — тёмный `on_primary`.
-                fill_round_rect(
-                    &mut pixmap,
-                    slot.x * k,
-                    slot.y * k,
-                    slot.w * k,
-                    slot.h * k,
-                    6.0 * k,
-                    p.accent,
-                );
-            }
-            let key_x = slot.x + PAD_X;
-            let desc_x = key_x + KEY_W + PAD_X;
-            let desc_w = slot.x + slot.w - desc_x - PAD_X;
-            self.draw_text_boxed(
-                &mut pixmap,
-                &e.key,
-                row_size,
-                if selected { p.on_primary } else { p.accent },
-                KEY_W,
-                key_x * k,
-                (slot.y + 9.0) * k,
-                20.0,
-            );
-            self.draw_text_boxed(
-                &mut pixmap,
-                &e.desc,
-                row_size,
-                if selected { p.on_primary } else { p.text },
-                desc_w,
-                desc_x * k,
-                (slot.y + 9.0) * k,
-                20.0,
-            );
-        }
-        // Скроллбар: трек во всю высоту списка и яркий бегунок — как в
-        // привычном варианте, приглушённый одноцветный бегунок читался хуже.
-        if self.max_top() > 0.5 {
-            let track_h = self.view_h();
-            let content = (self.content_h() - LIST_Y0).max(track_h);
-            let range = self.max_top().max(1.0);
-            let shown = (track_h / content).clamp(0.08, 1.0);
-            let th = track_h * shown;
-            let ty = LIST_Y0 + self.top / range * (track_h - th);
-            let bx = self.width as f32 - 6.0;
-            fill_rect(
-                &mut pixmap,
-                bx * k,
-                LIST_Y0 * k,
-                2.0 * k,
-                track_h * k,
-                p.border,
-            );
-            fill_rect(&mut pixmap, bx * k, ty * k, 2.0 * k, th * k, p.accent);
-        }
-
-        // Подвал с подсказками и счётчиком — как у меню.
-        fill_rect(
-            &mut pixmap,
-            0.0,
-            list_bottom * k,
-            self.width as f32 * k,
-            1.0,
-            p.border.with_a(0.6),
-        );
-        let items = self.items.len();
-        let count = if self.query.is_empty() {
-            format!("{items}")
-        } else {
-            // Знаменатель — разделы keymap: блок «Частые» при поиске скрыт.
-            let total: usize = strip_favorites(&self.groups)
-                .iter()
-                .map(|(_, e)| e.len())
-                .sum();
-            format!("{items} / {total}")
+        // Знаменатель счётчика — разделы keymap: блок «Частые» при поиске
+        // скрыт, поэтому и считаем без него.
+        let groups_total: usize = strip_favorites(&self.groups)
+            .iter()
+            .map(|(_, e)| e.len())
+            .sum();
+        let r = Render {
+            palette: self.palette,
+            rows: &self.rows,
+            items: &self.items,
+            selected: self.selected,
+            top: self.top,
+            query: &self.query,
+            hover: self.hover,
+            groups_total,
         };
-        let cw = self.text_width(&count, caption_size);
-        self.draw_text(
-            &mut pixmap,
-            &count,
-            caption_size,
-            p.muted,
-            (self.width as f32 - PAD_X) * k - cw,
-            (list_bottom + 14.0) * k,
-            20.0,
-        );
-        self.draw_text(
-            &mut pixmap,
-            HINTS,
-            caption_size,
-            p.muted,
-            PAD_X * k,
-            (list_bottom + 14.0) * k,
-            20.0,
-        );
-
-        // Плотность карточки как у меню: вся отрисовка непрозрачна в буфере,
-        // альфа mul'ится целиком прямо перед отправкой в композитор.
-        apply_window_alpha(&mut pixmap, CARD_ALPHA);
+        let card = geom::Rect::new(0.0, 0.0, self.width as f32, self.height as f32);
+        render(&mut pixmap, card, &r, &mut self.text, &mut self.icons);
+        // Плотность карточки как у меню: отрисовка идёт цветами с альфой
+        // BG_ALPHA, в конце проход домножает карточку на CARD_ALPHA.
+        card_frame::apply_card_alpha(&mut pixmap, card, card_frame::CARD_ALPHA);
 
         let stride = (pw * 4) as i32;
         let Ok((buffer, canvas)) =
@@ -915,6 +734,7 @@ impl YaziApp {
                 .create_buffer(pw as i32, ph as i32, stride, wl_shm::Format::Argb8888)
         else {
             // Пул занят — композитор ещё не отдал предыдущий буфер.
+            // Кадр не рисуем, но и не теряем: пробуем на следующем тике.
             self.dirty = true;
             return;
         };
@@ -924,7 +744,7 @@ impl YaziApp {
             *out = [input[2], input[1], input[0], input[3]];
         }
         let surface = self.window.wl_surface();
-        surface.set_buffer_scale(SCALE as i32);
+        surface.set_buffer_scale(text::SCALE as i32);
         surface.damage_buffer(0, 0, pw as i32, ph as i32);
         let _ = buffer.attach_to(surface);
         self.window.commit();
@@ -1048,10 +868,20 @@ impl PointerHandler for YaziApp {
                 continue;
             }
             match &event.kind {
-                // Наведение мыши не меняет выбранный бинд: подсветка остаётся
-                // под клавиатурным курсором и не прыгает от движения мыши.
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {}
-                PointerEventKind::Leave { .. } => {}
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    // Курсор даёт подложку `hover_bg`, выбор не переносит:
+                    // выбор — стрелки и колесо, как у окна биндов niri.
+                    let idx = self.row_at(event.position.0 as f32, event.position.1 as f32);
+                    if idx != self.hover {
+                        self.hover = idx;
+                        self.dirty = true;
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    if self.hover.take().is_some() {
+                        self.dirty = true;
+                    }
+                }
                 PointerEventKind::Press { button: 0x110, .. } => {
                     if self
                         .row_at(event.position.0 as f32, event.position.1 as f32)
@@ -1166,125 +996,6 @@ impl ProvidesRegistryState for YaziApp {
 delegate_registry!(YaziApp);
 smithay_client_toolkit::delegate_dispatch2!(YaziApp);
 
-/// Альфа всей карточки — эквивалент `apply_card_alpha` меню: буфер рисуется
-/// непрозрачным, дробь умножается на альфу каждого пикселя в конце прохода.
-/// Premultiplied-помощник обязан масштабировать все четыре канала, а не только
-/// альфа-байт.
-fn apply_window_alpha(pixmap: &mut tiny_skia::Pixmap, alpha: f32) {
-    let factor = (alpha.clamp(0.0, 1.0) * 255.0) as u32;
-    for pixel in pixmap.pixels_mut() {
-        if let Some(scaled) = tiny_skia::PremultipliedColorU8::from_rgba(
-            (pixel.red() as u32 * factor / 255) as u8,
-            (pixel.green() as u32 * factor / 255) as u8,
-            (pixel.blue() as u32 * factor / 255) as u8,
-            (pixel.alpha() as u32 * factor / 255) as u8,
-        ) {
-            *pixel = scaled;
-        }
-    }
-}
-
-/// Рамка в один логический пиксель: четыре сегмента по краям. Толщина та же,
-/// что у обводки карточки меню.
-fn stroke_rect(
-    pixmap: &mut tiny_skia::Pixmap,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    color: palette::Rgba,
-) {
-    fill_rect(pixmap, x, y, w, SCALE, color);
-    fill_rect(pixmap, x, y + h - SCALE, w, SCALE, color);
-    fill_rect(pixmap, x, y, SCALE, h, color);
-    fill_rect(pixmap, x + w - SCALE, y, SCALE, h, color);
-}
-
-fn fill_rect(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w: f32, h: f32, color: palette::Rgba) {
-    let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) else {
-        return;
-    };
-    let paint = tiny_skia::Paint {
-        shader: tiny_skia::Shader::SolidColor(color.to_tiny()),
-        anti_alias: false,
-        ..Default::default()
-    };
-    pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
-}
-
-fn fill_round_rect(
-    pixmap: &mut tiny_skia::Pixmap,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    r: f32,
-    color: palette::Rgba,
-) {
-    let r = r.min(w / 2.0).min(h / 2.0);
-    let mut path = tiny_skia::PathBuilder::new();
-    path.move_to(x + r, y);
-    path.line_to(x + w - r, y);
-    path.quad_to(x + w, y, x + w, y + r);
-    path.line_to(x + w, y + h - r);
-    path.quad_to(x + w, y + h, x + w - r, y + h);
-    path.line_to(x + r, y + h);
-    path.quad_to(x, y + h, x, y + h - r);
-    path.line_to(x, y + r);
-    path.quad_to(x, y, x + r, y);
-    path.close();
-    if let Some(path) = path.finish() {
-        let paint = tiny_skia::Paint {
-            shader: tiny_skia::Shader::SolidColor(color.to_tiny()),
-            anti_alias: true,
-            ..Default::default()
-        };
-        pixmap.fill_path(
-            &path,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-    }
-}
-
-fn blend(
-    pixmap: &mut tiny_skia::Pixmap,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    color: palette::Rgba,
-    mask: &[u8],
-) {
-    let pw = pixmap.width() as i32;
-    let ph = pixmap.height() as i32;
-    let pixels = pixmap.pixels_mut();
-    for row in 0..h as i32 {
-        for col in 0..w as i32 {
-            let xx = x + col;
-            let yy = y + row;
-            if xx < 0 || yy < 0 || xx >= pw || yy >= ph {
-                continue;
-            }
-            let alpha = mask[(row * w as i32 + col) as usize] as u32 * color.3 as u32 / 255;
-            if alpha == 0 {
-                continue;
-            }
-            let dst = &mut pixels[(yy * pw + xx) as usize];
-            let inv = 255 - alpha;
-            let nr = (color.0 as u32 * alpha / 255 + dst.red() as u32 * inv / 255).min(255) as u8;
-            let ng = (color.1 as u32 * alpha / 255 + dst.green() as u32 * inv / 255).min(255) as u8;
-            let nb = (color.2 as u32 * alpha / 255 + dst.blue() as u32 * inv / 255).min(255) as u8;
-            let na = (alpha + dst.alpha() as u32 * inv / 255).min(255) as u8;
-            if let Some(px) = tiny_skia::PremultipliedColorU8::from_rgba(nr, ng, nb, na) {
-                *dst = px;
-            }
-        }
-    }
-}
-
 fn main() {
     let conn = Connection::connect_to_env().expect("wayland connection");
     let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
@@ -1301,7 +1012,7 @@ fn main() {
     window.commit();
 
     let exit = Arc::new(AtomicBool::new(false));
-    // Буфер 900x620 при scale 2 — это ~8.9 МБ; держим четыре, иначе при быстром
+    // Буфер 440x452 при scale 2 — это ~3.2 МБ; держим четыре, иначе при быстром
     // вводе пул кончается и кадр не рисуется.
     let pool = SlotPool::new(40_000_000, &shm).expect("shm pool");
     let groups = load_groups();
@@ -1318,15 +1029,14 @@ fn main() {
         keyboard: None,
         mods: Modifiers::default(),
         repeat: Repeat::default(),
-        font_system: FontSystem::new(),
-        swash: SwashCache::new(),
-        top_cache: HashMap::new(),
-        font: "JetBrainsMono Nerd Font Propo".to_string(),
+        text: text::TextPainter::new(&ui_tokens::font_name()),
+        icons: text::TextPainter::new(settings_icons::FONT),
         query: String::new(),
         groups,
         items: Vec::new(),
         rows: Vec::new(),
         selected: 0,
+        hover: None,
         top: 0.0,
         scroll_acc: 0.0,
         palette: palette::load(),
