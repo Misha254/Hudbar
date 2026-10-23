@@ -599,4 +599,43 @@ mod tests {
             .expect("центр");
         assert!(middle.alpha() > 0, "центр карточки залит");
     }
+
+    /// Наложение полупрозрачной карточки на непрозрачную сцену: пикселей с
+    /// альфой меньше 255 не остаётся, под карточкой — смесь, вне карточки
+    /// фон не меняется. Перенесено из hud_keybinds.rs вместе с выносом
+    /// `blend_card` в общий каркас (KB2.1).
+    #[test]
+    fn blend_card_leaves_no_translucent_pixels() {
+        let mut scene = tiny_skia::Pixmap::new(4, 4).expect("scene");
+        for pixel in scene.pixels_mut() {
+            *pixel = tiny_skia::PremultipliedColorU8::from_rgba(10, 20, 30, 255).expect("color");
+        }
+        let mut overlay = tiny_skia::Pixmap::new(2, 2).expect("card");
+        for pixel in overlay.pixels_mut() {
+            // premultiplied: каналы не могут быть больше альфы
+            *pixel = tiny_skia::PremultipliedColorU8::from_rgba(64, 64, 64, 128).expect("color");
+        }
+        blend_card(&mut scene, &overlay, 1, 1);
+        for pixel in scene.pixels() {
+            assert_eq!(pixel.alpha(), 255, "сцена обязана остаться непрозрачной");
+        }
+        let over = scene.pixel(1, 1).expect("пиксель под карточкой");
+        // Сравнение в u32: в u8 промежуточное 10 * 127 не влезает.
+        let expected = |accent: u8| u32::from(accent) * (255 - 128) / 255;
+        assert_eq!(
+            u32::from(over.red()),
+            64 + expected(10),
+            "смесь по красному"
+        );
+        assert_eq!(
+            u32::from(over.green()),
+            64 + expected(20),
+            "смесь по зелёному"
+        );
+        assert_eq!(u32::from(over.blue()), 64 + expected(30), "смесь по синему");
+        let outside = scene.pixel(0, 3).expect("пиксель вне карточки");
+        assert_eq!(outside.red(), 10, "фон вне карточки не трогается");
+        assert_eq!(outside.green(), 20);
+        assert_eq!(outside.blue(), 30);
+    }
 }
