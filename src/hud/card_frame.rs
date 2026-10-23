@@ -348,6 +348,47 @@ fn search_field(
     }
 }
 
+/// Заголовок секции в списке биндов: тёмная полоса-фон во всю ширину
+/// строки, слева акцентная метка, подпись акцентом caption'ом. Решение
+/// KB2.1 — полосу оставить; раньше этот набор жил копиями в обоих окнах
+/// биндов, теперь общий.
+pub fn section_header(
+    pixmap: &mut tiny_skia::Pixmap,
+    text: &mut TextPainter,
+    rect: Rect,
+    ui: &UiPalette,
+    label: &str,
+) {
+    let scale = type_scale();
+    fill_rect(
+        pixmap,
+        rect.x * SCALE,
+        rect.y * SCALE,
+        rect.w * SCALE,
+        rect.h * SCALE,
+        ui.idle_panel,
+    );
+    fill_rect(
+        pixmap,
+        rect.x * SCALE,
+        (rect.y + 9.0) * SCALE,
+        3.0 * SCALE,
+        (rect.h - 18.0) * SCALE,
+        ui.accent,
+    );
+    text.paint_boxed(
+        pixmap,
+        label,
+        scale.caption,
+        ui.accent,
+        center_band(
+            Rect::new(rect.x + 12.0, rect.y, rect.w - 12.0, rect.h),
+            scale.caption * 2.0,
+        ),
+        Align::Start,
+    );
+}
+
 /// Подвал: hairline-разделитель, подсказки слева, счётчик справа — как в
 /// меню (footer.rs:12-97), всё по `center_band`. Подсказки одной строкой с
 /// усечением: трёхуровневое сжатие меню здесь излишне — набор подсказок у

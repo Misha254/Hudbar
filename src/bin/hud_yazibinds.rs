@@ -286,7 +286,6 @@ fn render(
 ) {
     let ui = ui_tokens::ui_palette(r.palette);
     let scale = ui_tokens::type_scale();
-    let k = text::SCALE;
 
     card_frame::card(pixmap, card, &ui);
     card_frame::header(
@@ -354,35 +353,9 @@ fn render(
     for slot in &slots {
         let rect = geom::Rect::new(card.x + slot.x, card.y + slot.y, slot.w, slot.h);
         if let ListRow::Header(label) = &r.rows[slot.row] {
-            // Заголовок секции: полоса во всю ширину плюс акцентная метка
-            // слева.
-            canvas::fill_rect(
-                pixmap,
-                rect.x * k,
-                rect.y * k,
-                rect.w * k,
-                rect.h * k,
-                ui.idle_panel,
-            );
-            canvas::fill_rect(
-                pixmap,
-                rect.x * k,
-                (rect.y + 9.0) * k,
-                3.0 * k,
-                (rect.h - 18.0) * k,
-                ui.accent,
-            );
-            painter.paint_boxed(
-                pixmap,
-                label,
-                scale.caption,
-                ui.accent,
-                card_frame::center_band(
-                    geom::Rect::new(rect.x + 12.0, rect.y, rect.w - 12.0, rect.h),
-                    scale.caption * 2.0,
-                ),
-                text::Align::Start,
-            );
+            // Заголовок секции: общий в card_frame (тёмная полоса-фон,
+            // акцентная метка слева, подпись акцентом).
+            card_frame::section_header(pixmap, painter, rect, &ui, label);
             continue;
         }
         let Some(item) = slot.item else { continue };
