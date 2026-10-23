@@ -996,7 +996,161 @@ impl ProvidesRegistryState for YaziApp {
 delegate_registry!(YaziApp);
 smithay_client_toolkit::delegate_dispatch2!(YaziApp);
 
+/// Демо-данные снимка: две секции, 14 биндов из keymap yazi. Питают и
+/// снапшот, и тесты колонки клавиш. Блока «Частые» здесь нет совсем:
+/// счётчик и поиск в живом окне строго свои, снимок их не проверяет.
+fn demo_groups() -> Vec<(String, Vec<Entry>)> {
+    let keys = [
+        (
+            "Навигация",
+            [
+                ("j", "Вниз"),
+                ("k", "Вверх"),
+                ("gg", "Начало списка"),
+                ("G", "Конец списка"),
+                ("Return", "Открыть"),
+                ("Backspace", "Каталог выше"),
+                ("q", "Выход"),
+            ],
+        ),
+        (
+            "Операции с файлами",
+            [
+                ("Space", "Отметить"),
+                ("y", "Скопировать"),
+                ("x", "Вырезать"),
+                ("p", "Вставить"),
+                ("d", "Удалить"),
+                ("r", "Переименовать"),
+                (".", "Скрытые файлы"),
+            ],
+        ),
+    ];
+    keys.iter()
+        .map(|(name, pairs)| {
+            (
+                name.to_string(),
+                pairs
+                    .iter()
+                    .map(|(k, d)| Entry::new(k.to_string(), d.to_string()))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// `hud-yazibinds-rs --snapshot <out.png>`: тот же `render`, что у живого
+/// окна, но без Wayland. Демо-данных хватает на прокрутку: две секции,
+/// 14 биндов, выбран пятый, список прокручен на три строки. Фон сцены —
+/// как у снимков меню (menu/snapshot.rs): градиент, карточка по центру.
+/// Карточка кладётся на сцену настоящим альфа-смешиванием
+/// (`card_frame::blend_card`): пиксели снимка непрозрачные, как после
+/// композитора в живом окне.
+fn snapshot(out: &str) {
+    // Цвета сцены — из menu/snapshot.rs (:35-37): верх и горизонт градиента.
+    const BACKDROP_TOP: palette::Rgba = palette::Rgba(0x1a, 0x1f, 0x30, 255);
+    const BACKDROP_HORIZON: palette::Rgba = palette::Rgba(0x11, 0x15, 0x24, 255);
+    const SCENE_W: f32 = 1200.0;
+    const SCENE_H: f32 = 800.0;
+
+    let groups = demo_groups();
+    let items = binds_layout::entries_from_groups(&groups, "");
+    let mut rows: Vec<ListRow> = Vec::new();
+    let mut item = 0;
+    for (name, entries) in &groups {
+        rows.push(ListRow::Header(name.clone()));
+        for _ in entries {
+            rows.push(ListRow::Item(item));
+            item += 1;
+        }
+    }
+    let r = Render {
+        palette: palette::load(),
+        rows: &rows,
+        items: &items,
+        selected: 5,
+        top: 90.0,
+        query: "",
+        hover: None,
+        groups_total: items.len(),
+    };
+
+    let height = card_frame::card_height(card_frame::ROOT_ROWS);
+    let card = geom::Rect::new(
+        (SCENE_W - card_frame::CARD_W) / 2.0,
+        (SCENE_H - height) / 2.0,
+        card_frame::CARD_W,
+        height,
+    );
+    let mut pixmap = tiny_skia::Pixmap::new(
+        (SCENE_W * text::SCALE) as u32,
+        (SCENE_H * text::SCALE) as u32,
+    )
+    .expect("pixmap");
+    // Градиентный фон сцены — построчно, как у снимков меню.
+    let width = pixmap.width();
+    let scene_height = pixmap.height();
+    {
+        let pixels = pixmap.pixels_mut();
+        for y in 0..scene_height {
+            let t = y as f32 / scene_height.max(1) as f32;
+            let red = (BACKDROP_TOP.0 as f32
+                + (BACKDROP_HORIZON.0 as f32 - BACKDROP_TOP.0 as f32) * t)
+                as u8;
+            let green = (BACKDROP_TOP.1 as f32
+                + (BACKDROP_HORIZON.1 as f32 - BACKDROP_TOP.1 as f32) * t)
+                as u8;
+            let blue = (BACKDROP_TOP.2 as f32
+                + (BACKDROP_HORIZON.2 as f32 - BACKDROP_TOP.2 as f32) * t)
+                as u8;
+            let row = y as usize * width as usize;
+            for x in 0..width as usize {
+                if let Some(color) =
+                    tiny_skia::PremultipliedColorU8::from_rgba(red, green, blue, 255)
+                {
+                    pixels[row + x] = color;
+                }
+            }
+        }
+    }
+    let mut painter = text::TextPainter::new(&ui_tokens::font_name());
+    let mut icons = text::TextPainter::new(settings_icons::FONT);
+    // Карточка рисуется в отдельный буфер тем же кодом, что и живое окно,
+    // с той же плотностью (`apply_card_alpha`), и уже полупрозрачной
+    // смешивается на непрозрачную сцену — пиксели снимка выходят
+    // непрозрачными, как после композитора.
+    let mut card_pixmap =
+        tiny_skia::Pixmap::new((card.w * text::SCALE) as u32, (card.h * text::SCALE) as u32)
+            .expect("card pixmap");
+    let card_rect = geom::Rect::new(0.0, 0.0, card.w, card.h);
+    render(&mut card_pixmap, card_rect, &r, &mut painter, &mut icons);
+    card_frame::apply_card_alpha(&mut card_pixmap, card_rect, card_frame::CARD_ALPHA);
+    card_frame::blend_card(
+        &mut pixmap,
+        &card_pixmap,
+        (card.x * text::SCALE) as i32,
+        (card.y * text::SCALE) as i32,
+    );
+    if let Err(error) = canvas::write_png(&pixmap, std::path::Path::new(out)) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+    println!("yazi {}x{} → {out}", pixmap.width(), pixmap.height());
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--snapshot") {
+        match args.get(1) {
+            Some(out) => snapshot(out),
+            None => {
+                eprintln!("использование: hud-yazibinds-rs --snapshot <out.png>");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+
     let conn = Connection::connect_to_env().expect("wayland connection");
     let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
     let qh = event_queue.handle();
@@ -1080,5 +1234,71 @@ fn main() {
             app.dirty = false;
             app.draw();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Наложение карточки на сцену (`card_frame::blend_card`): пикселей с
+    /// альфой меньше 255 не остаётся, под карточкой — смесь, вне карточки
+    /// фон не меняется.
+    #[test]
+    fn blend_card_leaves_no_translucent_pixels() {
+        let mut scene = tiny_skia::Pixmap::new(4, 4).expect("scene");
+        for pixel in scene.pixels_mut() {
+            *pixel = tiny_skia::PremultipliedColorU8::from_rgba(10, 20, 30, 255).expect("color");
+        }
+        let mut card = tiny_skia::Pixmap::new(2, 2).expect("card");
+        for pixel in card.pixels_mut() {
+            // premultiplied: каналы не могут быть больше альфы
+            *pixel = tiny_skia::PremultipliedColorU8::from_rgba(64, 64, 64, 128).expect("color");
+        }
+        card_frame::blend_card(&mut scene, &card, 1, 1);
+        for pixel in scene.pixels() {
+            assert_eq!(pixel.alpha(), 255, "сцена обязана остаться непрозрачной");
+        }
+        let over = scene.pixel(1, 1).expect("пиксель под карточкой");
+        // Сравнение в u32: в u8 промежуточное 10 * 127 не влезает.
+        let expected = |accent: u8| u32::from(accent) * (255 - 128) / 255;
+        assert_eq!(
+            u32::from(over.red()),
+            64 + expected(10),
+            "смесь по красному"
+        );
+        assert_eq!(
+            u32::from(over.green()),
+            64 + expected(20),
+            "смесь по зелёному"
+        );
+        assert_eq!(u32::from(over.blue()), 64 + expected(30), "смесь по синему");
+        let outside = scene.pixel(0, 3).expect("пиксель вне карточки");
+        assert_eq!(outside.red(), 10, "фон вне карточки не трогается");
+        assert_eq!(outside.green(), 20);
+        assert_eq!(outside.blue(), 30);
+    }
+
+    /// В демо-данных снапшота ни одна клавиша не усечена: самая длинная
+    /// ниже потолка 45% ширины карточки.
+    #[test]
+    fn demo_keys_fit_their_column() {
+        let items = binds_layout::entries_from_groups(&demo_groups(), "");
+        let mut painter = text::TextPainter::new(&ui_tokens::font_name());
+        let size = ui_tokens::type_scale().label;
+        let key_w = items
+            .iter()
+            .map(|e| painter.text_width(e.key.as_str(), size))
+            .fold(0.0f32, f32::max)
+            .min(card_frame::CARD_W * 0.45);
+        for entry in &items {
+            assert!(
+                painter.text_width(entry.key.as_str(), size) <= key_w,
+                "{} не влезает в колонку {key_w:.1}",
+                entry.key
+            );
+        }
+        // И потолок уважен: колонка не тянет атмосферу шире 45% карточки.
+        assert!(key_w <= card_frame::CARD_W * 0.45 + f32::EPSILON);
     }
 }

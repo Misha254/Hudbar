@@ -105,6 +105,51 @@ pub fn apply_card_alpha(pixmap: &mut tiny_skia::Pixmap, card: Rect, alpha: f32) 
     }
 }
 
+/// Кладёт полупрозрачную карточку на непрозрачную сцену настоящим
+/// source-over смешиванием — роль композитора для снапшотов: живое окно
+/// отдаёт полупрозрачный буфер композитору, который смешивает его с
+/// обоями, а снимок всё это делает сам: каналы premultiplied-карточки
+/// домешивают фон, альфа результата фиксируется в 255. Обратный
+/// `apply_card_alpha`: тот применяется к буферу карточки, этот — уже
+/// к сцене. Рисовать карточку прямо в сцену нельзя: пиксели остались бы
+/// полупрозрачными и PNG смотрелся иначе, чем окно.
+pub fn blend_card(scene: &mut tiny_skia::Pixmap, card: &tiny_skia::Pixmap, x: i32, y: i32) {
+    let width = scene.width() as i32;
+    let height = scene.height() as i32;
+    let card_w = card.width() as i32;
+    let card_h = card.height() as i32;
+    let scene_pixels = scene.pixels_mut();
+    let card_pixels = card.pixels();
+    for cy in 0..card_h {
+        let sy = y + cy;
+        if sy < 0 || sy >= height {
+            continue;
+        }
+        for cx in 0..card_w {
+            let sx = x + cx;
+            if sx < 0 || sx >= width {
+                continue;
+            }
+            let src = card_pixels[(cy * card_w + cx) as usize];
+            let alpha = src.alpha() as u32;
+            if alpha == 0 {
+                continue;
+            }
+            // out = src + dst * (1 — alpha/255) по каждому premultiplied-каналу.
+            let mix = |s: u8, d: u8| (s as u32 + d as u32 * (255 - alpha) / 255) as u8;
+            let dst = &mut scene_pixels[(sy * width + sx) as usize];
+            if let Some(color) = tiny_skia::PremultipliedColorU8::from_rgba(
+                mix(src.red(), dst.red()),
+                mix(src.green(), dst.green()),
+                mix(src.blue(), dst.blue()),
+                255,
+            ) {
+                *dst = color;
+            }
+        }
+    }
+}
+
 // ─────────────────────────── Стили ───────────────────────────
 
 /// Спецификация скроллбара. У окон биндов — трек во всю высоту списка и
