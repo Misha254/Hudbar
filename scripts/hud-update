@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# Обновление системы HUDbar: pacman/AUR, Flatpak и проверка ожидающих
+# обновлений. Запускается из меню в отдельном окне kitty.
+#
+# Использование:
+#   hud-update [--dry-run] <all|pacman|aur|flatpak|check>
+#
+# Скрипт не использует eval и sh -c: все команды собираются массивами и
+# запускаются напрямую. Проверка обновлений ничего не меняет, остальные
+# режимы требуют подтверждения пользователя в терминале.
+set -euo pipefail
+
+usage() {
+    cat >&2 <<'EOF'
+Использование: hud-update [--dry-run] <all|pacman|aur|flatpak|check>
+
+  all       обновить pacman/AUR и Flatpak
+  pacman    обновить только пакеты pacman
+  aur       обновить только пакеты AUR (paru или yay)
+  flatpak   обновить только Flatpak
+  check     показать ожидающие обновления, ничего не меняя
+
+  --dry-run показать команды, которые были бы выполнены
+EOF
+    exit 2
+}
+
+if ((EUID == 0)); then
+    printf 'Не запускайте hud-update от root: скрипт сам вызовет sudo там, где нужно.\n' >&2
+    exit 1
+fi
+
+dry_run=0
+if [[ ${1:-} == "--dry-run" ]]; then
+    dry_run=1
+    shift
+fi
+
+(( $# == 1 )) || usage
+mode=$1
+case "$mode" in
+    all | pacman | aur | flatpak | check) ;;
+    *) usage ;;
+esac
+
+have() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+step() {
+    printf '\n== %s ==\n' "$1"
+}
+
+fail() {
+    printf 'Ошибка на шаге: %s\n' "$1" >&2
+    exit 1
+}
+
+# Печатает команду в --dry-run, иначе выполняет её. Аргументы приходят
+# массивом: ни eval, ни sh -c здесь нет.
+run_cmd() {
+    if ((dry_run)); then
+        local first=1
+        local arg
+        for arg in "$@"; do
+            if ((first)); then
+                first=0
+            else
+                printf ' '
+            fi
+            printf '%s' "$arg"
+        done
+        printf '\n'
+        return 0
+    fi
+    "$@"
+}
+
+# paru/yay сами вызывают pacman и берут его блокировку, поэтому проверка
+# общая для всех шагов, которые обновляют пакеты.
+check_pacman_lock() {
+    if ((dry_run)); then
+        return 0
+    fi
+    if [[ -e /var/lib/pacman/db.lck ]]; then
+        printf 'Обнаружен /var/lib/pacman/db.lck: другой pacman уже работает.\n' >&2
+        printf 'Дождитесь его завершения; файл блокировки удалять не нужно.\n' >&2
+        exit 1
+    fi
+}
+
+aur_helper() {
+    if have paru; then
+        printf 'paru\n'
+    elif have yay; then
+        printf 'yay\n'
+    fi
+}
+
+do_pacman() {
+    step "Обновление пакетов pacman"
+    check_pacman_lock
+    run_cmd sudo pacman -Syu || fail "sudo pacman -Syu"
+}
+
+do_aur() {
+    local helper
+    helper=$(aur_helper)
+    if [[ -z $helper ]]; then
+        printf 'Нужен один из помощников AUR: paru или yay.\n' >&2
+        exit 1
+    fi
+    step "Обновление пакетов AUR через $helper"
+    check_pacman_lock
+    run_cmd "$helper" -Sua || fail "$helper -Sua"
+}
+
+do_flatpak() {
+    if ! have flatpak; then
+        printf 'Flatpak не установлен: обновлять нечего.\n' >&2
+        exit 1
+    fi
+    step "Обновление Flatpak"
+    run_cmd flatpak update || fail "flatpak update"
+}
+
+do_all() {
+    local helper
+    helper=$(aur_helper)
+    if [[ $helper == "paru" || $helper == "yay" ]]; then
+        step "Обновление пакетов pacman и AUR через $helper"
+        check_pacman_lock
+        run_cmd "$helper" -Syu || fail "$helper -Syu"
+    else
+        do_pacman
+    fi
+    if have flatpak; then
+        do_flatpak
+    fi
+}
+
+do_check() {
+    step "Pacman: ожидающие обновления"
+    if have checkupdates; then
+        run_cmd checkupdates || printf 'Не удалось проверить обновления pacman.\n' >&2
+    else
+        printf 'checkupdates не найден. Установите пакет pacman-contrib.\n' >&2
+    fi
+
+    step "AUR: ожидающие обновления"
+    local helper
+    helper=$(aur_helper)
+    if [[ $helper == "paru" ]]; then
+        run_cmd paru -Qua || printf 'Не удалось проверить обновления AUR.\n' >&2
+    elif [[ $helper == "yay" ]]; then
+        run_cmd yay -Qua || printf 'Не удалось проверить обновления AUR.\n' >&2
+    else
+        printf 'Нужен один из помощников AUR: paru или yay.\n' >&2
+    fi
+
+    step "Flatpak: ожидающие обновления"
+    if have flatpak; then
+        run_cmd flatpak remote-ls --updates || printf 'Не удалось проверить обновления Flatpak.\n' >&2
+    else
+        printf 'Flatpak не установлен: проверять нечего.\n' >&2
+    fi
+}
+
+case "$mode" in
+    all) do_all ;;
+    pacman) do_pacman ;;
+    aur) do_aur ;;
+    flatpak) do_flatpak ;;
+    check) do_check ;;
+esac
+
+if ((!dry_run)) && [[ -t 0 ]]; then
+    read -r -p "Готово. Нажмите Enter, чтобы закрыть окно…" _ || true
+fi
