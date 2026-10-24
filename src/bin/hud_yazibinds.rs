@@ -1239,12 +1239,16 @@ mod tests {
     fn snapshot_ignores_config_palette() {
         // «Палитры конфига»: текущая gold-тема и built-in лавандовая
         // (значения как из реально возможного colors.css).
-        let mut gold = palette::Palette::default();
-        gold.primary = palette::Rgba(0xdf, 0xc5, 0x6d, 255);
-        gold.on_primary = palette::Rgba(0x39, 0x2e, 0x00, 255);
-        let mut lavender = palette::Palette::default();
-        lavender.primary = palette::Rgba(0x8f, 0xa9, 0xff, 255);
-        lavender.on_primary = palette::Rgba(0x1a, 0x2c, 0x5f, 255);
+        let gold = palette::Palette {
+            primary: palette::Rgba(0xdf, 0xc5, 0x6d, 255),
+            on_primary: palette::Rgba(0x39, 0x2e, 0x00, 255),
+            ..Default::default()
+        };
+        let lavender = palette::Palette {
+            primary: palette::Rgba(0x8f, 0xa9, 0xff, 255),
+            on_primary: palette::Rgba(0x1a, 0x2c, 0x5f, 255),
+            ..Default::default()
+        };
         assert_eq!(
             scene_pixmap(&gold).data(),
             scene_pixmap(&lavender).data(),
