@@ -11,29 +11,39 @@
 set -euo pipefail
 
 usage() {
-    cat >&2 <<'EOF'
-Использование: hud-update [--dry-run] <all|pacman|aur|flatpak|check>
-
-  all       обновить pacman/AUR и Flatpak
-  pacman    обновить только пакеты pacman
-  aur       обновить только пакеты AUR (paru или yay)
-  flatpak   обновить только Flatpak
-  check     показать ожидающие обновления, ничего не меняя
-
-  --dry-run показать команды, которые были бы выполнены
-EOF
+    # Только builtin'ы: usage должен работать при любом PATH.
+    printf '%s\n' 'Использование: hud-update [--dry-run] <all|pacman|aur|flatpak|check>' '' \
+        '  all       обновить pacman/AUR и Flatpak' \
+        '  pacman    обновить только пакеты pacman' \
+        '  aur       обновить только пакеты AUR (paru или yay)' \
+        '  flatpak   обновить только Flatpak' \
+        '  check     показать ожидающие обновления, ничего не меняя' '' \
+        '  --dry-run показать команды, которые были бы выполнены' >&2
     exit 2
 }
-
-if ((EUID == 0)); then
-    printf 'Не запускайте hud-update от root: скрипт сам вызовет sudo там, где нужно.\n' >&2
-    exit 1
-fi
 
 dry_run=0
 if [[ ${1:-} == "--dry-run" ]]; then
     dry_run=1
     shift
+fi
+
+# Пауза на любом выходе: окно kitty в противном случае закрылось бы
+# мгновенно, и ошибку было бы не прочитать. Код выхода сохраняется,
+# для --dry-run и когда stdin не терминал паузы нет.
+on_exit() {
+    local status=$?
+    trap - EXIT
+    if ((!dry_run)) && [[ -t 0 ]]; then
+        read -r -p "Нажмите Enter, чтобы закрыть окно…" _ || true
+    fi
+    exit "$status"
+}
+trap on_exit EXIT
+
+if ((EUID == 0)); then
+    printf 'Не запускайте hud-update от root: скрипт сам вызовет sudo там, где нужно.\n' >&2
+    exit 1
 fi
 
 (( $# == 1 )) || usage
@@ -56,21 +66,26 @@ fail() {
     exit 1
 }
 
+# Печатает команду одной строкой (для --dry-run).
+print_cmd() {
+    local first=1
+    local arg
+    for arg in "$@"; do
+        if ((first)); then
+            first=0
+        else
+            printf ' '
+        fi
+        printf '%s' "$arg"
+    done
+    printf '\n'
+}
+
 # Печатает команду в --dry-run, иначе выполняет её. Аргументы приходят
 # массивом: ни eval, ни sh -c здесь нет.
 run_cmd() {
     if ((dry_run)); then
-        local first=1
-        local arg
-        for arg in "$@"; do
-            if ((first)); then
-                first=0
-            else
-                printf ' '
-            fi
-            printf '%s' "$arg"
-        done
-        printf '\n'
+        print_cmd "$@"
         return 0
     fi
     "$@"
@@ -139,10 +154,56 @@ do_all() {
     fi
 }
 
+# Запускает команду проверки, разделяя её stdout и stderr без временных
+# файлов и eval: stdout уходит в OUT, stderr — в ERR, код — в RC.
+# Классический трюк с перестановкой дескрипторов: внутренняя подстановка
+# ловит stderr, внешняя — stdout, код выхода доходит через присваивание.
+run_capture() {
+    # Инициализация обязательна: при неудаче команды вложенная подстановка
+    # может не завершить присваивание, а set -u строго требует переменные.
+    OUT=
+    ERR=
+    RC=0
+    OUT=$( { ERR=$("$@" 2>&1 1>&3 3>&-); } 3>&1 ) || RC=$?
+}
+
 do_check() {
+    if ((dry_run)); then
+        step "Pacman: ожидающие обновления"
+        if have checkupdates; then
+            print_cmd checkupdates
+        else
+            printf 'checkupdates не найден. Установите пакет pacman-contrib.\n'
+        fi
+        step "AUR: ожидающие обновления"
+        local helper
+        helper=$(aur_helper)
+        if [[ $helper == "paru" ]]; then
+            print_cmd paru -Qua
+        elif [[ $helper == "yay" ]]; then
+            print_cmd yay -Qua
+        else
+            printf 'Нужен один из помощников AUR: paru или yay.\n'
+        fi
+        step "Flatpak: ожидающие обновления"
+        if have flatpak; then
+            print_cmd flatpak remote-ls --updates
+        else
+            printf 'Flatpak не установлен: проверять нечего.\n'
+        fi
+        return 0
+    fi
+
     step "Pacman: ожидающие обновления"
     if have checkupdates; then
-        run_cmd checkupdates || printf 'Не удалось проверить обновления pacman.\n' >&2
+        run_capture checkupdates
+        if ((RC == 0)); then
+            [[ -n $OUT ]] && printf '%s\n' "$OUT" || printf 'Обновлений pacman нет.\n'
+        elif ((RC == 2)); then
+            printf 'Обновлений pacman нет.\n'
+        else
+            printf 'Не удалось проверить обновления pacman.\n' >&2
+        fi
     else
         printf 'checkupdates не найден. Установите пакет pacman-contrib.\n' >&2
     fi
@@ -150,17 +211,27 @@ do_check() {
     step "AUR: ожидающие обновления"
     local helper
     helper=$(aur_helper)
-    if [[ $helper == "paru" ]]; then
-        run_cmd paru -Qua || printf 'Не удалось проверить обновления AUR.\n' >&2
-    elif [[ $helper == "yay" ]]; then
-        run_cmd yay -Qua || printf 'Не удалось проверить обновления AUR.\n' >&2
+    if [[ $helper == "paru" || $helper == "yay" ]]; then
+        run_capture "$helper" -Qua
+        if ((RC == 0)); then
+            [[ -n $OUT ]] && printf '%s\n' "$OUT" || printf 'Обновлений AUR нет.\n'
+        elif ((RC == 1)) && [[ -z $OUT && -z $ERR ]]; then
+            printf 'Обновлений AUR нет.\n'
+        else
+            printf 'Не удалось проверить обновления AUR.\n' >&2
+        fi
     else
         printf 'Нужен один из помощников AUR: paru или yay.\n' >&2
     fi
 
     step "Flatpak: ожидающие обновления"
     if have flatpak; then
-        run_cmd flatpak remote-ls --updates || printf 'Не удалось проверить обновления Flatpak.\n' >&2
+        run_capture flatpak remote-ls --updates
+        if ((RC == 0)); then
+            [[ -n $OUT ]] && printf '%s\n' "$OUT" || printf 'Обновлений Flatpak нет.\n'
+        else
+            printf 'Не удалось проверить обновления Flatpak.\n' >&2
+        fi
     else
         printf 'Flatpak не установлен: проверять нечего.\n' >&2
     fi
@@ -173,7 +244,3 @@ case "$mode" in
     flatpak) do_flatpak ;;
     check) do_check ;;
 esac
-
-if ((!dry_run)) && [[ -t 0 ]]; then
-    read -r -p "Готово. Нажмите Enter, чтобы закрыть окно…" _ || true
-fi
