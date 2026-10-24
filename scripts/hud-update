@@ -154,17 +154,13 @@ do_all() {
     fi
 }
 
-# Запускает команду проверки, разделяя её stdout и stderr без временных
-# файлов и eval: stdout уходит в OUT, stderr — в ERR, код — в RC.
-# Классический трюк с перестановкой дескрипторов: внутренняя подстановка
-# ловит stderr, внешняя — stdout, код выхода доходит через присваивание.
+# Запускает команду проверки: объединяет stdout и stderr в OUT, код — в RC.
+# Для режима check важно лишь, пуст ли вывод и каков код; не важно,
+# из stdout или stderr пришли байты. Ни eval, ни sh -c, ни temp-файлов.
 run_capture() {
-    # Инициализация обязательна: при неудаче команды вложенная подстановка
-    # может не завершить присваивание, а set -u строго требует переменные.
     OUT=
-    ERR=
     RC=0
-    OUT=$( { ERR=$("$@" 2>&1 1>&3 3>&-); } 3>&1 ) || RC=$?
+    OUT=$("$@" 2>&1) || RC=$?
 }
 
 do_check() {
@@ -203,6 +199,7 @@ do_check() {
             printf 'Обновлений pacman нет.\n'
         else
             printf 'Не удалось проверить обновления pacman.\n' >&2
+            [[ -n $OUT ]] && printf '%s\n' "$OUT" >&2
         fi
     else
         printf 'checkupdates не найден. Установите пакет pacman-contrib.\n' >&2
@@ -215,10 +212,11 @@ do_check() {
         run_capture "$helper" -Qua
         if ((RC == 0)); then
             [[ -n $OUT ]] && printf '%s\n' "$OUT" || printf 'Обновлений AUR нет.\n'
-        elif ((RC == 1)) && [[ -z $OUT && -z $ERR ]]; then
+        elif ((RC == 1)) && [[ -z $OUT ]]; then
             printf 'Обновлений AUR нет.\n'
         else
             printf 'Не удалось проверить обновления AUR.\n' >&2
+            [[ -n $OUT ]] && printf '%s\n' "$OUT" >&2
         fi
     else
         printf 'Нужен один из помощников AUR: paru или yay.\n' >&2
@@ -231,6 +229,7 @@ do_check() {
             [[ -n $OUT ]] && printf '%s\n' "$OUT" || printf 'Обновлений Flatpak нет.\n'
         else
             printf 'Не удалось проверить обновления Flatpak.\n' >&2
+            [[ -n $OUT ]] && printf '%s\n' "$OUT" >&2
         fi
     else
         printf 'Flatpak не установлен: проверять нечего.\n' >&2
