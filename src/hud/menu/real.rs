@@ -54,6 +54,9 @@ fn has_kitty_yazi() -> bool {
 fn has_kitty_opencode() -> bool {
     has("kitty") && has("opencode")
 }
+fn has_paru_or_yay() -> bool {
+    has("paru") || has("yay")
+}
 fn has_steam() -> bool {
     has("steam")
 }
@@ -825,6 +828,7 @@ fn system_section(lang: Language) -> Node {
         .with_id("system/power-profile")
         .when(has_power_profile)
         .search_as(&["power", "питание", "профиль", "battery"]),
+        updates_group(lang),
     ];
     // Панель управления дописывается отдельно: целей может не оказаться
     // вовсе, и пустую строку в разделе показывать нечего. «О системе»
@@ -832,6 +836,85 @@ fn system_section(lang: Language) -> Node {
     children.extend(control_node(lang));
     children.push(super::sysinfo::section(lang));
     Node::submenu(settings_icons::SYSTEM, title, children).search_as(kw)
+}
+
+/// Группа обновления системы: команды запускаются в отдельном окне kitty,
+/// чтобы подтверждения и вывод pacman/AUR/Flatpak были видны, а меню не
+/// запирало клавиатуру на время долгой команды.
+fn updates_group(lang: Language) -> Node {
+    let t = |ru: &'static str, en: &'static str| match lang {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    let title = match lang {
+        Language::Ru => "Обновление системы",
+        Language::En => "System update",
+    };
+    Node::submenu(
+        settings_icons::ARROW_UP,
+        title,
+        vec![
+            Node::action(
+                settings_icons::SYSTEM,
+                t("Обновить всё", "Update everything"),
+                Action::Spawn(
+                    "kitty",
+                    &["--class", "hud-update", "-e", "hud-update", "all"],
+                ),
+            )
+            .with_id("system/updates/all"),
+            Node::action(
+                settings_icons::TH_LARGE,
+                t("Только pacman", "Pacman only"),
+                Action::Spawn(
+                    "kitty",
+                    &["--class", "hud-update", "-e", "hud-update", "pacman"],
+                ),
+            )
+            .with_id("system/updates/pacman"),
+            Node::action(
+                settings_icons::APPS,
+                t("Только AUR", "AUR only"),
+                Action::Spawn(
+                    "kitty",
+                    &["--class", "hud-update", "-e", "hud-update", "aur"],
+                ),
+            )
+            .with_id("system/updates/aur")
+            .when(has_paru_or_yay),
+            Node::action(
+                settings_icons::APPS,
+                t("Только Flatpak", "Flatpak only"),
+                Action::Spawn(
+                    "kitty",
+                    &["--class", "hud-update", "-e", "hud-update", "flatpak"],
+                ),
+            )
+            .with_id("system/updates/flatpak")
+            .when(has_flatpak),
+            Node::action(
+                settings_icons::SEARCH,
+                t("Проверить обновления", "Check for updates"),
+                Action::Spawn(
+                    "kitty",
+                    &["--class", "hud-update", "-e", "hud-update", "check"],
+                ),
+            )
+            .with_id("system/updates/check"),
+        ],
+    )
+    .with_id("system/updates")
+    .when(has_kitty)
+    .search_as(&[
+        "update",
+        "upgrade",
+        "pacman",
+        "aur",
+        "flatpak",
+        "обновление",
+        "обновить",
+        "пакеты",
+    ])
 }
 
 /// Группа связи: Wi-Fi, Bluetooth и VPN собраны под одним входом, чтобы
@@ -1421,6 +1504,122 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn updates_group_has_bilingual_rows_by_id() {
+        let expected = [
+            ("system/updates/all", "Обновить всё", "Update everything"),
+            ("system/updates/pacman", "Только pacman", "Pacman only"),
+            ("system/updates/aur", "Только AUR", "AUR only"),
+            ("system/updates/flatpak", "Только Flatpak", "Flatpak only"),
+            (
+                "system/updates/check",
+                "Проверить обновления",
+                "Check for updates",
+            ),
+        ];
+        let mut titles_by_lang: Vec<Vec<String>> = Vec::new();
+        for lang in [Language::Ru, Language::En] {
+            let system = tree_in(lang)
+                .into_iter()
+                .find(|node| node.identity() == "Система" || node.identity() == "System")
+                .expect("раздел «Система»");
+            let children = system.children().expect("у раздела есть дети");
+            let updates = find_by_id(children, "system/updates");
+            assert!(
+                matches!(updates.kind, super::super::tree::NodeKind::Submenu(_)),
+                "обновление системы — подменю"
+            );
+            assert!(
+                updates.visible.is_some(),
+                "подменю скрыто без kitty условием has_kitty"
+            );
+            assert_eq!(
+                updates.title,
+                if lang == Language::Ru {
+                    "Обновление системы"
+                } else {
+                    "System update"
+                }
+            );
+            let kids = updates.children().expect("у подменю есть пункты");
+            assert_eq!(kids.len(), expected.len());
+            let mut titles = Vec::new();
+            for (id, ru, en) in expected {
+                let node = kids
+                    .iter()
+                    .find(|node| node.identity() == id)
+                    .unwrap_or_else(|| panic!("нет пункта {id}"));
+                let want = if lang == Language::Ru { ru } else { en };
+                assert_eq!(node.title, want, "подпись {id} на языке {lang:?}");
+                titles.push(node.title.clone());
+            }
+            for id in ["system/updates/aur", "system/updates/flatpak"] {
+                let node = kids
+                    .iter()
+                    .find(|node| node.identity() == id)
+                    .unwrap_or_else(|| panic!("нет пункта {id}"));
+                assert!(node.visible.is_some(), "у {id} задано условие показа");
+            }
+            titles_by_lang.push(titles);
+        }
+        assert_ne!(
+            titles_by_lang[0], titles_by_lang[1],
+            "русские и английские подписи должны различаться"
+        );
+    }
+
+    /// Каждый пункт запускает ровно `kitty` с нужным режимом hud-update:
+    /// ни одного `Run`, который заблокировал бы меню на время обновления.
+    #[test]
+    fn updates_rows_spawn_kitty_with_exact_argv() {
+        let expected: [(&str, &[&str]); 5] = [
+            (
+                "system/updates/all",
+                &["--class", "hud-update", "-e", "hud-update", "all"],
+            ),
+            (
+                "system/updates/pacman",
+                &["--class", "hud-update", "-e", "hud-update", "pacman"],
+            ),
+            (
+                "system/updates/aur",
+                &["--class", "hud-update", "-e", "hud-update", "aur"],
+            ),
+            (
+                "system/updates/flatpak",
+                &["--class", "hud-update", "-e", "hud-update", "flatpak"],
+            ),
+            (
+                "system/updates/check",
+                &["--class", "hud-update", "-e", "hud-update", "check"],
+            ),
+        ];
+        let system = tree_in(Language::Ru)
+            .into_iter()
+            .find(|node| node.identity() == "Система")
+            .expect("раздел «Система»");
+        let children = system.children().expect("у раздела есть дети");
+        let updates = find_by_id(children, "system/updates");
+        let kids = updates.children().expect("у подменю есть пункты");
+        assert_eq!(kids.len(), expected.len());
+        let mut spawns = 0;
+        for (id, args) in expected {
+            let node = kids
+                .iter()
+                .find(|node| node.identity() == id)
+                .unwrap_or_else(|| panic!("нет пункта {id}"));
+            match &node.kind {
+                super::super::tree::NodeKind::Action(Action::Spawn(program, actual)) => {
+                    assert_eq!(*program, "kitty", "программа {id}");
+                    assert_eq!(*actual, args, "argv {id}");
+                    spawns += 1;
+                }
+                other => panic!("{id} должен быть Action::Spawn, а не {other:?}"),
+            }
+        }
+        assert_eq!(spawns, expected.len(), "ровно один Spawn на пункт");
     }
 
     #[test]

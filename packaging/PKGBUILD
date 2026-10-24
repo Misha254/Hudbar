@@ -26,6 +26,8 @@ optdepends=(
     'matugen: цвета интерфейса из обоев'
     'kitty: терминальные приложения из лаунчера'
     'yazi: окно файлового менеджера (hud-yazibinds)'
+    'pacman-contrib: проверка ожидающих обновлений (checkupdates)'
+    'flatpak: обновление Flatpak-приложений из меню'
 )
 install="$pkgname.install"
 source=("$pkgname::git+$url.git#tag=v$pkgver")
@@ -51,6 +53,7 @@ _scripts=(
     hud-wallpaper
     hud-setting
     hud-migrate-settings
+    hud-update
 )
 _configs=(settings.json colors.css font)
 

@@ -18,10 +18,12 @@ pkgbase = hudbar
 	optdepends = bluez-utils: состояние Bluetooth (bluetoothctl)
 	optdepends = pipewire: громкость и микрофон (wpctl, pactl)
 	optdepends = dunst: уведомления (dunstctl)
-	optdepends = python: hud-setting, hud-theme и hud-migrate-settings
+	optdepends = python: hud-setting и hud-migrate-settings
 	optdepends = matugen: цвета интерфейса из обоев
 	optdepends = kitty: терминальные приложения из лаунчера
 	optdepends = yazi: окно файлового менеджера (hud-yazibinds)
+	optdepends = pacman-contrib: проверка ожидающих обновлений (checkupdates)
+	optdepends = flatpak: обновление Flatpak-приложений из меню
 	source = hudbar::git+https://github.com/Misha254/Hudbar.git#tag=v0.11.0
 	sha256sums = SKIP
 
