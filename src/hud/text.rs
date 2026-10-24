@@ -25,6 +25,11 @@ use cosmic_text::{
 pub const SCALE: f32 = 2.0;
 /// Верхняя граница shape-кэша; при переполнении формы сбрасываются целиком.
 pub const SHAPED_CACHE_LIMIT: usize = 512;
+/// Типовая проба общей линейки письма (KB2.1.1): верхние (A, Д) и нижние
+/// (g, y, q, у) выносы одновременно — центр её контура примерно как у
+/// «средней» строки. Фиксированная строка: базовой линии не положено
+/// прыгать от содержимого.
+const SHARED_PROBE: &str = "AgyД019+у";
 
 /// Горизонтальное выравнивание текста внутри отведённой полосы.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -141,8 +146,16 @@ impl TextPainter {
         rect.y + rect.h / 2.0 - (box_.ink_top + box_.ink_bottom) / 2.0
     }
 
+    /// Измеренный контур строки: ширина и заливаемые границы сверху/снизу
+    /// относительно базовой линии. Для особых позиционирований и тестов.
+    pub fn ink_metrics(&mut self, text: &str, size: f32) -> TextBox {
+        self.shape(text, size).0
+    }
+
     /// Рисует текст в полосе: по вертикали — по центру измеренных пикселей,
-    /// по горизонтали — согласно `align`.
+    /// по горизонтали — согласно `align`. Строка сама себе задаёт линию:
+    /// годится для одиночных подписей (шапка, подвал), но не для колонок,
+    /// где строки обязаны стоять на одном baseline.
     pub fn paint(
         &mut self,
         pixmap: &mut tiny_skia::Pixmap,
@@ -152,14 +165,74 @@ impl TextPainter {
         rect: Rect,
         align: Align,
     ) {
-        let (box_, glyphs) = self.shape(text, size);
+        let box_ = self.ink_metrics(text, size);
         let baseline = self.baseline(rect, &box_);
+        self.paint_on_baseline(pixmap, text, size, color, rect, align, baseline);
+    }
+
+    /// Базовая линия по общей «линейке письма»: в центр полосы кладётся
+    /// центр контура типовой пробы глифов, а не контур конкретной строки.
+    /// Клавиша («gg») и описание («Начало списка») с разными выносами
+    /// садятся на одну линию — контур отдельного текста её не крутит.
+    pub fn shared_baseline(&mut self, rect: Rect, size: f32) -> f32 {
+        let probe = self.shape(SHARED_PROBE, size).0;
+        rect.y + rect.h / 2.0 - (probe.ink_top + probe.ink_bottom) / 2.0
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Рисует текст на заданной базовой линии: линейку по вертикали задаёт
+    /// вызывающий — строки одной таблицы садятся на неё все, как у строки,
+    /// где клавиша и описание обязаны стоять на одном baseline.
+    pub fn paint_on_baseline(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        text: &str,
+        size: f32,
+        color: palette::Rgba,
+        rect: Rect,
+        align: Align,
+        baseline: f32,
+    ) {
+        let (box_, glyphs) = self.shape(text, size);
         let x = match align {
             Align::Start => rect.x,
             Align::Center => rect.x + (rect.w - box_.width) / 2.0,
             Align::End => rect.right() - box_.width,
         };
         self.blend(pixmap, glyphs, color, x, baseline);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// `paint_on_baseline` с усечением «…», как `paint_boxed`.
+    pub fn paint_boxed_on_baseline(
+        &mut self,
+        pixmap: &mut tiny_skia::Pixmap,
+        text: &str,
+        size: f32,
+        color: palette::Rgba,
+        rect: Rect,
+        align: Align,
+        baseline: f32,
+    ) {
+        let shown = self.truncate_to(text, size, rect.w);
+        self.paint_on_baseline(pixmap, &shown, size, color, rect, align, baseline);
+    }
+
+    /// Обрезает текст с многоточием, если он шире полосы. Логика жила в
+    /// `paint_boxed`; теперь её используют оба paint-режима.
+    fn truncate_to(&mut self, text: &str, size: f32, width: f32) -> String {
+        let mut shown = text.to_string();
+        if self.text_width(&shown, size) > width {
+            while !shown.is_empty() {
+                let candidate = format!("{shown}…");
+                if self.text_width(&candidate, size) <= width {
+                    shown = candidate;
+                    break;
+                }
+                shown.pop();
+            }
+        }
+        shown
     }
 
     /// Как `paint`, но обрезает текст с многоточием, если он не влезает.
@@ -172,17 +245,7 @@ impl TextPainter {
         rect: Rect,
         align: Align,
     ) {
-        let mut shown = text.to_string();
-        if self.text_width(&shown, size) > rect.w {
-            while !shown.is_empty() {
-                let candidate = format!("{shown}…");
-                if self.text_width(&candidate, size) <= rect.w {
-                    shown = candidate;
-                    break;
-                }
-                shown.pop();
-            }
-        }
+        let shown = self.truncate_to(text, size, rect.w);
         self.paint(pixmap, &shown, size, color, rect, align);
     }
 
@@ -248,5 +311,45 @@ pub fn blend_pixels(
                 *dst = px;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Шрифт тестов: тот же, что отдаёт ui_tokens в соседних тестах и окнах.
+    const FONT: &str = "JetBrainsMono Nerd Font Propo";
+    const SIZE: f32 = 14.0;
+
+    /// Центр-контура даёт разным по контуру строкам разные базовые линии —
+    /// это и есть разъезд клавиши и описания на 1–3 px, от которого
+    /// избавился общий baseline (KB2.1.1). Если это вдруг перестанет
+    /// выполняться, лечение становится ненужным — проверить строку.
+    #[test]
+    fn centering_on_ink_differs_between_key_and_desc() {
+        let mut painter = TextPainter::new(FONT);
+        let rect = Rect::new(0.0, 0.0, 200.0, 30.0);
+        let key = painter.ink_metrics("gg", SIZE);
+        let desc = painter.ink_metrics("Начало списка", SIZE);
+        assert_ne!(
+            painter.baseline(rect, &key),
+            painter.baseline(rect, &desc),
+            "контурное центрирование перестало расходить строки; общий baseline не нужен"
+        );
+    }
+
+    /// Общая линейка письма: полосы клавиши и описания одной строки
+    /// отличаются только x и шириной, базовая линия обязана совпасть.
+    #[test]
+    fn shared_baseline_is_one_for_key_and_desc_bands() {
+        let mut painter = TextPainter::new(FONT);
+        let key_band = Rect::new(0.0, 10.0, 80.0, 20.0);
+        let desc_band = Rect::new(90.0, 10.0, 300.0, 20.0);
+        assert_eq!(
+            painter.shared_baseline(key_band, SIZE),
+            painter.shared_baseline(desc_band, SIZE),
+            "общая линейка зависит от полосы — строки разъедутся"
+        );
     }
 }
