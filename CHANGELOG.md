@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-25
+
 ### Changed
 - Обновления из меню и `hud-update` идут без интерактивных подтверждений:
   `pacman`, `paru` и `yay` получают `--noconfirm`, `flatpak update` — `-y`.
