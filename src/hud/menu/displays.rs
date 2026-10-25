@@ -955,6 +955,7 @@ fn display_submenu(lang: Language, display: &Display) -> Node {
         children,
     )
     .with_id(&id)
+    .with_crumb(&display.name)
 }
 
 /// Действия над выводом: питание, режим, масштаб, поворот, VRR, позиция.
@@ -1650,6 +1651,22 @@ mod tests {
             ],
             "отрицательные координаты не экранируются и не теряются"
         );
+    }
+
+    /// Узел вывода носит короткую крошку «eDP-1», не теряя полный заголовок
+    /// строки с режимом.
+    #[test]
+    fn output_level_has_a_short_crumb() {
+        let snapshot = DisplaysSnapshot {
+            outputs: Block::Ready(parse_outputs(OUTPUTS).expect("вывод разобран")),
+        };
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        let output = nodes
+            .iter()
+            .find(|node| node.identity() == "displays/output/eDP-1")
+            .expect("вывод есть");
+        assert_eq!(output.crumb.as_deref(), Some("eDP-1"));
+        assert_eq!(output.title, "eDP-1 · 1920×1080 · 144 Гц");
     }
 
     /// Иконки строк соответствуют смыслу, а не одной точке: вывод и статус —

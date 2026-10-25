@@ -34,7 +34,10 @@ impl Menu {
                 let lang = self.lang;
                 let mut list = ItemList::new(level_rows(children, depth + 1, lang));
                 list.set_page(super::super::view::rows_shown(list.len()));
-                let (title, identity) = (node.title.clone(), node.identity().to_string());
+                let (title, identity) = (
+                    node.crumb.clone().unwrap_or_else(|| node.title.clone()),
+                    node.identity().to_string(),
+                );
                 self.levels.push(Level {
                     title,
                     list,

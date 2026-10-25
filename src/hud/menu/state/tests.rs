@@ -69,6 +69,49 @@ fn enter_pushes_a_level_and_back_pops_it() {
 }
 
 #[test]
+fn crumbed_submenu_names_its_level_but_keeps_the_row_and_search_path() {
+    let tree = || {
+        vec![
+            Node::submenu(
+                "i",
+                "eDP-1 · 1920×1080 · 144 Гц",
+                vec![Node::info("d", "Модель")],
+            )
+            .with_id("displays/output/eDP-1")
+            .with_crumb("eDP-1"),
+        ]
+    };
+    let mut menu = Menu::new(tree());
+    assert_eq!(titles(&menu), ["eDP-1 · 1920×1080 · 144 Гц"]);
+
+    // В глобальном поиске путь строится по полному заголовку строки, а не
+    // по крошке: найденное должно показывать, где оно лежит.
+    menu.type_char('М');
+    let found = menu.frame();
+    assert_eq!(found.items[0].title, "Модель");
+    assert_eq!(
+        found.items[0].caption.as_deref(),
+        Some("eDP-1 · 1920×1080 · 144 Гц ›")
+    );
+    menu.clear_query();
+
+    menu.enter();
+    assert_eq!(menu.opened_submenu(), Some("eDP-1"));
+    assert_eq!(menu.trail(), vec!["HUD", "eDP-1"]);
+    assert_eq!(titles(&menu), ["Модель"]);
+
+    // Путь переживает пересборку дерева: личность уровня — id, не заголовок.
+    let position = menu.position();
+    menu.retree(tree());
+    menu.restore(&position);
+    assert_eq!(menu.trail(), vec!["HUD", "eDP-1"]);
+    assert_eq!(titles(&menu), ["Модель"]);
+
+    assert_eq!(menu.back(), Outcome::Popped);
+    assert_eq!(menu.trail(), vec!["HUD"]);
+}
+
+#[test]
 fn escape_on_the_root_closes_the_menu() {
     let mut menu = menu();
     assert_eq!(menu.escape(), Outcome::Closed);
