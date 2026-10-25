@@ -7,7 +7,7 @@
 #
 # Скрипт не использует eval и sh -c: все команды собираются массивами и
 # запускаются напрямую. Проверка обновлений ничего не меняет, остальные
-# режимы требуют подтверждения пользователя в терминале.
+# режимы идут без интерактивных подтверждений: y/yes вводить не нужно.
 set -euo pipefail
 
 usage() {
@@ -115,7 +115,7 @@ aur_helper() {
 do_pacman() {
     step "Обновление пакетов pacman"
     check_pacman_lock
-    run_cmd sudo pacman -Syu || fail "sudo pacman -Syu"
+    run_cmd sudo pacman -Syu --noconfirm || fail "sudo pacman -Syu --noconfirm"
 }
 
 do_aur() {
@@ -127,7 +127,7 @@ do_aur() {
     fi
     step "Обновление пакетов AUR через $helper"
     check_pacman_lock
-    run_cmd "$helper" -Sua || fail "$helper -Sua"
+    run_cmd "$helper" -Sua --noconfirm || fail "$helper -Sua --noconfirm"
 }
 
 do_flatpak() {
@@ -136,7 +136,7 @@ do_flatpak() {
         exit 1
     fi
     step "Обновление Flatpak"
-    run_cmd flatpak update || fail "flatpak update"
+    run_cmd flatpak update -y || fail "flatpak update -y"
 }
 
 do_all() {
@@ -145,7 +145,7 @@ do_all() {
     if [[ $helper == "paru" || $helper == "yay" ]]; then
         step "Обновление пакетов pacman и AUR через $helper"
         check_pacman_lock
-        run_cmd "$helper" -Syu || fail "$helper -Syu"
+        run_cmd "$helper" -Syu --noconfirm || fail "$helper -Syu --noconfirm"
     else
         do_pacman
     fi
