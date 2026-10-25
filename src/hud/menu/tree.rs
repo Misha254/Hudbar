@@ -73,6 +73,10 @@ pub struct Node {
     /// заголовок меняется от снимка к снимку: у строк звука это имя
     /// устройства и команда, а не «40% вкл».
     pub id: String,
+    /// Короткий заголовок уровня для крошек. `None` — уровень называется
+    /// полным `title`, как раньше. Строка меню при этом не меняется: крошка
+    /// только про путь, а не про пункт.
+    pub crumb: Option<String>,
     /// Что находится внутри.
     pub kind: NodeKind,
     /// Условие показа. `None` — пункт виден всегда. Функция, а не флаг:
@@ -105,6 +109,7 @@ impl Node {
             icon,
             title: title.to_string(),
             id: String::new(),
+            crumb: None,
             kind: NodeKind::Submenu(children),
             visible: None,
             keywords: &[],
@@ -121,6 +126,7 @@ impl Node {
             icon,
             title: title.to_string(),
             id: String::new(),
+            crumb: None,
             kind: NodeKind::Action(action),
             visible: None,
             keywords: &[],
@@ -137,6 +143,7 @@ impl Node {
             icon,
             title: title.to_string(),
             id: String::new(),
+            crumb: None,
             kind: NodeKind::Toggle { get, set },
             visible: None,
             keywords: &[],
@@ -159,6 +166,7 @@ impl Node {
             icon,
             title: title.to_string(),
             id: String::new(),
+            crumb: None,
             kind: NodeKind::Choice { options, get, set },
             visible: None,
             keywords: &[],
@@ -187,6 +195,7 @@ impl Node {
             icon,
             title: title.to_string(),
             id: String::new(),
+            crumb: None,
             kind: NodeKind::Number {
                 min,
                 max,
@@ -210,6 +219,7 @@ impl Node {
             icon,
             title: title.to_string(),
             id: String::new(),
+            crumb: None,
             kind: NodeKind::Picker(id),
             visible: None,
             keywords: &[],
@@ -226,6 +236,7 @@ impl Node {
             icon,
             title: title.to_string(),
             id: String::new(),
+            crumb: None,
             kind: NodeKind::Dynamic { key },
             visible: None,
             keywords: &[],
@@ -242,6 +253,7 @@ impl Node {
             icon,
             title: title.to_string(),
             id: String::new(),
+            crumb: None,
             kind: NodeKind::Info,
             visible: None,
             keywords: &[],
@@ -256,6 +268,15 @@ impl Node {
     /// по ней, а не по заголовку.
     pub fn with_id(mut self, id: &str) -> Self {
         self.id = id.to_string();
+        self
+    }
+
+    /// Задаёт короткий заголовок уровня для крошек: строка меню остаётся
+    /// прежней, а в пути уровень называется короче. Удобно там, где заголовок
+    /// строки несёт значение («eDP-1 · 1920×1080 · 144 Гц»), а в крошках
+    /// достаточно имени.
+    pub fn with_crumb(mut self, text: &str) -> Self {
+        self.crumb = Some(text.to_string());
         self
     }
 
@@ -589,6 +610,16 @@ mod tests {
         assert!(!style.is_leaf());
         assert_eq!(style.children().map(<[Node]>::len), Some(1));
         assert!(nodes[2].is_leaf());
+    }
+
+    #[test]
+    fn crumb_is_optional_and_does_not_change_the_row() {
+        let plain = Node::submenu("i", "Долгий заголовок", vec![Node::info("d", "x")]);
+        assert_eq!(plain.crumb, None, "по умолчанию крошки нет");
+        let short = plain.with_crumb("Короткий");
+        assert_eq!(short.crumb.as_deref(), Some("Короткий"));
+        assert_eq!(short.title, "Долгий заголовок", "строка не меняется");
+        assert_eq!(short.identity(), "Долгий заголовок");
     }
 
     #[test]

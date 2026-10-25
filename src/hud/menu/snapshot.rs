@@ -622,22 +622,40 @@ mod tests {
             displays.trail,
             vec!["HUD".to_string(), "Дисплеи".to_string()]
         );
+        assert!(
+            displays
+                .items
+                .iter()
+                .any(|item| item.title.starts_with("eDP-1 · ")),
+            "строка вывода остаётся с режимом: {:?}",
+            displays
+                .items
+                .iter()
+                .map(|item| &item.title)
+                .collect::<Vec<_>>()
+        );
 
         let output = subject_menu(Subject::DisplaysOutput).frame();
-        assert_eq!(output.trail.len(), 3);
-        assert!(output.trail[2].starts_with("eDP-1"));
+        assert_eq!(
+            output.trail,
+            vec![
+                "HUD".to_string(),
+                "Дисплеи".to_string(),
+                "eDP-1".to_string(),
+            ]
+        );
 
         let deep = subject_menu(Subject::DeepCrumbs).frame();
         assert_eq!(
-            deep.trail[..4],
-            [
+            deep.trail,
+            vec![
                 "HUD".to_string(),
                 "Система".to_string(),
                 "Устройства".to_string(),
                 "Дисплеи".to_string(),
+                "eDP-1".to_string(),
             ]
         );
-        assert!(deep.trail[4].starts_with("eDP-1"));
     }
 
     #[test]
