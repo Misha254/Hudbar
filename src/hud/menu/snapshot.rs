@@ -6,7 +6,7 @@
 //! только данными.
 //!
 //! Запуск:
-//!   hud-menu-rs --snapshot <root|style|search|empty> <out.png>
+//!   hud-menu-rs --snapshot <root|style|search|empty|displays|displays-output|deep-crumbs> <out.png>
 //!
 //! Кадр — вся поверхность оверлея, с затемнением вокруг карточки. Размер
 //! кадра взят у оверлея меню в niri: 1200x800, этого хватает, чтобы увидеть
@@ -19,11 +19,14 @@ use super::super::settings_icons;
 use super::super::text::Align;
 use super::super::text::{SCALE, TextPainter};
 use super::super::ui_tokens::{font_name, radii};
+use super::bluetooth::Block;
 use super::demo_menu;
+use super::displays::{self, DisplaysSnapshot};
 use super::item::ItemKind;
 use super::state::Outcome;
 use super::state::{Frame, Menu, Status};
 use super::strings;
+use super::tree::Node;
 use super::view::{self, MenuView};
 
 /// Ширина кадра оверлея.
@@ -47,6 +50,12 @@ pub enum Subject {
     Search,
     /// Пустой результат: запрос без совпадений.
     Empty,
+    /// Раздел «Дисплеи»: статус, раскладка, один вывод и «Обновить».
+    Displays,
+    /// Подменю одного вывода eDP-1.
+    DisplaysOutput,
+    /// Глубокий след: HUD → Система → Устройства → Дисплеи → eDP-1.
+    DeepCrumbs,
     /// Кадр так, как его рисует живое окно: карточка от нуля, без
     /// затемнения и с прозрачностью. Нужен, чтобы окно и снимок не
     /// разошлись.
@@ -55,11 +64,14 @@ pub enum Subject {
 
 impl Subject {
     /// Все доступные состояния для подсказки.
-    pub const ALL: [Subject; 4] = [
+    pub const ALL: [Subject; 7] = [
         Subject::Root,
         Subject::Style,
         Subject::Search,
         Subject::Empty,
+        Subject::Displays,
+        Subject::DisplaysOutput,
+        Subject::DeepCrumbs,
     ];
 
     /// Ключ в командной строке.
@@ -69,6 +81,9 @@ impl Subject {
             Subject::Style => "style",
             Subject::Search => "search",
             Subject::Empty => "empty",
+            Subject::Displays => "displays",
+            Subject::DisplaysOutput => "displays-output",
+            Subject::DeepCrumbs => "deep-crumbs",
             Subject::Window => "window",
         }
     }
@@ -80,6 +95,9 @@ impl Subject {
             Subject::Style => "подменю «Стиль»",
             Subject::Search => "поиск",
             Subject::Empty => "пусто",
+            Subject::Displays => "раздел «Дисплеи»",
+            Subject::DisplaysOutput => "подменю вывода",
+            Subject::DeepCrumbs => "глубокие крошки",
             Subject::Window => "окно",
         }
     }
@@ -93,6 +111,52 @@ impl Subject {
             .into_iter()
             .find(|subject| subject.key() == value)
     }
+}
+
+/// Фиксированный ответ `niri msg --json outputs` с одним выводом: тот же,
+/// что в тестах раздела «Дисплеи», поэтому снимок не зависит от машины.
+const ONE_OUTPUT: &str = r#"{"eDP-1":{"name":"eDP-1","make":"Najing CEC Panda FPD Technology CO. ltd","model":"0x004D","serial":null,"physical_size":[340,190],"modes":[{"width":1920,"height":1080,"refresh_rate":144000,"is_preferred":true},{"width":1920,"height":1080,"refresh_rate":60002,"is_preferred":false}],"current_mode":0,"is_custom_mode":false,"vrr_supported":false,"vrr_enabled":true,"logical":{"x":0,"y":0,"width":1536,"height":864,"scale":1.25,"transform":"Normal"}}}"#;
+
+/// Раздел «Дисплеи» из фиксированного снимка: без запуска niri. Если задан
+/// `output_title`, заголовок подменю вывода заменяется: снимку глубоких
+/// крошек нужен короткий последний уровень «eDP-1», а не строка с режимом.
+fn displays_section_with(outputs: &str, output_title: Option<&str>) -> Node {
+    let snapshot = DisplaysSnapshot {
+        outputs: Block::Ready(displays::parse_outputs(outputs).expect("фикстура выводов")),
+    };
+    let mut nodes = displays::build_nodes(&snapshot, super::settings::Language::Ru);
+    if let Some(title) = output_title
+        && let Some(node) = nodes
+            .iter_mut()
+            .find(|node| node.id.starts_with("displays/output/"))
+    {
+        node.title = title.to_string();
+    }
+    Node::submenu(settings_icons::OVERVIEW, "Дисплеи", nodes)
+}
+
+fn displays_section(outputs: &str) -> Node {
+    displays_section_with(outputs, None)
+}
+
+/// Меню, открытое на разделе «Дисплеи».
+fn displays_menu(outputs: &str) -> Menu {
+    let mut menu = Menu::new(vec![displays_section(outputs)]);
+    assert_eq!(menu.enter(), Outcome::Pushed, "снимок открывает «Дисплеи»");
+    menu
+}
+
+/// Выбирает строку с заголовком (или его началом) и открывает её подменю.
+fn enter_titled(menu: &mut Menu, title: &str) {
+    let index = menu
+        .current()
+        .list
+        .items()
+        .iter()
+        .position(|item| item.title.starts_with(title))
+        .unwrap_or_else(|| panic!("нет строки «{title}»"));
+    menu.current_mut().list.select(index);
+    assert_eq!(menu.enter(), Outcome::Pushed, "открывается «{title}»");
 }
 
 /// Модель в нужном состоянии: тот же `Menu`, что получит окно в M4.
@@ -117,6 +181,26 @@ pub fn subject_menu(subject: Subject) -> Menu {
             for ch in "zzz".chars() {
                 menu.type_char(ch);
             }
+        }
+        Subject::Displays => {
+            menu = displays_menu(ONE_OUTPUT);
+        }
+        Subject::DisplaysOutput => {
+            menu = displays_menu(ONE_OUTPUT);
+            enter_titled(&mut menu, "eDP-1");
+        }
+        Subject::DeepCrumbs => {
+            let devices = Node::submenu(
+                settings_icons::DOT,
+                "Устройства",
+                vec![displays_section_with(ONE_OUTPUT, Some("eDP-1"))],
+            );
+            let system = Node::submenu(settings_icons::SYSTEM, "Система", vec![devices]);
+            menu = Menu::new(vec![system]);
+            assert_eq!(menu.enter(), Outcome::Pushed, "открывается «Система»");
+            assert_eq!(menu.enter(), Outcome::Pushed, "открывается «Устройства»");
+            assert_eq!(menu.enter(), Outcome::Pushed, "открывается «Дисплеи»");
+            enter_titled(&mut menu, "eDP-1");
         }
         // Окно рисует как есть, состояние не меняем: проверяем путь отрисовки.
         Subject::Window => {
@@ -534,6 +618,31 @@ mod tests {
         assert_eq!(frame.total, 3);
         assert!(frame.items.iter().all(|item| item.caption.is_some()));
         assert_eq!(frame.items[0].caption.as_deref(), Some("Панель ›"));
+    }
+
+    #[test]
+    fn displays_subjects_show_expected_trails() {
+        let displays = subject_menu(Subject::Displays).frame();
+        assert_eq!(
+            displays.trail,
+            vec!["HUD".to_string(), "Дисплеи".to_string()]
+        );
+
+        let output = subject_menu(Subject::DisplaysOutput).frame();
+        assert_eq!(output.trail.len(), 3);
+        assert!(output.trail[2].starts_with("eDP-1"));
+
+        let deep = subject_menu(Subject::DeepCrumbs).frame();
+        assert_eq!(
+            deep.trail,
+            vec![
+                "HUD".to_string(),
+                "Система".to_string(),
+                "Устройства".to_string(),
+                "Дисплеи".to_string(),
+                "eDP-1".to_string(),
+            ]
+        );
     }
 
     #[test]
