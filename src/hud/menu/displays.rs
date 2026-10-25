@@ -286,6 +286,18 @@ impl DisplayMode {
         let hz = self.refresh_mhz as f64 / 1000.0;
         format!("{}x{} @ {hz:.3}", self.width, self.height)
     }
+
+    /// Человеческая подпись режима для меню: `1920×1080 · 144 Гц`.
+    /// Частоту собирает `format_refresh`, поэтому `60.002` не теряет знаки.
+    pub fn human_label(&self, lang: Language) -> String {
+        format!(
+            "{}×{} · {} {}",
+            self.width,
+            self.height,
+            format_refresh(self.refresh_mhz),
+            if ru(lang) { "Гц" } else { "Hz" }
+        )
+    }
 }
 
 /// Логическое состояние вывода: во что он нарисован на экране.
@@ -559,7 +571,7 @@ fn status_row(lang: Language, snapshot: &DisplaysSnapshot) -> Node {
     let text = match &snapshot.outputs {
         Block::Missing => {
             return Node::info(
-                settings_icons::DOT,
+                settings_icons::PANEL_MONITOR,
                 if ru(lang) {
                     "niri нет"
                 } else {
@@ -570,7 +582,7 @@ fn status_row(lang: Language, snapshot: &DisplaysSnapshot) -> Node {
         }
         Block::Failed(reason) => {
             return Node::info(
-                settings_icons::DOT,
+                settings_icons::PANEL_MONITOR,
                 &if ru(lang) {
                     format!("Дисплеи: {reason}")
                 } else {
@@ -581,7 +593,7 @@ fn status_row(lang: Language, snapshot: &DisplaysSnapshot) -> Node {
         }
         Block::Ready(list) if list.is_empty() => {
             return Node::info(
-                settings_icons::DOT,
+                settings_icons::PANEL_MONITOR,
                 if ru(lang) {
                     "Нет дисплеев"
                 } else {
@@ -591,15 +603,10 @@ fn status_row(lang: Language, snapshot: &DisplaysSnapshot) -> Node {
             .with_id(id);
         }
         Block::Ready(list) => {
-            let count = if ru(lang) {
-                "дисплеев"
-            } else {
-                "displays"
-            };
-            format!("{count}: {}", list.len())
+            format!("{}: {}", label(lang, "Дисплеев", "Displays"), list.len())
         }
     };
-    Node::info(settings_icons::OVERVIEW, &text).with_id(id)
+    Node::info(settings_icons::PANEL_MONITOR, &text).with_id(id)
 }
 
 /// Пресет раскладки: одна кнопка на несколько команд `niri msg output`.
@@ -775,13 +782,13 @@ fn preset_rows(outputs: &[Display], lang: Language) -> Option<Node> {
     )
 }
 
-/// Подпись вывода в списке: имя плюс текущий режим, когда он есть.
+/// Подпись вывода в списке: имя и человеческий текущий режим, когда он есть.
 fn display_title(lang: Language, display: &Display) -> String {
     let mut title = display.name.clone();
     match display.current() {
         Some(mode) => {
             title.push_str(" · ");
-            title.push_str(&mode.label());
+            title.push_str(&mode.human_label(lang));
         }
         None if display.is_custom_mode => {
             title.push_str(if ru(lang) {
@@ -795,12 +802,74 @@ fn display_title(lang: Language, display: &Display) -> String {
     title
 }
 
+/// Убирает из производителя только явные корпоративные хвосты. Правило
+/// простое и безопасное: удаляются последние слова `CO`, `LTD`, `INC`,
+/// `CORP`, `CORPORATION`, `LIMITED`, `TECHNOLOGY`, `TECHNOLOGIES` без учёта
+/// регистра и точки; как только встретилось другое слово, разбор прекращён.
+fn clean_make(make: &str) -> String {
+    let mut parts: Vec<&str> = make.split_whitespace().collect();
+    while let Some(last) = parts.last() {
+        let token = last.trim_end_matches('.').to_ascii_lowercase();
+        let corporate = matches!(
+            token.as_str(),
+            "co" | "ltd"
+                | "inc"
+                | "corp"
+                | "corporation"
+                | "limited"
+                | "technology"
+                | "technologies"
+        );
+        if corporate {
+            parts.pop();
+        } else {
+            break;
+        }
+    }
+    parts.join(" ")
+}
+
+/// Пояснение поворота для строки «Логический». `None` — обычный вывод, про
+/// который в короткой строке говорить нечего.
+fn rotation_note(lang: Language, raw: &str) -> Option<String> {
+    let transform = Transform::parse(raw)?;
+    let note = match transform {
+        Transform::Normal => return None,
+        Transform::Rotate90 => label(lang, "поворот 90°", "rotated 90°"),
+        Transform::Rotate180 => label(lang, "поворот 180°", "rotated 180°"),
+        Transform::Rotate270 => label(lang, "поворот 270°", "rotated 270°"),
+        Transform::Flipped => label(lang, "зеркало", "mirrored"),
+        Transform::Flipped90 => label(lang, "зеркало 90°", "mirrored 90°"),
+        Transform::Flipped180 => label(lang, "зеркало 180°", "mirrored 180°"),
+        Transform::Flipped270 => label(lang, "зеркало 270°", "mirrored 270°"),
+    };
+    Some(note.to_string())
+}
+
+/// Короткая строка логического размера: без позиции (для неё есть отдельный
+/// пункт) и без «без поворота»; поворот добавляется только когда он не Normal.
+fn logical_text(lang: Language, logical: &DisplayLogical) -> String {
+    let size = format!("{}×{}", logical.width, logical.height);
+    let scale = format_scale(logical.scale);
+    let mut text = if ru(lang) {
+        format!("Логический: {size} · ×{scale}")
+    } else {
+        format!("Logical: {size} · ×{scale}")
+    };
+    if let Some(note) = rotation_note(lang, &logical.transform) {
+        text.push_str(" · ");
+        text.push_str(&note);
+    }
+    text
+}
+
 /// Подменю одного вывода: модель, режим, логика, VRR, физический размер.
 fn display_submenu(lang: Language, display: &Display) -> Node {
     let id = display.row_id();
     let mut children = Vec::new();
 
-    let model = [display.make.as_str(), display.model.as_str()]
+    let make = clean_make(&display.make);
+    let model = [make.as_str(), display.model.as_str()]
         .into_iter()
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
@@ -821,7 +890,7 @@ fn display_submenu(lang: Language, display: &Display) -> Node {
 
     let mode = if ru(lang) { "Режим" } else { "Mode" };
     let current = match display.current() {
-        Some(mode) => mode.label(),
+        Some(mode) => mode.human_label(lang),
         None if display.is_custom_mode => {
             if ru(lang) {
                 "настраиваемый".to_string()
@@ -832,27 +901,12 @@ fn display_submenu(lang: Language, display: &Display) -> Node {
         None => "—".to_string(),
     };
     children.push(
-        Node::info(settings_icons::DOT, &format!("{mode}: {current}"))
+        Node::info(settings_icons::TACHOMETER, &format!("{mode}: {current}"))
             .with_id(&format!("{id}/info/mode")),
     );
 
     if let Some(logical) = &display.logical {
-        let transform = match logical.transform.as_str() {
-            "Normal" if ru(lang) => "без поворота",
-            "Normal" => "no rotation",
-            other => other,
-        };
-        let text = if ru(lang) {
-            format!(
-                "Логический: {}x{} · масштаб {} · {} · позиция {}, {}",
-                logical.width, logical.height, logical.scale, transform, logical.x, logical.y
-            )
-        } else {
-            format!(
-                "Logical: {}x{} · scale {} · {} · position {}, {}",
-                logical.width, logical.height, logical.scale, transform, logical.x, logical.y
-            )
-        };
+        let text = logical_text(lang, logical);
         children
             .push(Node::info(settings_icons::DOT, &text).with_id(&format!("{id}/info/logical")));
     }
@@ -878,9 +932,9 @@ fn display_submenu(lang: Language, display: &Display) -> Node {
 
     if let Some((width, height)) = display.physical_size_mm {
         let text = if ru(lang) {
-            format!("Физический размер: {width}x{height} мм")
+            format!("Физический размер: {width}×{height} мм")
         } else {
-            format!("Physical size: {width}x{height} mm")
+            format!("Physical size: {width}×{height} mm")
         };
         children
             .push(Node::info(settings_icons::DOT, &text).with_id(&format!("{id}/info/physical")));
@@ -889,7 +943,7 @@ fn display_submenu(lang: Language, display: &Display) -> Node {
     children.extend(control_rows(lang, display));
 
     Node::submenu(
-        settings_icons::OVERVIEW,
+        settings_icons::PANEL_MONITOR,
         &display_title(lang, display),
         children,
     )
@@ -911,7 +965,7 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
     let on = display.is_on();
     let mut rows = vec![
         Node::action(
-            settings_icons::BATTERY,
+            settings_icons::POWER,
             if on {
                 label(lang, "Выключить вывод", "Turn off")
             } else {
@@ -930,20 +984,20 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
             .map(|mode| {
                 let argument = mode_argument(mode);
                 let is_current = current.as_deref() == Some(argument.as_str());
-                let mut title = mode.label();
+                let mut title = mode.human_label(lang);
                 if is_current {
                     title.push_str(label(lang, " · текущий", " · current"));
                 }
                 if mode.is_preferred {
                     title.push_str(label(lang, " · предпочтительный", " · preferred"));
                 }
-                Node::action(settings_icons::OVERVIEW, &title, mode_action(name, mode))
+                Node::action(settings_icons::TACHOMETER, &title, mode_action(name, mode))
                     .with_id(&format!("{id}/mode/{argument}"))
             })
             .collect();
         rows.push(
             Node::submenu(
-                settings_icons::OVERVIEW,
+                settings_icons::TACHOMETER,
                 label(lang, "Режим", "Mode"),
                 modes,
             )
@@ -960,13 +1014,17 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
             if is_current {
                 title.push_str(label(lang, " · текущий", " · current"));
             }
-            Node::action(settings_icons::DOT, &title, scale_action(name, scale))
+            Node::action(settings_icons::ZOOM_IN, &title, scale_action(name, scale))
                 .with_id(&format!("{id}/scale/{title}"))
         })
         .collect();
     rows.push(
-        Node::submenu(settings_icons::DOT, label(lang, "Масштаб", "Scale"), scales)
-            .with_id(&format!("{id}/scales")),
+        Node::submenu(
+            settings_icons::ZOOM_IN,
+            label(lang, "Масштаб", "Scale"),
+            scales,
+        )
+        .with_id(&format!("{id}/scales")),
     );
 
     let current_transform = display
@@ -982,7 +1040,7 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
                 title.push_str(label(lang, " · текущий", " · current"));
             }
             Node::action(
-                settings_icons::DOT,
+                settings_icons::ROTATE,
                 &title,
                 transform_action(name, transform),
             )
@@ -991,7 +1049,7 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
         .collect();
     rows.push(
         Node::submenu(
-            settings_icons::DOT,
+            settings_icons::ROTATE,
             label(lang, "Поворот", "Rotation"),
             transforms,
         )
@@ -1017,7 +1075,7 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
 
     let mut position = vec![
         Node::action(
-            settings_icons::DOT,
+            settings_icons::CROSSHAIR,
             label(lang, "Автоматически", "Automatic"),
             position_auto_action(name),
         )
@@ -1034,7 +1092,7 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
         };
         position.push(
             Node::action(
-                settings_icons::DOT,
+                settings_icons::CROSSHAIR,
                 direction.1,
                 position_action(name, x, y),
             )
@@ -1043,7 +1101,7 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
     }
     rows.push(
         Node::submenu(
-            settings_icons::DOT,
+            settings_icons::CROSSHAIR,
             label(lang, "Позиция", "Position"),
             position,
         )
@@ -1070,7 +1128,7 @@ pub fn build_nodes(snapshot: &DisplaysSnapshot, lang: Language) -> Vec<Node> {
     }
     rows.push(
         Node::action(
-            settings_icons::UP,
+            settings_icons::REFRESH,
             if ru(lang) {
                 "Обновить"
             } else {
@@ -1142,6 +1200,90 @@ mod tests {
         let modes = &list[0].modes;
         assert_eq!(modes[0].label(), "1920x1080 @ 144.000");
         assert_eq!(modes[1].label(), "1920x1080 @ 60.002");
+    }
+
+    #[test]
+    fn human_mode_labels_are_short() {
+        let list = parse_outputs(OUTPUTS).expect("вывод разобран");
+        let modes = &list[0].modes;
+        assert_eq!(modes[0].human_label(Language::Ru), "1920×1080 · 144 Гц");
+        assert_eq!(modes[0].human_label(Language::En), "1920×1080 · 144 Hz");
+        assert_eq!(modes[1].human_label(Language::Ru), "1920×1080 · 60.002 Гц");
+        let zero = DisplayMode {
+            width: 800,
+            height: 600,
+            refresh_mhz: 0,
+            is_preferred: false,
+        };
+        assert_eq!(zero.human_label(Language::Ru), "800×600 · 0 Гц");
+    }
+
+    #[test]
+    fn human_labels_never_contain_the_machine_refresh_format() {
+        let snapshot = DisplaysSnapshot {
+            outputs: Block::Ready(parse_outputs(OUTPUTS).expect("вывод разобран")),
+        };
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        let title = &nodes
+            .iter()
+            .find(|node| node.identity() == "displays/output/eDP-1")
+            .expect("вывод есть")
+            .title;
+        assert!(!title.contains("144.000"), "{title}");
+        let children = nodes
+            .iter()
+            .find(|node| node.identity() == "displays/output/eDP-1")
+            .and_then(Node::children)
+            .expect("дети есть");
+        for row in children {
+            assert!(
+                !row.title.contains("144.000"),
+                "машинный формат в человеческой подписи: {}",
+                row.title
+            );
+        }
+    }
+
+    #[test]
+    fn logical_line_is_short_and_mentions_rotation_only_when_needed() {
+        let normal = DisplayLogical {
+            width: 1536,
+            height: 864,
+            scale: 1.25,
+            transform: "Normal".to_string(),
+            ..DisplayLogical::default()
+        };
+        assert_eq!(
+            logical_text(Language::Ru, &normal),
+            "Логический: 1536×864 · ×1.25"
+        );
+        assert_eq!(
+            logical_text(Language::En, &normal),
+            "Logical: 1536×864 · ×1.25"
+        );
+        let rotated = DisplayLogical {
+            transform: "90".to_string(),
+            ..normal
+        };
+        assert_eq!(
+            logical_text(Language::Ru, &rotated),
+            "Логический: 1536×864 · ×1.25 · поворот 90°"
+        );
+        assert_eq!(
+            logical_text(Language::En, &rotated),
+            "Logical: 1536×864 · ×1.25 · rotated 90°"
+        );
+    }
+
+    #[test]
+    fn corporate_tails_are_removed_from_make_only() {
+        assert_eq!(
+            clean_make("Najing CEC Panda FPD Technology CO. ltd"),
+            "Najing CEC Panda FPD"
+        );
+        assert_eq!(clean_make("Dell Inc."), "Dell");
+        assert_eq!(clean_make("Panel"), "Panel");
+        assert_eq!(clean_make(""), "");
     }
 
     #[test]
@@ -1220,7 +1362,7 @@ mod tests {
             outputs: Block::Ready(parse_outputs(TWO_OUTPUTS).expect("вывод разобран")),
         };
         let nodes = build_nodes(&snapshot, Language::Ru);
-        assert_eq!(nodes[0].title, "дисплеев: 2");
+        assert_eq!(nodes[0].title, "Дисплеев: 2");
         let by_id = |id: &str| {
             nodes
                 .iter()
@@ -1229,7 +1371,7 @@ mod tests {
         };
         assert_eq!(
             by_id("displays/output/eDP-1").title,
-            "eDP-1 · 1920x1080 @ 144.000"
+            "eDP-1 · 1920×1080 · 144 Гц"
         );
         assert_eq!(
             by_id("displays/output/HDMI-A-1").title,
@@ -1252,29 +1394,28 @@ mod tests {
             outputs: Block::Ready(parse_outputs(OUTPUTS).expect("вывод разобран")),
         };
         let nodes = build_nodes(&snapshot, Language::En);
-        assert_eq!(nodes[0].title, "displays: 1");
+        assert_eq!(nodes[0].title, "Displays: 1");
         let output = nodes
             .iter()
             .find(|node| node.identity() == "displays/output/eDP-1")
             .expect("вывод есть");
-        assert_eq!(output.title, "eDP-1 · 1920x1080 @ 144.000");
+        assert_eq!(output.title, "eDP-1 · 1920×1080 · 144 Hz");
         let children = output.children().expect("дети есть");
         assert!(
             children
                 .iter()
-                .any(|row| row.title == "Model: Najing CEC Panda FPD Technology CO. ltd 0x004D")
+                .any(|row| row.title == "Model: Najing CEC Panda FPD 0x004D")
         );
         assert!(children.iter().any(|row| row.title == "VRR: not supported"));
         assert!(
             children
                 .iter()
-                .any(|row| row.title
-                    == "Logical: 1536x864 · scale 1.25 · no rotation · position 0, 0")
+                .any(|row| row.title == "Logical: 1536×864 · ×1.25")
         );
         assert!(
             children
                 .iter()
-                .any(|row| row.title == "Physical size: 340x190 mm")
+                .any(|row| row.title == "Physical size: 340×190 mm")
         );
     }
 
@@ -1473,6 +1614,50 @@ mod tests {
                 "msg", "output", "HDMI-A-1", "position", "set", "-1920", "-1080"
             ],
             "отрицательные координаты не экранируются и не теряются"
+        );
+    }
+
+    /// Иконки строк соответствуют смыслу, а не одной точке: вывод и статус —
+    /// монитор, обновление — круговая стрелка, режим/масштаб/поворот/позиция
+    /// различаются.
+    #[test]
+    fn display_rows_use_meaningful_icons() {
+        let snapshot = DisplaysSnapshot {
+            outputs: Block::Ready(parse_outputs(OUTPUTS).expect("вывод разобран")),
+        };
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        assert_eq!(nodes[0].icon, settings_icons::PANEL_MONITOR);
+        let output = nodes
+            .iter()
+            .find(|node| node.identity() == "displays/output/eDP-1")
+            .expect("вывод есть");
+        assert_eq!(output.icon, settings_icons::PANEL_MONITOR);
+        let refresh = nodes.last().expect("обновление");
+        assert_eq!(refresh.icon, settings_icons::REFRESH);
+        let children = output.children().expect("дети есть");
+        let icon = |id: &str| {
+            children
+                .iter()
+                .find(|row| row.identity() == id)
+                .map(|row| row.icon)
+                .unwrap_or_else(|| panic!("нет строки {id}"))
+        };
+        assert_eq!(icon("displays/output/eDP-1/power"), settings_icons::POWER);
+        assert_eq!(
+            icon("displays/output/eDP-1/modes"),
+            settings_icons::TACHOMETER
+        );
+        assert_eq!(
+            icon("displays/output/eDP-1/scales"),
+            settings_icons::ZOOM_IN
+        );
+        assert_eq!(
+            icon("displays/output/eDP-1/transforms"),
+            settings_icons::ROTATE
+        );
+        assert_eq!(
+            icon("displays/output/eDP-1/positions"),
+            settings_icons::CROSSHAIR
         );
     }
 

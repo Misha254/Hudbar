@@ -117,26 +117,16 @@ impl Subject {
 /// что в тестах раздела «Дисплеи», поэтому снимок не зависит от машины.
 const ONE_OUTPUT: &str = r#"{"eDP-1":{"name":"eDP-1","make":"Najing CEC Panda FPD Technology CO. ltd","model":"0x004D","serial":null,"physical_size":[340,190],"modes":[{"width":1920,"height":1080,"refresh_rate":144000,"is_preferred":true},{"width":1920,"height":1080,"refresh_rate":60002,"is_preferred":false}],"current_mode":0,"is_custom_mode":false,"vrr_supported":false,"vrr_enabled":true,"logical":{"x":0,"y":0,"width":1536,"height":864,"scale":1.25,"transform":"Normal"}}}"#;
 
-/// Раздел «Дисплеи» из фиксированного снимка: без запуска niri. Если задан
-/// `output_title`, заголовок подменю вывода заменяется: снимку глубоких
-/// крошек нужен короткий последний уровень «eDP-1», а не строка с режимом.
-fn displays_section_with(outputs: &str, output_title: Option<&str>) -> Node {
+/// Раздел «Дисплеи» из фиксированного снимка: без запуска niri.
+fn displays_section(outputs: &str) -> Node {
     let snapshot = DisplaysSnapshot {
         outputs: Block::Ready(displays::parse_outputs(outputs).expect("фикстура выводов")),
     };
-    let mut nodes = displays::build_nodes(&snapshot, super::settings::Language::Ru);
-    if let Some(title) = output_title
-        && let Some(node) = nodes
-            .iter_mut()
-            .find(|node| node.id.starts_with("displays/output/"))
-    {
-        node.title = title.to_string();
-    }
-    Node::submenu(settings_icons::OVERVIEW, "Дисплеи", nodes)
-}
-
-fn displays_section(outputs: &str) -> Node {
-    displays_section_with(outputs, None)
+    Node::submenu(
+        settings_icons::PANEL_MONITOR,
+        "Дисплеи",
+        displays::build_nodes(&snapshot, super::settings::Language::Ru),
+    )
 }
 
 /// Меню, открытое на разделе «Дисплеи».
@@ -193,7 +183,7 @@ pub fn subject_menu(subject: Subject) -> Menu {
             let devices = Node::submenu(
                 settings_icons::DOT,
                 "Устройства",
-                vec![displays_section_with(ONE_OUTPUT, Some("eDP-1"))],
+                vec![displays_section(ONE_OUTPUT)],
             );
             let system = Node::submenu(settings_icons::SYSTEM, "Система", vec![devices]);
             menu = Menu::new(vec![system]);
@@ -400,7 +390,12 @@ pub fn render_icons() -> tiny_skia::Pixmap {
     let cell_w = 220.0;
     let cell_h = 64.0;
     let width = (FRAME_W * SCALE) as u32;
-    let rows = settings_icons::MENU.len().div_ceil(columns);
+    let icons_list: Vec<(&str, &str)> = settings_icons::MENU
+        .iter()
+        .chain(settings_icons::DISPLAYS.iter())
+        .copied()
+        .collect();
+    let rows = icons_list.len().div_ceil(columns);
     let height = ((140.0 + rows as f32 * cell_h) * SCALE) as u32;
     let mut pixmap = tiny_skia::Pixmap::new(width, height).expect("pixmap");
     pixmap.fill(ui.base.to_tiny());
@@ -415,7 +410,7 @@ pub fn render_icons() -> tiny_skia::Pixmap {
         title,
         Align::Start,
     );
-    for (index, (name, glyph)) in settings_icons::MENU.iter().enumerate() {
+    for (index, (name, glyph)) in icons_list.iter().enumerate() {
         let column = index % columns;
         let line = index / columns;
         let cell = Rect::new(
@@ -634,15 +629,15 @@ mod tests {
 
         let deep = subject_menu(Subject::DeepCrumbs).frame();
         assert_eq!(
-            deep.trail,
-            vec![
+            deep.trail[..4],
+            [
                 "HUD".to_string(),
                 "Система".to_string(),
                 "Устройства".to_string(),
                 "Дисплеи".to_string(),
-                "eDP-1".to_string(),
             ]
         );
+        assert!(deep.trail[4].starts_with("eDP-1"));
     }
 
     #[test]
