@@ -802,31 +802,38 @@ fn display_title(lang: Language, display: &Display) -> String {
     title
 }
 
-/// Убирает из производителя только явные корпоративные хвосты. Правило
-/// простое и безопасное: удаляются последние слова `CO`, `LTD`, `INC`,
-/// `CORP`, `CORPORATION`, `LIMITED`, `TECHNOLOGY`, `TECHNOLOGIES` без учёта
-/// регистра и точки; как только встретилось другое слово, разбор прекращён.
+/// Убирает из производителя только юридические хвосты. Правило простое и
+/// безопасное: удаляются последние слова `CO`, `LTD`, `INC`, `CORP`,
+/// `CORPORATION`, `LIMITED` без учёта регистра и точки; как только встретилось
+/// другое слово, разбор прекращён. Слова `TECHNOLOGY` и `TECHNOLOGIES` —
+/// часть названия производителя, поэтому остаются.
 fn clean_make(make: &str) -> String {
     let mut parts: Vec<&str> = make.split_whitespace().collect();
     while let Some(last) = parts.last() {
         let token = last.trim_end_matches('.').to_ascii_lowercase();
-        let corporate = matches!(
+        let legal = matches!(
             token.as_str(),
-            "co" | "ltd"
-                | "inc"
-                | "corp"
-                | "corporation"
-                | "limited"
-                | "technology"
-                | "technologies"
+            "co" | "ltd" | "inc" | "corp" | "corporation" | "limited"
         );
-        if corporate {
+        if legal {
             parts.pop();
         } else {
             break;
         }
     }
     parts.join(" ")
+}
+
+/// Сырой код модели из EDID (`0x004D`): человеку он ничего не говорит и в
+/// строке «Модель» не показывается.
+fn is_raw_model_code(model: &str) -> bool {
+    let Some(code) = model
+        .strip_prefix("0x")
+        .or_else(|| model.strip_prefix("0X"))
+    else {
+        return false;
+    };
+    !code.is_empty() && code.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 /// Пояснение поворота для строки «Логический». `None` — обычный вывод, про
@@ -871,7 +878,7 @@ fn display_submenu(lang: Language, display: &Display) -> Node {
     let make = clean_make(&display.make);
     let model = [make.as_str(), display.model.as_str()]
         .into_iter()
-        .filter(|part| !part.is_empty())
+        .filter(|part| !part.is_empty() && !is_raw_model_code(part))
         .collect::<Vec<_>>()
         .join(" ");
     if !model.is_empty() {
@@ -1279,11 +1286,39 @@ mod tests {
     fn corporate_tails_are_removed_from_make_only() {
         assert_eq!(
             clean_make("Najing CEC Panda FPD Technology CO. ltd"),
-            "Najing CEC Panda FPD"
+            "Najing CEC Panda FPD Technology"
         );
         assert_eq!(clean_make("Dell Inc."), "Dell");
         assert_eq!(clean_make("Panel"), "Panel");
         assert_eq!(clean_make(""), "");
+    }
+
+    #[test]
+    fn raw_model_code_is_hidden_and_technology_is_kept() {
+        let list = parse_outputs(OUTPUTS).expect("вывод разобран");
+        let node = display_submenu(Language::Ru, &list[0]);
+        let children = node.children().expect("дети есть");
+        let model = children
+            .iter()
+            .find(|row| row.identity().ends_with("/info/model"))
+            .expect("строка модели");
+        assert_eq!(model.title, "Модель: Najing CEC Panda FPD Technology");
+        assert!(!model.title.contains("0x004D"));
+
+        let hidden = Display {
+            make: "CO. ltd".to_string(),
+            model: "0x004D".to_string(),
+            ..Display::default()
+        };
+        let empty = display_submenu(Language::Ru, &hidden);
+        assert!(
+            !empty
+                .children()
+                .expect("дети есть")
+                .iter()
+                .any(|row| row.identity().ends_with("/info/model")),
+            "пустая модель не показывает строку"
+        );
     }
 
     #[test]
@@ -1404,7 +1439,7 @@ mod tests {
         assert!(
             children
                 .iter()
-                .any(|row| row.title == "Model: Najing CEC Panda FPD 0x004D")
+                .any(|row| row.title == "Model: Najing CEC Panda FPD Technology")
         );
         assert!(children.iter().any(|row| row.title == "VRR: not supported"));
         assert!(

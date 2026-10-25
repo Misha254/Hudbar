@@ -99,10 +99,12 @@ pub const DOWN: &str = "\u{f078}";
 
 /// Иконки раздела «Дисплеи»: круговая стрелка обновления, увеличение,
 /// поворот, перекрестие позиции и тахометр режима. Кодпойнты проверены по
-/// cmap JetBrainsMono Nerd Font Propo.
+/// cmap JetBrainsMono Nerd Font Propo. Поворот — `f01e` (fa-repeat, по смыслу
+/// redo): одиночная дуга со стрелкой, визуально отличимая от двухстрелочного
+/// `f021`.
 pub const REFRESH: &str = "\u{f021}";
 pub const ZOOM_IN: &str = "\u{f00e}";
-pub const ROTATE: &str = "\u{f2f1}";
+pub const ROTATE: &str = "\u{f01e}";
 pub const CROSSHAIR: &str = "\u{f05b}";
 pub const TACHOMETER: &str = "\u{f0e4}";
 
@@ -275,6 +277,17 @@ mod tests {
                 "иконка «{name}» не один символ: {glyph:?}"
             );
         }
+    }
+
+    /// Поворот не должен читаться как обновление: у них разные глифы, причём
+    /// поворот выбран одиночной дугой redo, а не двухстрелочным refresh.
+    #[test]
+    fn rotation_icon_differs_from_refresh() {
+        assert_eq!(ROTATE, "\u{f01e}");
+        assert_ne!(ROTATE, REFRESH);
+        assert_ne!(ROTATE, ZOOM_IN);
+        assert_ne!(ROTATE, CROSSHAIR);
+        assert_ne!(ROTATE, TACHOMETER);
     }
 
     /// Каждая иконка обязана быть глифом Nerd Font, а не «тофу». Точное
