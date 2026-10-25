@@ -210,7 +210,7 @@ pub(crate) fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
         let band = center_band(crumbs, title * 2.0);
         // Общая линейка письма учитывает кириллические и латинские верхние и
         // нижние выносы; все части крошек используют один baseline.
-        let baseline = view.painter.shared_baseline(band, title);
+        let baseline = view.painter.cap_baseline(band, title);
         let mut x = crumbs.x;
         for (index, (part, baseline)) in crumb_baselines(&plan, baseline).enumerate() {
             let color = match part.role {
@@ -455,7 +455,7 @@ mod tests {
         let plan = fit_crumbs(&trail, 1_000.0, width);
         let mut painter = TextPainter::new(&font_name());
         let band = Rect::new(0.0, 0.0, 228.0, 52.0);
-        let baseline = painter.shared_baseline(band, 15.0);
+        let baseline = painter.cap_baseline(band, 15.0);
         let assigned = crumb_baselines(&plan, baseline)
             .map(|(_, y)| y)
             .collect::<Vec<_>>();
@@ -471,5 +471,20 @@ mod tests {
                 .collect::<Vec<_>>();
             assert!(ys.iter().all(|y| *y == baseline), "segment: {segment}");
         }
+    }
+
+    #[test]
+    fn cap_baseline_matches_the_old_single_hud_baseline() {
+        use super::super::super::text::TextPainter;
+        use super::super::super::ui_tokens::font_name;
+
+        let mut painter = TextPainter::new(&font_name());
+        let band = Rect::new(0.0, 0.0, 228.0, 52.0);
+        let size = 15.0;
+        let hud_metrics = painter.ink_metrics("HUD", size);
+        let old_hud = painter.baseline(band, &hud_metrics);
+        let cap = painter.cap_baseline(band, size);
+        assert_eq!(old_hud, cap);
+        assert_eq!(cap, 19.0);
     }
 }

@@ -30,6 +30,9 @@ pub const SHAPED_CACHE_LIMIT: usize = 512;
 /// «средней» строки. Фиксированная строка: базовой линии не положено
 /// прыгать от содержимого.
 const SHARED_PROBE: &str = "AgyД019+у";
+/// Проба линейки для заголовков без нижних выносов: латинская и кириллическая
+/// заглавные буквы плюс цифра задают cap-height, не подтягивая линию вверх.
+const CAP_PROBE: &str = "HЕ0";
 
 /// Горизонтальное выравнивание текста внутри отведённой полосы.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -176,6 +179,13 @@ impl TextPainter {
     /// садятся на одну линию — контур отдельного текста её не крутит.
     pub fn shared_baseline(&mut self, rect: Rect, size: f32) -> f32 {
         let probe = self.shape(SHARED_PROBE, size).0;
+        rect.y + rect.h / 2.0 - (probe.ink_top + probe.ink_bottom) / 2.0
+    }
+
+    /// Базовая линия по высоте заглавных букв. Нижние выносы реальных строк
+    /// остаются ниже этой линии, но не меняют положение заголовка.
+    pub fn cap_baseline(&mut self, rect: Rect, size: f32) -> f32 {
+        let probe = self.shape(CAP_PROBE, size).0;
         rect.y + rect.h / 2.0 - (probe.ink_top + probe.ink_bottom) / 2.0
     }
 
