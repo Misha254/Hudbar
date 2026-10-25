@@ -95,14 +95,7 @@ pub(crate) fn fit_crumbs(
 
     let separator = strings::CRUMBS_SEPARATOR;
     let ancestors = &trail[..trail.len() - 1];
-    let mut full_prefix = ancestors.join(separator);
-    // У двух уровней пробел перед разделителем сохранён от старой шапки: иначе
-    // `style.png` сдвинулся бы на ширину пробела и перестал совпадать. В более
-    // глубоком следе разделитель уже ровно `CRUMBS_SEPARATOR`.
-    if ancestors.len() == 1 {
-        full_prefix.push(' ');
-    }
-    full_prefix.push_str(separator);
+    let full_prefix = format!("{}{separator}", ancestors.join(separator));
     let full_width = text_width(&full_prefix) + LAST_GAP + text_width(last);
     if full_width <= avail {
         return plan_with_prefix(full_prefix, last, &mut text_width, CrumbRole::Accent);
@@ -336,7 +329,10 @@ mod tests {
     fn all_crumbs_fit_with_separator_and_roles() {
         let plan = fit_crumbs(&["HUD", "Стиль"], 100.0, width);
         assert_eq!(plan.parts.len(), 2);
-        assert_eq!(plan.parts[0].text, "HUD  › ");
+        assert_eq!(
+            plan.parts[0].text,
+            format!("HUD{}", strings::CRUMBS_SEPARATOR)
+        );
         assert_eq!(plan.parts[0].role, CrumbRole::Muted);
         assert_eq!(plan.parts[1].text, "Стиль");
         assert_eq!(plan.parts[1].role, CrumbRole::Accent);
@@ -406,8 +402,34 @@ mod tests {
         let en = fit_crumbs(&["HUD", "Style"], 100.0, width);
         assert_eq!(ru.parts.len(), en.parts.len());
         assert_eq!(ru.parts[0].text, en.parts[0].text);
-        assert_eq!(ru.parts[0].text, "HUD  › ");
+        assert_eq!(
+            ru.parts[0].text,
+            format!("HUD{}", strings::CRUMBS_SEPARATOR)
+        );
         assert_eq!(ru.parts[0].role, en.parts[0].role);
         assert_eq!(ru.parts[1].role, en.parts[1].role);
+    }
+
+    #[test]
+    fn separators_are_identical_and_have_no_extra_spaces_on_every_trail() {
+        for trail in [
+            vec!["HUD", "Стиль"],
+            vec!["HUD", "Система", "Устройства", "Дисплеи", "eDP-1"],
+        ] {
+            let plan = fit_crumbs(&trail, 1_000.0, width);
+            let prefix = &plan.parts[0].text;
+            let expected = format!(
+                "{}{}",
+                trail[..trail.len() - 1].join(strings::CRUMBS_SEPARATOR),
+                strings::CRUMBS_SEPARATOR
+            );
+            assert_eq!(prefix, &expected);
+            assert!(!prefix.contains("  "), "лишний пробел в {prefix:?}");
+            assert_eq!(
+                prefix.matches(strings::CRUMBS_SEPARATOR).count(),
+                trail.len() - 1,
+                "разделитель должен стоять на каждом стыке"
+            );
+        }
     }
 }
