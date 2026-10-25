@@ -186,6 +186,13 @@ fn fit_last(
     }
 }
 
+/// Каждая текстовая часть крошек получает одну и ту же базовую линию.
+/// Отдельный iterator-helper используется и при отрисовке, и в тесте
+/// геометрии, чтобы случайно не вернуть центрирование по строкам.
+fn crumb_baselines(plan: &CrumbPlan, baseline: f32) -> impl Iterator<Item = (&CrumbPart, f32)> {
+    plan.parts.iter().map(move |part| (part, baseline))
+}
+
 /// Крошки «HUD › Стиль» слева и поле поиска справа. Поле не мигает: рамка в
 /// фокусе всегда видна, потому что меню работает только с клавиатуры.
 pub(crate) fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
@@ -200,19 +207,25 @@ pub(crate) fn header(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
         let plan = fit_crumbs(&trail, crumbs.w, |text| {
             view.painter.text_width(text, title)
         });
+        let band = center_band(crumbs, title * 2.0);
+        // Общая линейка письма учитывает кириллические и латинские верхние и
+        // нижние выносы; все части крошек используют один baseline.
+        let baseline = view.painter.shared_baseline(band, title);
         let mut x = crumbs.x;
-        for (index, part) in plan.parts.iter().enumerate() {
+        for (index, (part, baseline)) in crumb_baselines(&plan, baseline).enumerate() {
             let color = match part.role {
                 CrumbRole::Muted => view.ui.muted,
                 CrumbRole::Accent => view.ui.accent,
                 CrumbRole::Solo => view.ui.text,
             };
-            view.text_clipped(
+            view.painter.paint_on_baseline(
+                view.pixmap,
                 &part.text,
                 title,
                 color,
-                center_band(Rect::new(x, crumbs.y, part.width, crumbs.h), title * 2.0),
+                Rect::new(x, band.y, part.width, band.h),
                 Align::Start,
+                baseline,
             );
             x += part.width;
             if index + 1 < plan.parts.len() {
@@ -430,6 +443,33 @@ mod tests {
                 trail.len() - 1,
                 "разделитель должен стоять на каждом стыке"
             );
+        }
+    }
+
+    #[test]
+    fn all_crumb_segments_share_one_baseline() {
+        use super::super::super::text::TextPainter;
+        use super::super::super::ui_tokens::font_name;
+
+        let trail = ["HUD", "Дисплеи", "eDP-1", "Стиль", "Система"];
+        let plan = fit_crumbs(&trail, 1_000.0, width);
+        let mut painter = TextPainter::new(&font_name());
+        let band = Rect::new(0.0, 0.0, 228.0, 52.0);
+        let baseline = painter.shared_baseline(band, 15.0);
+        let assigned = crumb_baselines(&plan, baseline)
+            .map(|(_, y)| y)
+            .collect::<Vec<_>>();
+        assert_eq!(assigned.len(), plan.parts.len());
+        assert!(assigned.iter().all(|y| *y == baseline));
+
+        // Каждый из встречающихся в меню алфавитных сегментов также получает
+        // то же значение Y при раскладке как последний сегмент.
+        for segment in ["HUD", "Дисплеи", "eDP-1", "Стиль", "Система"] {
+            let single = fit_crumbs(&["HUD", segment], 1_000.0, width);
+            let ys = crumb_baselines(&single, baseline)
+                .map(|(_, y)| y)
+                .collect::<Vec<_>>();
+            assert!(ys.iter().all(|y| *y == baseline), "segment: {segment}");
         }
     }
 }
