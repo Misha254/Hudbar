@@ -97,6 +97,27 @@ pub const PLUS: &str = "+";
 pub const UP: &str = "\u{f077}";
 pub const DOWN: &str = "\u{f078}";
 
+/// Иконки раздела «Дисплеи»: круговая стрелка обновления, увеличение,
+/// поворот, перекрестие позиции и тахометр режима. Кодпойнты проверены по
+/// cmap JetBrainsMono Nerd Font Propo. Поворот — `f01e` (fa-repeat, по смыслу
+/// redo): одиночная дуга со стрелкой, визуально отличимая от двухстрелочного
+/// `f021`.
+pub const REFRESH: &str = "\u{f021}";
+pub const ZOOM_IN: &str = "\u{f00e}";
+pub const ROTATE: &str = "\u{f01e}";
+pub const CROSSHAIR: &str = "\u{f05b}";
+pub const TACHOMETER: &str = "\u{f0e4}";
+
+/// Галерея иконок «Дисплеев»: рисуется рядом с `MENU`, чтобы новые глифы
+/// можно было проверить глазами, а не только по кодпойнтам.
+pub const DISPLAYS: [(&str, &str); 5] = [
+    ("Обновить", REFRESH),
+    ("Масштаб", ZOOM_IN),
+    ("Поворот", ROTATE),
+    ("Позиция", CROSSHAIR),
+    ("Режим", TACHOMETER),
+];
+
 /// Все иконки галереи: подпись, глиф и смысл. Галерея рисует их в порядке
 /// объявления, а тест сверяет, что список не пустеет и глифы уникальны.
 pub const ALL: [(&str, &str); 22] = [
@@ -239,6 +260,36 @@ mod tests {
         }
     }
 
+    /// Новые иконки «Дисплеев» тоже однозначны и не повторяются внутри
+    /// собственной галереи.
+    #[test]
+    fn display_gallery_has_every_icon_once() {
+        assert_eq!(DISPLAYS.len(), 5);
+        let mut glyphs: Vec<&str> = DISPLAYS.iter().map(|(_, glyph)| *glyph).collect();
+        glyphs.sort_unstable();
+        let count = glyphs.len();
+        glyphs.dedup();
+        assert_eq!(glyphs.len(), count, "в галерее дисплеев есть повторы");
+        for (name, glyph) in DISPLAYS {
+            assert_eq!(
+                glyph.chars().count(),
+                1,
+                "иконка «{name}» не один символ: {glyph:?}"
+            );
+        }
+    }
+
+    /// Поворот не должен читаться как обновление: у них разные глифы, причём
+    /// поворот выбран одиночной дугой redo, а не двухстрелочным refresh.
+    #[test]
+    fn rotation_icon_differs_from_refresh() {
+        assert_eq!(ROTATE, "\u{f01e}");
+        assert_ne!(ROTATE, REFRESH);
+        assert_ne!(ROTATE, ZOOM_IN);
+        assert_ne!(ROTATE, CROSSHAIR);
+        assert_ne!(ROTATE, TACHOMETER);
+    }
+
     /// Каждая иконка обязана быть глифом Nerd Font, а не «тофу». Точное
     /// наличие в cmap проверяется при отрисовке галереи, а здесь — дешёвая
     /// страховка от опечатки: все используемые глифы лежат в области
@@ -248,6 +299,7 @@ mod tests {
         for (name, glyph) in ALL
             .iter()
             .chain(MENU.iter())
+            .chain(DISPLAYS.iter())
             .filter(|(_, glyph)| !matches!(*glyph, MINUS | PLUS))
         {
             let code = glyph.chars().next().unwrap() as u32;
