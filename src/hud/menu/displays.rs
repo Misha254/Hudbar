@@ -964,10 +964,9 @@ fn display_submenu(lang: Language, display: &Display, on_count: usize) -> Node {
                 .with_id(&format!("{id}/group/settings")),
         );
         children.extend(control_rows(lang, display));
-        children.push(
-            Node::header(label(lang, "Действия", "Actions"))
-                .with_id(&format!("{id}/group/actions")),
-        );
+        // У действий нет отдельной шапки: выключение вывода — такой же пункт
+        // настроек вывода, а лишняя группа дробила уровень и заставляла его
+        // прокручиваться.
         if on_count == 1 {
             // Keep this as an action (rather than an informational row): the
             // disabled action still occupies the same stable slot and is
@@ -982,10 +981,6 @@ fn display_submenu(lang: Language, display: &Display, on_count: usize) -> Node {
                 .with_disabled(),
             );
         } else {
-            children.push(
-                Node::header(label(lang, "Опасные действия", "Dangerous actions"))
-                    .with_id(&format!("{id}/group/danger")),
-            );
             let question = format!("{} {}?", label(lang, "Выключить", "Turn off"), display.name);
             let confirm = super::real::confirm_actions(
                 settings_icons::POWER,
@@ -1553,8 +1548,26 @@ mod tests {
             .filter(|row| matches!(row.kind, super::super::tree::NodeKind::Header))
             .map(|row| row.title.as_str())
             .collect();
-        assert_eq!(titles, ["Информация", "Настройки", "Действия"]);
+        assert_eq!(titles, ["Информация", "Настройки"]);
+        assert!(!titles.contains(&"Действия"));
         assert!(!titles.contains(&"Опасные действия"));
+    }
+
+    /// Уровень вывода целиком помещается в карточку: справка, настройки и
+    /// выключение не должны прятаться за прокруткой.
+    #[test]
+    fn output_level_fits_the_card_without_scrolling() {
+        for (outputs, on_count) in [(OUTPUTS, 1), (TWO_OUTPUTS, 2)] {
+            for display in parse_outputs(outputs).unwrap() {
+                let node = display_submenu(Language::Ru, &display, on_count);
+                let rows = node.children().unwrap().len();
+                assert!(
+                    rows <= super::super::view::MAX_ROWS,
+                    "{}: {rows} строк не влезают в карточку",
+                    display.name
+                );
+            }
+        }
     }
 
     #[test]
