@@ -270,7 +270,7 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
     let right = rect.right() - PAD;
     // Ширина зоны названия: до значения или до шеврона, чтобы длинное имя не
     // наезжало на правую часть.
-    let label_w = (right - trailing_w(&item.kind) - label_x).max(0.0);
+    let label_w = (right - trailing_w(item) - label_x).max(0.0);
     let label_rect = Rect::new(label_x, rect.y, label_w, rect.h);
     if !item.icon.is_empty() {
         let icon_rect = center_band(Rect::new(icon_x, rect.y, ICON, rect.h), row_band(view));
@@ -322,9 +322,14 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
 /// названию не хватило места — тогда полосы просто нет.
 /// Сколько места справа от названия резервирует строка: шеврон, значение,
 /// миниатюра пикера или полоса громкости с процентом.
-pub(crate) fn trailing_w(kind: &ItemKind) -> f32 {
-    match kind {
-        ItemKind::Submenu | ItemKind::Leaf => CHEVRON_W,
+pub(crate) fn trailing_w(item: &Item) -> f32 {
+    match &item.kind {
+        // Подменю без значения сохраняет прежнюю геометрию. Дополнительное
+        // место нужно только непустому значению, иначе длинное имя обрезалось
+        // бы без причины.
+        ItemKind::Submenu if item.value.is_empty() => CHEVRON_W,
+        ItemKind::Submenu => CHEVRON_W + VALUE_W + spacing::SM,
+        ItemKind::Leaf => CHEVRON_W,
         ItemKind::Picker(_) => THUMB_D + CHEVRON_W + spacing::SM,
         // У громкости справа полоса с процентом, а не только число: уровень
         // должен читаться взглядом, не выбирая строку и не глядя в подпись.

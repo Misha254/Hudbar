@@ -14,8 +14,7 @@ use super::action::Action;
 use super::item::{Item, ItemKind, Origin};
 use super::settings::Language;
 
-/// Что находится в узле. `PartialEq` здесь не нужен и невозможен: сравнение
-/// `fn`-указателей бессмысленно, а дерево всегда сравнивают по заголовкам.
+/// Что находится в узле.
 #[derive(Clone, Debug)]
 pub enum NodeKind {
     /// Вложенный уровень со своими узлами.
@@ -63,6 +62,95 @@ pub enum NodeKind {
     Header,
 }
 
+impl PartialEq for NodeKind {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Submenu(a), Self::Submenu(b)) => a == b,
+            (Self::Action(a), Self::Action(b)) => a == b,
+            (
+                Self::Toggle {
+                    get: ag, set: as_, ..
+                },
+                Self::Toggle {
+                    get: bg, set: bs, ..
+                },
+            ) => std::ptr::fn_addr_eq(*ag, *bg) && std::ptr::fn_addr_eq(*as_, *bs),
+            (
+                Self::Choice {
+                    options: ao,
+                    get: ag,
+                    set: as_,
+                },
+                Self::Choice {
+                    options: bo,
+                    get: bg,
+                    set: bs,
+                },
+            ) => ao == bo && std::ptr::fn_addr_eq(*ag, *bg) && std::ptr::fn_addr_eq(*as_, *bs),
+            (
+                Self::Number {
+                    min: amin,
+                    max: amax,
+                    step: astep,
+                    unit: aunit,
+                    get: ag,
+                    set: as_,
+                },
+                Self::Number {
+                    min: bmin,
+                    max: bmax,
+                    step: bstep,
+                    unit: bunit,
+                    get: bg,
+                    set: bs,
+                },
+            ) => {
+                amin == bmin
+                    && amax == bmax
+                    && astep == bstep
+                    && aunit == bunit
+                    && std::ptr::fn_addr_eq(*ag, *bg)
+                    && std::ptr::fn_addr_eq(*as_, *bs)
+            }
+            (Self::Picker(a), Self::Picker(b)) => a == b,
+            (
+                Self::Volume {
+                    down: ad,
+                    up: au,
+                    mute: am,
+                },
+                Self::Volume {
+                    down: bd,
+                    up: bu,
+                    mute: bm,
+                },
+            ) => ad == bd && au == bu && am == bm,
+            (Self::Dynamic { key: a }, Self::Dynamic { key: b }) => a == b,
+            (Self::Info, Self::Info) | (Self::Header, Self::Header) => true,
+            _ => false,
+        }
+    }
+}
+
+/// Источник дополнительного значения справа от строки.
+#[derive(Clone, Debug)]
+pub enum ValueSource {
+    /// Значение, вычисляемое при построении строки.
+    Fn(fn() -> String),
+    /// Неизменяемый текст.
+    Text(String),
+}
+
+impl PartialEq for ValueSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fn(a), Self::Fn(b)) => std::ptr::fn_addr_eq(*a, *b),
+            (Self::Text(a), Self::Text(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 /// Узел меню.
 #[derive(Clone, Debug)]
 pub struct Node {
@@ -92,7 +180,7 @@ pub struct Node {
     /// Необязательное значение справа для строк без `get` (у действия
     /// «Выбрать обои…» это текущий файл обоев). `None` — значение вычисляет
     /// [`node_value`] из `kind`.
-    pub value: Option<fn() -> String>,
+    pub value: Option<ValueSource>,
     /// Попадает ли узел в глобальный поиск. `false` у внутренних строк
     /// подтверждения: «Да, выключить» и «Отмена» — продолжение строки
     /// «Выключение», а не самостоятельные пункты, и в общем списке они были бы
@@ -102,6 +190,30 @@ pub struct Node {
     pub level: Option<u8>,
     /// Заглушено ли устройство: у полосы горит значок mute.
     pub muted: bool,
+}
+
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        self.icon == other.icon
+            && self.title == other.title
+            && self.id == other.id
+            && self.crumb == other.crumb
+            && self.kind == other.kind
+            && option_fn_eq(self.visible, other.visible)
+            && self.keywords == other.keywords
+            && self.value == other.value
+            && self.search == other.search
+            && self.level == other.level
+            && self.muted == other.muted
+    }
+}
+
+fn option_fn_eq(a: Option<fn() -> bool>, b: Option<fn() -> bool>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => std::ptr::fn_addr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 impl Node {
@@ -355,7 +467,13 @@ impl Node {
 
     /// Подменяет значение справа у листка-действия (строка без `get`).
     pub fn with_value(mut self, value: fn() -> String) -> Self {
-        self.value = Some(value);
+        self.value = Some(ValueSource::Fn(value));
+        self
+    }
+
+    /// Задаёт неизменяемое значение справа у строки.
+    pub fn with_text(mut self, text: &str) -> Self {
+        self.value = Some(ValueSource::Text(text.to_string()));
         self
     }
 
@@ -381,7 +499,7 @@ impl Node {
     }
 }
 
-/// Значение строки из `get`-функции узла. Пустая строка — значения нет.
+/// Значение строки из поведения узла. Пустая строка — значения нет.
 /// Язык нужен только тумблеру: «вкл»/«выкл» или «on»/«off».
 /// Правое значение строки громкости: процент и mute.
 pub fn level_value(level: u8, muted: bool, lang: Language) -> String {
@@ -393,7 +511,19 @@ pub fn level_value(level: u8, muted: bool, lang: Language) -> String {
     }
 }
 
-pub fn node_value(kind: &NodeKind, lang: Language) -> String {
+pub fn node_value(node: &Node, lang: Language) -> String {
+    explicit_value(node).unwrap_or_else(|| node_value_kind(&node.kind, lang))
+}
+
+fn explicit_value(node: &Node) -> Option<String> {
+    match &node.value {
+        Some(ValueSource::Fn(get)) => Some(get()),
+        Some(ValueSource::Text(text)) => Some(text.clone()),
+        None => None,
+    }
+}
+
+fn node_value_kind(kind: &NodeKind, lang: Language) -> String {
     match kind {
         NodeKind::Submenu(_)
         | NodeKind::Action(_)
@@ -510,13 +640,10 @@ pub fn row_for(node: &Node, depth: usize, index: usize, lang: Language) -> Item 
         // тумблеров: полоса без числа не читается. Считаем здесь, из
         // уровня узла: значение-функция у ползунка захватила бы уровень,
         // а замыкание с захватом не приводится к `fn() -> String`.
-        value: node
-            .value
-            .map(|get| get())
-            .unwrap_or_else(|| match node.level {
-                Some(level) => level_value(level, node.muted, lang),
-                None => node_value(&node.kind, lang),
-            }),
+        value: explicit_value(node).unwrap_or_else(|| match node.level {
+            Some(level) => level_value(level, node.muted, lang),
+            None => node_value_kind(&node.kind, lang),
+        }),
         caption: None,
         keywords: node.keywords,
         kind: item_kind(&node.kind),
@@ -674,50 +801,56 @@ mod tests {
 
     #[test]
     fn toggle_value_reads_the_getter() {
-        assert_eq!(
-            node_value(
-                &NodeKind::Toggle {
-                    get: || true,
-                    set: |_| {}
-                },
-                Language::Ru
-            ),
-            "вкл"
-        );
-        assert_eq!(
-            node_value(
-                &NodeKind::Toggle {
-                    get: || false,
-                    set: |_| {}
-                },
-                Language::Ru
-            ),
-            "выкл"
-        );
+        let on = Node::toggle("", "", || true, |_| {});
+        let off = Node::toggle("", "", || false, |_| {});
+        assert_eq!(node_value(&on, Language::Ru), "вкл");
+        assert_eq!(node_value(&off, Language::Ru), "выкл");
     }
 
     #[test]
     fn toggle_value_is_translated() {
+        let on = Node::toggle("", "", || true, |_| {});
+        let off = Node::toggle("", "", || false, |_| {});
+        assert_eq!(node_value(&on, Language::En), "on");
+        assert_eq!(node_value(&off, Language::En), "off");
+    }
+
+    #[test]
+    fn value_source_text_and_fn_render_the_same() {
+        fn value() -> String {
+            "текущее значение".to_string()
+        }
+
+        let from_fn = Node::action("i", "Пункт", Action::Back).with_value(value);
+        let from_text = Node::action("i", "Пункт", Action::Back).with_text("текущее значение");
+
         assert_eq!(
-            node_value(
-                &NodeKind::Toggle {
-                    get: || true,
-                    set: |_| {}
-                },
-                Language::En
-            ),
-            "on"
+            row_for(&from_fn, 0, 0, Language::Ru).value,
+            row_for(&from_text, 0, 0, Language::Ru).value
         );
+        assert!(matches!(from_fn.value, Some(ValueSource::Fn(_))));
         assert_eq!(
-            node_value(
-                &NodeKind::Toggle {
-                    get: || false,
-                    set: |_| {}
-                },
-                Language::En
-            ),
-            "off"
+            from_text.value,
+            Some(ValueSource::Text("текущее значение".to_string()))
         );
+    }
+
+    #[test]
+    fn value_source_clones_and_compares_by_contents() {
+        fn first() -> String {
+            "первое".to_string()
+        }
+        fn second() -> String {
+            "второе".to_string()
+        }
+
+        let text = ValueSource::Text("текст".to_string());
+        assert_eq!(text, text.clone());
+        assert_ne!(text, ValueSource::Text("другой текст".to_string()));
+
+        let first = ValueSource::Fn(first);
+        assert_eq!(first, first.clone());
+        assert_ne!(first, ValueSource::Fn(second));
     }
 
     #[test]

@@ -390,10 +390,10 @@ fn meter_tracks_the_level_and_fits_the_row() {
     // `meter_track`: дорожку считают одинаково, рисует её вызывающий
     // по `item.level`.
     assert!(
-        super::trailing_w(&plain_item().kind) < super::trailing_w(&volume_item().kind),
+        super::trailing_w(&plain_item()) < super::trailing_w(&volume_item()),
         "обычная строка резервирует меньше, чем громкость: {} против {}",
-        super::trailing_w(&plain_item().kind),
-        super::trailing_w(&volume_item().kind)
+        super::trailing_w(&plain_item()),
+        super::trailing_w(&volume_item())
     );
     // Совсем узкая строка: места не остаётся даже при `None` слева.
     let squeezed = Rect::new(
@@ -739,6 +739,99 @@ fn header_uses_caption_size_muted_and_hairline() {
         }
     }
     assert!(muted, "текст Header обязан быть muted");
+}
+
+/// Значение подменю занимает ту же правую полосу, что и шеврон, поэтому
+/// длинное название обрезается многоточием до значения, а не заезжает под него.
+#[test]
+fn submenu_with_value_reserves_space_and_title_is_clipped() {
+    let mut frame = Menu::new(vec![
+        Node::submenu(
+            "i",
+            "Очень длинное название пункта подменю",
+            vec![Node::info("", "Дочерний пункт")],
+        )
+        .with_text("Текущее значение"),
+    ])
+    .frame();
+    frame.selected = None;
+    let pixmap = render_card(&frame, None);
+    let (ui, scale) = theme(palette::Palette::default());
+    let item = &frame.items[0];
+    let right = CARD_W - PAD;
+    let label_x = PAD + ICON + spacing::MD;
+    let value_left = right - CHEVRON_W - VALUE_W - spacing::SM;
+    let title = ink_bounds(
+        &pixmap,
+        label_x,
+        HEADER_H,
+        value_left,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    )
+    .expect("название подменю видно");
+    let value = ink_bounds(
+        &pixmap,
+        value_left,
+        HEADER_H,
+        right - CHEVRON_W,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    )
+    .expect("значение подменю видно");
+
+    assert_eq!(
+        super::trailing_w(item),
+        CHEVRON_W + VALUE_W + spacing::SM,
+        "непустое значение подменю резервирует шеврон, значение и зазор"
+    );
+    let empty = Menu::new(vec![Node::submenu(
+        "i",
+        "Подменю без значения",
+        vec![Node::info("", "Дочерний пункт")],
+    )])
+    .frame();
+    assert_eq!(
+        super::trailing_w(&empty.items[0]),
+        CHEVRON_W,
+        "пустое значение подменю сохраняет прежнюю геометрию"
+    );
+    assert!(
+        TextPainter::new(&font_name()).text_width(&item.title, scale.label) > value_left - label_x,
+        "название должно быть длиннее доступной области"
+    );
+    assert!(
+        title.1 < value.0,
+        "название и значение не должны накладываться"
+    );
+}
+
+/// Значение Header рисуется muted и прижимается к правому краю карточки.
+#[test]
+fn header_value_is_right_aligned() {
+    let frame = Menu::new(vec![Node::header("Группа").with_text("Текущее значение")]).frame();
+    let pixmap = render_card(&frame, None);
+    let (ui, _) = theme(palette::Palette::default());
+    let right = CARD_W - PAD;
+    let value_left = right - VALUE_W;
+    let value = ink_bounds(
+        &pixmap,
+        value_left,
+        HEADER_H,
+        right,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    )
+    .expect("значение Header видно");
+
+    assert!(
+        value.1 > right - 20.0,
+        "значение Header должно быть справа: {value:?}"
+    );
+    assert!(
+        value.0 >= value_left,
+        "значение Header не выходит из своей зоны"
+    );
 }
 
 /// У Header нет иконки и шеврона, hover его не подсвечивает.
