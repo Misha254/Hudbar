@@ -623,15 +623,14 @@ mod tests {
             vec!["HUD".to_string(), "Дисплеи".to_string()]
         );
         assert!(
+            displays.items.iter().any(|item| {
+                item.title == "eDP-1 — встроенный" && item.value == "1920×1080 · 144 Гц"
+            }),
+            "строка вывода содержит новое название и режим: {:?}",
             displays
                 .items
                 .iter()
-                .any(|item| item.title.starts_with("eDP-1 · ")),
-            "строка вывода остаётся с режимом: {:?}",
-            displays
-                .items
-                .iter()
-                .map(|item| &item.title)
+                .map(|item| (&item.title, &item.value))
                 .collect::<Vec<_>>()
         );
 
