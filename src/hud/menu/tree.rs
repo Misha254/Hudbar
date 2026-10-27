@@ -14,8 +14,7 @@ use super::action::Action;
 use super::item::{Item, ItemKind, Origin};
 use super::settings::Language;
 
-/// Что находится в узле. `PartialEq` здесь не нужен и невозможен: сравнение
-/// `fn`-указателей бессмысленно, а дерево всегда сравнивают по заголовкам.
+/// Что находится в узле.
 #[derive(Clone, Debug)]
 pub enum NodeKind {
     /// Вложенный уровень со своими узлами.
@@ -59,6 +58,97 @@ pub enum NodeKind {
     /// Статичная строка: версия, подсказка. Значения и поведения нет, Enter
     /// ничего не делает.
     Info,
+    /// Заголовок группы строк. Не выбирается, не активируется и не ищется.
+    Header,
+}
+
+impl PartialEq for NodeKind {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Submenu(a), Self::Submenu(b)) => a == b,
+            (Self::Action(a), Self::Action(b)) => a == b,
+            (
+                Self::Toggle {
+                    get: ag, set: as_, ..
+                },
+                Self::Toggle {
+                    get: bg, set: bs, ..
+                },
+            ) => std::ptr::fn_addr_eq(*ag, *bg) && std::ptr::fn_addr_eq(*as_, *bs),
+            (
+                Self::Choice {
+                    options: ao,
+                    get: ag,
+                    set: as_,
+                },
+                Self::Choice {
+                    options: bo,
+                    get: bg,
+                    set: bs,
+                },
+            ) => ao == bo && std::ptr::fn_addr_eq(*ag, *bg) && std::ptr::fn_addr_eq(*as_, *bs),
+            (
+                Self::Number {
+                    min: amin,
+                    max: amax,
+                    step: astep,
+                    unit: aunit,
+                    get: ag,
+                    set: as_,
+                },
+                Self::Number {
+                    min: bmin,
+                    max: bmax,
+                    step: bstep,
+                    unit: bunit,
+                    get: bg,
+                    set: bs,
+                },
+            ) => {
+                amin == bmin
+                    && amax == bmax
+                    && astep == bstep
+                    && aunit == bunit
+                    && std::ptr::fn_addr_eq(*ag, *bg)
+                    && std::ptr::fn_addr_eq(*as_, *bs)
+            }
+            (Self::Picker(a), Self::Picker(b)) => a == b,
+            (
+                Self::Volume {
+                    down: ad,
+                    up: au,
+                    mute: am,
+                },
+                Self::Volume {
+                    down: bd,
+                    up: bu,
+                    mute: bm,
+                },
+            ) => ad == bd && au == bu && am == bm,
+            (Self::Dynamic { key: a }, Self::Dynamic { key: b }) => a == b,
+            (Self::Info, Self::Info) | (Self::Header, Self::Header) => true,
+            _ => false,
+        }
+    }
+}
+
+/// Источник дополнительного значения справа от строки.
+#[derive(Clone, Debug)]
+pub enum ValueSource {
+    /// Значение, вычисляемое при построении строки.
+    Fn(fn() -> String),
+    /// Неизменяемый текст.
+    Text(String),
+}
+
+impl PartialEq for ValueSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fn(a), Self::Fn(b)) => std::ptr::fn_addr_eq(*a, *b),
+            (Self::Text(a), Self::Text(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// Узел меню.
@@ -90,7 +180,7 @@ pub struct Node {
     /// Необязательное значение справа для строк без `get` (у действия
     /// «Выбрать обои…» это текущий файл обоев). `None` — значение вычисляет
     /// [`node_value`] из `kind`.
-    pub value: Option<fn() -> String>,
+    pub value: Option<ValueSource>,
     /// Попадает ли узел в глобальный поиск. `false` у внутренних строк
     /// подтверждения: «Да, выключить» и «Отмена» — продолжение строки
     /// «Выключение», а не самостоятельные пункты, и в общем списке они были бы
@@ -100,6 +190,36 @@ pub struct Node {
     pub level: Option<u8>,
     /// Заглушено ли устройство: у полосы горит значок mute.
     pub muted: bool,
+    /// Опасное действие, требующее особого акцента в интерфейсе.
+    pub danger: bool,
+    /// Строка недоступна для действия, но остаётся видимой.
+    pub disabled: bool,
+}
+
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        self.icon == other.icon
+            && self.title == other.title
+            && self.id == other.id
+            && self.crumb == other.crumb
+            && self.kind == other.kind
+            && option_fn_eq(self.visible, other.visible)
+            && self.keywords == other.keywords
+            && self.value == other.value
+            && self.search == other.search
+            && self.level == other.level
+            && self.muted == other.muted
+            && self.danger == other.danger
+            && self.disabled == other.disabled
+    }
+}
+
+fn option_fn_eq(a: Option<fn() -> bool>, b: Option<fn() -> bool>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => std::ptr::fn_addr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 impl Node {
@@ -117,6 +237,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -134,6 +256,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -151,6 +275,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -174,6 +300,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -210,6 +338,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -227,6 +357,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -244,6 +376,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -261,6 +395,35 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
+        }
+    }
+
+    /// Информационная строка с отдельным значением справа.
+    /// Информационные строки намеренно не имеют иконки: подпись и значение
+    /// остаются различимыми для UI и не маскируются служебным глифом.
+    pub fn info_value(title: &str, value: &str) -> Self {
+        Self::info("", title).with_text(value)
+    }
+
+    /// Заголовок группы. Живёт в списке, но не выбирается, не активируется и
+    /// не попадает в глобальный поиск.
+    pub fn header(title: &str) -> Self {
+        Self {
+            icon: "",
+            title: title.to_string(),
+            id: String::new(),
+            crumb: None,
+            kind: NodeKind::Header,
+            visible: None,
+            keywords: &[],
+            value: None,
+            search: false,
+            level: None,
+            muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -320,6 +483,17 @@ impl Node {
         self
     }
 
+    /// Помечает действие как опасное.
+    pub fn with_danger(mut self) -> Self {
+        self.danger = true;
+        self
+    }
+
+    pub fn with_disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
     /// Убирает узел из глобального поиска: строка остаётся видимой в своём
     /// разделе, но в общий список не попадает.
     pub fn hidden_from_search(mut self) -> Self {
@@ -335,7 +509,13 @@ impl Node {
 
     /// Подменяет значение справа у листка-действия (строка без `get`).
     pub fn with_value(mut self, value: fn() -> String) -> Self {
-        self.value = Some(value);
+        self.value = Some(ValueSource::Fn(value));
+        self
+    }
+
+    /// Задаёт неизменяемое значение справа у строки.
+    pub fn with_text(mut self, text: &str) -> Self {
+        self.value = Some(ValueSource::Text(text.to_string()));
         self
     }
 
@@ -361,7 +541,7 @@ impl Node {
     }
 }
 
-/// Значение строки из `get`-функции узла. Пустая строка — значения нет.
+/// Значение строки из поведения узла. Пустая строка — значения нет.
 /// Язык нужен только тумблеру: «вкл»/«выкл» или «on»/«off».
 /// Правое значение строки громкости: процент и mute.
 pub fn level_value(level: u8, muted: bool, lang: Language) -> String {
@@ -373,14 +553,27 @@ pub fn level_value(level: u8, muted: bool, lang: Language) -> String {
     }
 }
 
-pub fn node_value(kind: &NodeKind, lang: Language) -> String {
+pub fn node_value(node: &Node, lang: Language) -> String {
+    explicit_value(node).unwrap_or_else(|| node_value_kind(&node.kind, lang))
+}
+
+fn explicit_value(node: &Node) -> Option<String> {
+    match &node.value {
+        Some(ValueSource::Fn(get)) => Some(get()),
+        Some(ValueSource::Text(text)) => Some(text.clone()),
+        None => None,
+    }
+}
+
+fn node_value_kind(kind: &NodeKind, lang: Language) -> String {
     match kind {
         NodeKind::Submenu(_)
         | NodeKind::Action(_)
         | NodeKind::Picker(_)
         | NodeKind::Dynamic { .. }
         | NodeKind::Volume { .. }
-        | NodeKind::Info => String::new(),
+        | NodeKind::Info
+        | NodeKind::Header => String::new(),
         NodeKind::Toggle { get, .. } => {
             let on = get();
             match lang {
@@ -442,7 +635,8 @@ pub fn item_kind(kind: &NodeKind) -> ItemKind {
         // Динамический вход рисуется как подменю той же стрелкой: отдельный
         // рендер не нужен, содержимое подтянется при входе.
         NodeKind::Dynamic { .. } => ItemKind::Submenu,
-        NodeKind::Info => ItemKind::Leaf,
+        NodeKind::Info => ItemKind::Info,
+        NodeKind::Header => ItemKind::Header,
         NodeKind::Action(action) => ItemKind::Action(action.clone()),
         NodeKind::Volume { down, up, mute } => ItemKind::Volume {
             down: down.clone(),
@@ -488,13 +682,10 @@ pub fn row_for(node: &Node, depth: usize, index: usize, lang: Language) -> Item 
         // тумблеров: полоса без числа не читается. Считаем здесь, из
         // уровня узла: значение-функция у ползунка захватила бы уровень,
         // а замыкание с захватом не приводится к `fn() -> String`.
-        value: node
-            .value
-            .map(|get| get())
-            .unwrap_or_else(|| match node.level {
-                Some(level) => level_value(level, node.muted, lang),
-                None => node_value(&node.kind, lang),
-            }),
+        value: explicit_value(node).unwrap_or_else(|| match node.level {
+            Some(level) => level_value(level, node.muted, lang),
+            None => node_value_kind(&node.kind, lang),
+        }),
         caption: None,
         keywords: node.keywords,
         kind: item_kind(&node.kind),
@@ -502,6 +693,8 @@ pub fn row_for(node: &Node, depth: usize, index: usize, lang: Language) -> Item 
         // значения меняет команда из строки.
         level: node.level,
         muted: node.muted,
+        danger: node.danger,
+        disabled: node.disabled,
         origin: Origin { depth, index },
     }
 }
@@ -518,7 +711,9 @@ pub fn level_rows(nodes: &[Node], depth: usize, lang: Language) -> Vec<Item> {
 
 /// Путь к узлу в дереве: заголовки от корня до родителя.
 pub fn path_to(nodes: &[Node], target: &Node) -> Option<Vec<String>> {
-    for node in nodes.iter().filter(|node| node.is_visible() && node.search) {
+    for node in nodes.iter().filter(|node| {
+        node.is_visible() && node.search && !matches!(node.kind, NodeKind::Header | NodeKind::Info)
+    }) {
         if node.title == target.title {
             return Some(Vec::new());
         }
@@ -532,26 +727,41 @@ pub fn path_to(nodes: &[Node], target: &Node) -> Option<Vec<String>> {
     None
 }
 
-/// Все листья дерева вместе с путём до них. `path` — заголовки родителей,
-/// они же become caption строки в глобальном поиске.
-pub fn leaves_with_path(
+/// Все выбираемые листья дерева вместе с путём до них. `path` — заголовки
+/// родителей, они же становятся caption строки в глобальном поиске.
+///
+/// Header и Info не становятся результатами. Если подменю состоит только из
+/// Info, наружу отдаётся само подменю: раздел остаётся находимым по своему
+/// заголовку, но его информационные строки не активируются из поиска.
+fn collect_search(
     nodes: &[Node],
     path: &mut Vec<String>,
     out: &mut Vec<(Node, Vec<String>)>,
-) {
+) -> bool {
+    let mut has_info = false;
     for node in nodes.iter().filter(|node| node.is_visible() && node.search) {
-        match node.children() {
-            Some(children) => {
-                path.push(node.title.clone());
-                leaves_with_path(children, path, out);
-                path.pop();
-            }
-            None => out.push((node.clone(), path.clone())),
+        match &node.kind {
+            NodeKind::Header => {}
+            NodeKind::Info => has_info = true,
+            _ => match node.children() {
+                Some(children) => {
+                    let before = out.len();
+                    path.push(node.title.clone());
+                    let child_info = collect_search(children, path, out);
+                    path.pop();
+                    if out.len() == before && child_info {
+                        out.push((node.clone(), path.clone()));
+                    }
+                    has_info |= child_info;
+                }
+                None => out.push((node.clone(), path.clone())),
+            },
         }
     }
+    has_info
 }
 
-/// Строки глобального поиска: листья с путём до источника.
+/// Строки глобального поиска: выбираемые листья с путём до источника.
 ///
 /// Строка сохраняет иконку и поведение узла: иначе найденный тумблер
 /// выглядел бы как обычный пункт и потерял кружок, а иконка пропала бы вовсе.
@@ -560,7 +770,7 @@ pub fn leaves_with_path(
 pub fn search_rows(nodes: &[Node], depth: usize, lang: Language) -> Vec<Item> {
     let mut path = Vec::new();
     let mut leaves = Vec::new();
-    leaves_with_path(nodes, &mut path, &mut leaves);
+    collect_search(nodes, &mut path, &mut leaves);
     leaves
         .into_iter()
         .enumerate()
@@ -635,50 +845,73 @@ mod tests {
 
     #[test]
     fn toggle_value_reads_the_getter() {
-        assert_eq!(
-            node_value(
-                &NodeKind::Toggle {
-                    get: || true,
-                    set: |_| {}
-                },
-                Language::Ru
-            ),
-            "вкл"
-        );
-        assert_eq!(
-            node_value(
-                &NodeKind::Toggle {
-                    get: || false,
-                    set: |_| {}
-                },
-                Language::Ru
-            ),
-            "выкл"
-        );
+        let on = Node::toggle("", "", || true, |_| {});
+        let off = Node::toggle("", "", || false, |_| {});
+        assert_eq!(node_value(&on, Language::Ru), "вкл");
+        assert_eq!(node_value(&off, Language::Ru), "выкл");
     }
 
     #[test]
     fn toggle_value_is_translated() {
+        let on = Node::toggle("", "", || true, |_| {});
+        let off = Node::toggle("", "", || false, |_| {});
+        assert_eq!(node_value(&on, Language::En), "on");
+        assert_eq!(node_value(&off, Language::En), "off");
+    }
+
+    #[test]
+    fn value_source_text_and_fn_render_the_same() {
+        fn value() -> String {
+            "текущее значение".to_string()
+        }
+
+        let from_fn = Node::action("i", "Пункт", Action::Back).with_value(value);
+        let from_text = Node::action("i", "Пункт", Action::Back).with_text("текущее значение");
+
         assert_eq!(
-            node_value(
-                &NodeKind::Toggle {
-                    get: || true,
-                    set: |_| {}
-                },
-                Language::En
-            ),
-            "on"
+            row_for(&from_fn, 0, 0, Language::Ru).value,
+            row_for(&from_text, 0, 0, Language::Ru).value
         );
+        assert!(matches!(from_fn.value, Some(ValueSource::Fn(_))));
         assert_eq!(
-            node_value(
-                &NodeKind::Toggle {
-                    get: || false,
-                    set: |_| {}
-                },
-                Language::En
-            ),
-            "off"
+            from_text.value,
+            Some(ValueSource::Text("текущее значение".to_string()))
         );
+    }
+
+    #[test]
+    fn info_value_has_no_icon_and_keeps_value_separate() {
+        let node = Node::info_value("CPU", "Ryzen");
+        assert_eq!(node.icon, "");
+        assert_eq!(node.title, "CPU");
+        assert_eq!(node_value(&node, Language::En), "Ryzen");
+        assert!(matches!(node.kind, NodeKind::Info));
+    }
+
+    #[test]
+    fn info_value_preserves_node_identity_and_info_behavior() {
+        let node = Node::info_value("RAM", "16 GiB").with_id("system/ram");
+        assert_eq!(node.identity(), "system/ram");
+        assert!(node.is_leaf());
+        assert!(matches!(node.kind, NodeKind::Info));
+    }
+
+    #[test]
+    fn value_source_clones_and_compares_by_contents() {
+        fn first() -> String {
+            "первое".to_string()
+        }
+        fn second() -> String {
+            "второе".to_string()
+        }
+
+        let text = ValueSource::Text("текст".to_string());
+        assert_eq!(text, text.clone());
+        assert_ne!(text, ValueSource::Text("другой текст".to_string()));
+
+        let first = ValueSource::Fn(first);
+        assert_eq!(first, first.clone());
+        assert_ne!(first, ValueSource::Fn(second));
     }
 
     #[test]
@@ -688,6 +921,51 @@ mod tests {
         assert_eq!(rows[0].title, "Обои");
         assert_eq!(rows[0].value, "", "у пикера вместо значения миниатюра");
         assert_eq!(rows[1].caption, None, "корень без родителей");
+    }
+
+    /// Заголовок группы не становится результатом поиска, даже если у него
+    /// заданы слова поиска.
+    #[test]
+    fn search_group_header_title_does_not_match() {
+        let nodes = vec![
+            Node::header("Заголовок").search_as(&["header"]),
+            Node::info("i", "Информация").search_as(&["info"]),
+            Node::action("a", "Действие", Action::Back),
+        ];
+        let rows = search_rows(&nodes, 0, Language::Ru);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Действие");
+
+        let mut menu = super::super::state::Menu::new(nodes);
+        for ch in "Заголовок".chars() {
+            menu.type_char(ch);
+        }
+        assert!(
+            menu.current().list.items().is_empty(),
+            "заголовок группы не ищется: {:?}",
+            menu.current()
+                .list
+                .items()
+                .iter()
+                .map(|item| &item.title)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Подменю из одних Info остаётся находимым по своему заголовку: Info
+    /// не превращается в отдельный результат, но и раздел не пропадает.
+    #[test]
+    fn info_only_section_is_found_by_its_title() {
+        let nodes = vec![Node::submenu(
+            "s",
+            "Дисплей",
+            vec![Node::info("i", "Модель").search_as(&["model"])],
+        )];
+        let rows = search_rows(&nodes, 0, Language::Ru);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Дисплей");
+        assert!(rows[0].kind.is_submenu());
+        assert_eq!(rows[0].caption, None, "у корневого раздела пути нет");
     }
 
     #[test]

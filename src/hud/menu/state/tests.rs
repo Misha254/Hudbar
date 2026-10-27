@@ -84,15 +84,22 @@ fn crumbed_submenu_names_its_level_but_keeps_the_row_and_search_path() {
     let mut menu = Menu::new(tree());
     assert_eq!(titles(&menu), ["eDP-1 · 1920×1080 · 144 Гц"]);
 
-    // В глобальном поиске путь строится по полному заголовку строки, а не
-    // по крошке: найденное должно показывать, где оно лежит.
+    // Info не становится отдельным результатом поиска: запрос по его тексту
+    // ничего не находит. Раздел из одних Info остаётся находимым по
+    // заголовку родителя.
     menu.type_char('М');
-    let found = menu.frame();
-    assert_eq!(found.items[0].title, "Модель");
-    assert_eq!(
-        found.items[0].caption.as_deref(),
-        Some("eDP-1 · 1920×1080 · 144 Гц ›")
+    assert!(
+        menu.frame().items.is_empty(),
+        "информационная строка не должна быть результатом"
     );
+    menu.clear_query();
+    for ch in "eDP".chars() {
+        menu.type_char(ch);
+    }
+    let found = menu.frame();
+    assert_eq!(found.items[0].title, "eDP-1 · 1920×1080 · 144 Гц");
+    assert!(found.items[0].kind.is_submenu());
+    assert_eq!(found.items[0].caption, None, "крошка не путь поиска");
     menu.clear_query();
 
     menu.enter();
@@ -227,7 +234,7 @@ fn enter_on_a_search_result_opens_its_own_level() {
     assert_eq!(titles(&menu), ["Высота"]);
     assert_eq!(
         menu.current().list.selected(),
-        0,
+        Some(0),
         "найденная строка выбрана"
     );
 }
@@ -250,9 +257,13 @@ fn selection_wraps_around_the_level_while_scroll_stays_clamped() {
     let mut menu = menu();
     menu.set_page(2);
     menu.move_sel(99);
-    assert_eq!(menu.current().list.selected(), 0, "99 % 3 — круг");
+    assert_eq!(menu.current().list.selected(), Some(0), "99 % 3 — круг");
     menu.move_sel(-1);
-    assert_eq!(menu.current().list.selected(), 2, "вверх с первой — вниз");
+    assert_eq!(
+        menu.current().list.selected(),
+        Some(2),
+        "вверх с первой — вниз"
+    );
 
     menu.scroll(99);
     assert_eq!(menu.current().list.top(), 1, "нижняя страница");
@@ -567,7 +578,7 @@ fn frame_reports_the_counter_parts() {
     let frame = menu.frame();
     assert_eq!(frame.trail, vec!["HUD".to_string()]);
     assert_eq!(frame.total, 3);
-    assert_eq!(frame.selected, 0);
+    assert_eq!(frame.selected, Some(0));
     assert_eq!(frame.top, 0);
     assert_eq!(frame.query, "");
     assert_eq!(frame.status, None);
@@ -789,6 +800,55 @@ fn position_and_restore_keep_the_path_and_the_selected_row() {
     assert_eq!(row.title, "Тише на 5%");
 }
 
+/// Исчезнувшая строка не подменяется нулевой: путь и уровень живы, а курсор
+/// остаётся пустым до следующего движения.
+#[test]
+fn restore_clears_selection_when_the_row_disappeared() {
+    let tree = |second: bool| {
+        let mut nodes = vec![Node::action("a", "Первый", Action::Back).with_id("first")];
+        if second {
+            nodes.push(Node::action("b", "Второй", Action::Back).with_id("second"));
+        }
+        nodes
+    };
+    let mut menu = Menu::new(tree(true));
+    menu.move_sel(1);
+    assert_eq!(menu.current().list.selected(), Some(1));
+    let position = menu.position();
+    menu.retree(tree(false));
+    menu.restore(&position);
+    assert_eq!(menu.current().list.selected(), None);
+    assert_eq!(titles(&menu), ["Первый"]);
+}
+
+/// Строка с тем же id, но ставшая информационной, больше не выбирается:
+/// восстановление не должно оставлять курсор на невыбираемой строке.
+#[test]
+fn restore_clears_selection_when_the_row_became_info() {
+    let mut menu = Menu::new(vec![
+        Node::action("a", "Действие", Action::Back).with_id("same"),
+    ]);
+    assert_eq!(menu.current().list.selected(), Some(0));
+    let position = menu.position();
+    menu.retree(vec![Node::info("i", "Информация").with_id("same")]);
+    menu.restore(&position);
+    assert_eq!(menu.current().list.selected(), None);
+    assert_eq!(titles(&menu), ["Информация"]);
+}
+
+/// Enter без выбора — Idle: на уровне из Header/Info нечего активировать и
+/// не должно происходить соседнего действия.
+#[test]
+fn enter_without_a_selection_is_idle() {
+    let mut menu = Menu::new(vec![
+        Node::header("Заголовок"),
+        Node::info("i", "Информация"),
+    ]);
+    assert_eq!(menu.current().list.selected(), None);
+    assert_eq!(menu.enter(), Outcome::Idle);
+    assert_eq!(menu.depth(), 0);
+}
+
 /// Refresh после действия не прячет готовый снимок: уровень продолжает
 /// показывать прежние строки, пока worker не ответил.
 #[test]
@@ -896,7 +956,7 @@ fn busy_row_and_cursor_survive_a_rescan() {
     assert_eq!(row.id, "wifi/net/net0", "курсор остался на той же сети");
     assert_eq!(
         menu.current().list.selected(),
-        0,
+        Some(0),
         "и переехал на её новое место"
     );
     assert!(
@@ -1128,15 +1188,21 @@ fn cursor_and_path_survive_the_password_flow() {
     menu.submit_secret_input();
     let key = ProviderKey::new("test-wifi");
     let fresh = menu.refresh_dynamic(key).expect("мягкое обновление");
-    assert!(menu.apply_dynamic(key, fresh, Ok(wifi_nodes("net0", "net1"))));
+    // Сеть остаётся той же по id: пересканирование меняет порядок и
+    // заголовок, но не личность строки.
+    assert!(menu.apply_dynamic(key, fresh, Ok(wifi_nodes("Дом \\ принтер", "other"))));
     menu.restore(&position);
     assert_eq!(menu.depth(), 1, "мы на уровне Wi-Fi");
     assert_eq!(menu.opened_submenu(), Some("Wi-Fi"));
     assert_eq!(
-        menu.current().list.selected().min(1),
-        0,
-        "выбранная строка восстановлена"
+        menu.current()
+            .list
+            .selected_item()
+            .expect("выбранная строка восстановлена")
+            .id,
+        "wifi/net/Дом \\ принтер"
     );
+    assert_eq!(menu.current().list.selected(), Some(1));
 }
 
 /// Async-цепочка подключения с паролем: Enter ничего не запускает, в
@@ -1216,8 +1282,8 @@ fn search_opens_the_wifi_section_without_entering_a_password() {
     assert_eq!(menu.opened_submenu(), Some("Система"));
 }
 
-/// Список Bluetooth-устройств как строки уровня: identity по MAC, действий
-/// нет — только подменю и пункт обновления.
+/// Список Bluetooth-устройств как строки уровня: identity по MAC. Поведение
+/// строки здесь не важно — проверяется только перенос курсора по id.
 fn bluetooth_nodes(order: &[&str]) -> Vec<Node> {
     let mut rows = vec![Node::info("b", "Bluetooth: вкл")];
     rows.push(Node::submenu(
@@ -1226,7 +1292,7 @@ fn bluetooth_nodes(order: &[&str]) -> Vec<Node> {
         order
             .iter()
             .map(|mac| {
-                Node::info("d", &format!("Устройство {mac}"))
+                Node::action("d", &format!("Устройство {mac}"), Action::Back)
                     .with_id(&format!("bluetooth/device/{mac}"))
             })
             .collect(),
@@ -1294,7 +1360,7 @@ fn bluetooth_cursor_follows_the_mac_across_a_refresh() {
     );
     assert_eq!(
         menu.current().list.selected(),
-        0,
+        Some(0),
         "и переехал на новое место в списке"
     );
 }

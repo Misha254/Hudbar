@@ -1103,6 +1103,14 @@ fn targets_in(home: &std::path::Path) -> Vec<(&'static str, &'static str, String
 /// сам, «Отмена» — обычное действие [`Action::Back`], а у вопроса вообще нет
 /// команды, поэтому исполнителю она и не достанется. Внутренние строки
 /// скрыты от глобального поиска: в общем списке два «Отмена» — шум.
+pub(crate) fn confirm_actions(icon: &'static str, question: &str, yes: Node, cancel: Node) -> Node {
+    Node::submenu(
+        icon,
+        question,
+        vec![yes.hidden_from_search(), cancel.hidden_from_search()],
+    )
+}
+
 fn confirm_node(
     icon: &'static str,
     question: &'static str,
@@ -1111,14 +1119,11 @@ fn confirm_node(
     program: &'static str,
     args: &'static [&'static str],
 ) -> Node {
-    Node::submenu(
+    confirm_actions(
         icon,
         question,
-        vec![
-            Node::action(settings_icons::CHECK, yes, Action::Spawn(program, args))
-                .hidden_from_search(),
-            Node::action(settings_icons::TIMES, cancel, Action::Back).hidden_from_search(),
-        ],
+        Node::action(settings_icons::CHECK, yes, Action::Spawn(program, args)),
+        Node::action(settings_icons::TIMES, cancel, Action::Back),
     )
 }
 
@@ -1192,16 +1197,16 @@ fn power_section(lang: Language) -> Node {
 
 /// Раздел «О программе»: версия и перезапуск панели.
 fn about_section(lang: Language) -> Node {
-    let (title, version, restart, kw) = match lang {
+    let (title, version_title, restart, kw) = match lang {
         Language::Ru => (
             "О программе",
-            format!("Версия {VERSION}"),
+            "Версия",
             "Перезапуск панели",
             &["about", "о программе"],
         ),
         Language::En => (
             "About",
-            format!("Version {VERSION}"),
+            "Version",
             "Restart panel",
             &["about", "о программе"],
         ),
@@ -1210,7 +1215,7 @@ fn about_section(lang: Language) -> Node {
         settings_icons::ABOUT,
         title,
         vec![
-            Node::info(settings_icons::ABOUT, &version),
+            Node::info_value(version_title, VERSION),
             Node::action(settings_icons::SYSTEM, restart, Action::RestartHudbar),
         ],
     )
@@ -1859,10 +1864,13 @@ mod tests {
 
     #[test]
     fn every_real_node_has_an_icon() {
+        use super::super::tree::NodeKind;
+
         fn walk(nodes: &[Node]) {
             for node in nodes {
+                let icon_is_optional = matches!(&node.kind, NodeKind::Info | NodeKind::Header);
                 assert!(
-                    node.icon.chars().count() == 1,
+                    (icon_is_optional && node.icon.is_empty()) || node.icon.chars().count() == 1,
                     "у «{}» иконка не один глиф: {:?}",
                     node.title,
                     node.icon

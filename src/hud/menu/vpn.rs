@@ -392,11 +392,7 @@ pub fn nodes(snapshot: &VpnSnapshot, lang: Language) -> Vec<Node> {
             Language::Ru => format!("Mihomo не отвечает: {}", snapshot.error),
             Language::En => format!("Mihomo unreachable: {}", snapshot.error),
         };
-        return vec![Node::info(settings_icons::NETWORK, &title).search_as(&[
-            "mihomo",
-            "vpn",
-            "прокси",
-        ])];
+        return vec![Node::info(settings_icons::NETWORK, &title)];
     }
     let mut rows = vec![status_row(snapshot, lang)];
     if !snapshot.error.is_empty() {
@@ -404,11 +400,7 @@ pub fn nodes(snapshot: &VpnSnapshot, lang: Language) -> Vec<Node> {
             Language::Ru => format!("Ошибка: {}", snapshot.error),
             Language::En => format!("Error: {}", snapshot.error),
         };
-        rows.push(
-            Node::info(settings_icons::DOT, &title)
-                .with_id("vpn/error")
-                .search_as(&["ошибка", "error"]),
-        );
+        rows.push(Node::info(settings_icons::DOT, &title).with_id("vpn/error"));
     }
     let current = snapshot.mode();
     rows.push(modes_section(current, lang));
@@ -519,9 +511,7 @@ fn status_row(snapshot: &VpnSnapshot, lang: Language) -> Node {
         snapshot.selector(SELECTOR_RU).unwrap_or("—"),
         snapshot.selector(SELECTOR_REST).unwrap_or("—")
     );
-    Node::info(settings_icons::SOUND, &title)
-        .with_id("vpn/status")
-        .search_as(&["статус", "status", "version"])
+    Node::info(settings_icons::SOUND, &title).with_id("vpn/status")
 }
 
 fn mode_icon(selected: bool) -> &'static str {
@@ -820,6 +810,15 @@ mod tests {
         assert_eq!(titles[1], "Режим: RU напрямую", "{titles:?}");
         assert_eq!(titles[2], "Серверы (5)", "{titles:?}");
         assert_eq!(*titles.last().expect("обновление"), "Обновить");
+    }
+
+    #[test]
+    fn vpn_unreachable_level_has_no_selection() {
+        let mut menu =
+            super::super::state::Menu::new(nodes(&VpnSnapshot::failed("таймаут"), Language::Ru));
+        assert_eq!(menu.current().list.selected(), None);
+        assert_eq!(menu.enter(), super::super::state::Outcome::Idle);
+        assert_eq!(menu.depth(), 0);
     }
 
     #[test]

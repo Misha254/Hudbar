@@ -313,7 +313,7 @@ impl AppsApp {
         // запустить ход, и тогда читать надо уже новую.
         self.highlight.update(
             highlight::level_of(0, self.model.query(), self.model.total()),
-            highlight::position(self.model.selected(), self.model.top()),
+            highlight::position(Some(self.model.selected()), self.model.top()),
             now,
             self.ctx.anim,
         );

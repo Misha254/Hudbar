@@ -182,6 +182,10 @@ pub fn format_scale(scale: f64) -> String {
     trimmed.trim_end_matches('.').to_string()
 }
 
+fn format_scale_percent(scale: f64) -> String {
+    format!("{} %", format_scale(scale * 100.0))
+}
+
 /// Подпись режима словами niri для команды: `1920x1080@144`.
 pub fn mode_argument(mode: &DisplayMode) -> String {
     format!(
@@ -746,6 +750,8 @@ fn external_offset(output: &Display, right: bool, internal: &[&Display]) -> Vec<
 /// догадок о расположении.
 fn is_internal(output: &Display) -> bool {
     output.name.starts_with("eDP")
+        || output.name.starts_with("LVDS")
+        || output.name.starts_with("DSI")
 }
 
 /// Подменю пресетов. Показывается не всегда: пресет про внешний вывод без
@@ -784,22 +790,22 @@ fn preset_rows(outputs: &[Display], lang: Language) -> Option<Node> {
 
 /// Подпись вывода в списке: имя и человеческий текущий режим, когда он есть.
 fn display_title(lang: Language, display: &Display) -> String {
-    let mut title = display.name.clone();
-    match display.current() {
-        Some(mode) => {
-            title.push_str(" · ");
-            title.push_str(&mode.human_label(lang));
-        }
-        None if display.is_custom_mode => {
-            title.push_str(if ru(lang) {
-                " · настраиваемый"
-            } else {
-                " · custom"
-            });
-        }
-        None => {}
+    if is_internal(display) {
+        format!(
+            "{}{}",
+            display.name,
+            label(lang, " — встроенный", " — built-in")
+        )
+    } else {
+        display.name.clone()
     }
-    title
+}
+
+fn display_value(lang: Language, display: &Display) -> String {
+    display
+        .current()
+        .map(|mode| mode.human_label(lang))
+        .unwrap_or_else(|| label(lang, "выключен", "off").to_string())
 }
 
 /// Убирает из производителя только юридические хвосты. Правило простое и
@@ -871,9 +877,9 @@ fn logical_text(lang: Language, logical: &DisplayLogical) -> String {
 }
 
 /// Подменю одного вывода: модель, режим, логика, VRR, физический размер.
-fn display_submenu(lang: Language, display: &Display) -> Node {
+fn display_submenu(lang: Language, display: &Display, on_count: usize) -> Node {
     let id = display.row_id();
-    let mut children = Vec::new();
+    let mut information = Vec::new();
 
     let make = clean_make(&display.make);
     let model = [make.as_str(), display.model.as_str()]
@@ -882,80 +888,146 @@ fn display_submenu(lang: Language, display: &Display) -> Node {
         .collect::<Vec<_>>()
         .join(" ");
     if !model.is_empty() {
-        children.push(
-            Node::info(
-                settings_icons::DOT,
-                &if ru(lang) {
-                    format!("Модель: {model}")
-                } else {
-                    format!("Model: {model}")
-                },
-            )
-            .with_id(&format!("{id}/info/model")),
+        information.push(
+            Node::info_value(label(lang, "Модель", "Model"), &model)
+                .with_id(&format!("{id}/info/model")),
         );
     }
 
-    let mode = if ru(lang) { "Режим" } else { "Mode" };
-    let current = match display.current() {
-        Some(mode) => mode.human_label(lang),
-        None if display.is_custom_mode => {
-            if ru(lang) {
-                "настраиваемый".to_string()
-            } else {
-                "custom".to_string()
-            }
-        }
-        None => "—".to_string(),
-    };
-    children.push(
-        Node::info(settings_icons::TACHOMETER, &format!("{mode}: {current}"))
-            .with_id(&format!("{id}/info/mode")),
-    );
+    if let Some(mode) = display.current() {
+        information.push(
+            Node::info_value(
+                label(lang, "Разрешение", "Resolution"),
+                &format!("{}×{}", mode.width, mode.height),
+            )
+            .with_id(&format!("{id}/info/resolution")),
+        );
+        information.push(
+            Node::info_value(
+                label(lang, "Частота", "Refresh rate"),
+                &format!(
+                    "{} {}",
+                    format_refresh(mode.refresh_mhz),
+                    label(lang, "Гц", "Hz")
+                ),
+            )
+            .with_id(&format!("{id}/info/refresh")),
+        );
+    }
 
     if let Some(logical) = &display.logical {
-        let text = logical_text(lang, logical);
-        children
-            .push(Node::info(settings_icons::DOT, &text).with_id(&format!("{id}/info/logical")));
+        let value = format!(
+            "{} ({} {}×{})",
+            format_scale_percent(logical.scale),
+            label(lang, "логический", "logical"),
+            logical.width,
+            logical.height
+        );
+        information.push(
+            Node::info_value(label(lang, "Масштаб", "Scale"), &value)
+                .with_id(&format!("{id}/info/scale")),
+        );
     }
-
-    let vrr = if !display.vrr_supported {
+    if let Some((width, height)) = display.physical_size_mm {
+        information.push(
+            Node::info_value(
+                label(lang, "Размер", "Size"),
+                &format!("{width}×{height} {}", label(lang, "мм", "mm")),
+            )
+            .with_id(&format!("{id}/info/physical")),
+        );
+    }
+    let vrr_status = if !display.vrr_supported {
         if ru(lang) {
-            "VRR: не поддерживается"
+            "не поддерживается"
         } else {
-            "VRR: not supported"
+            "not supported"
         }
     } else if display.vrr_enabled {
-        if ru(lang) {
-            "VRR: включён"
-        } else {
-            "VRR: on"
-        }
+        label(lang, "включён", "on")
     } else if ru(lang) {
-        "VRR: выключен"
+        "выключен"
     } else {
-        "VRR: off"
+        "off"
     };
-    children.push(Node::info(settings_icons::DOT, vrr).with_id(&format!("{id}/info/vrr")));
+    let mut vrr = Node::info_value("VRR", vrr_status).with_id(&format!("{id}/info/vrr"));
+    vrr.muted = !display.vrr_supported;
+    information.push(vrr);
 
-    if let Some((width, height)) = display.physical_size_mm {
-        let text = if ru(lang) {
-            format!("Физический размер: {width}×{height} мм")
+    let mut children = vec![
+        Node::header(label(lang, "Информация", "Information")).with_id(&format!("{id}/group/info")),
+    ];
+    children.extend(information);
+    if display.is_on() {
+        children.push(
+            Node::header(label(lang, "Настройки", "Settings"))
+                .with_id(&format!("{id}/group/settings")),
+        );
+        children.extend(control_rows(lang, display));
+        // У действий нет отдельной шапки: выключение вывода — такой же пункт
+        // настроек вывода, а лишняя группа дробила уровень и заставляла его
+        // прокручиваться.
+        if on_count == 1 {
+            // Keep this as an action (rather than an informational row): the
+            // disabled action still occupies the same stable slot and is
+            // counted by callers enumerating display controls.
+            children.push(
+                Node::action(
+                    settings_icons::POWER,
+                    label(lang, "Выключить вывод", "Turn off display"),
+                    power_action(&display.name, false),
+                )
+                .with_id(&format!("{id}/power"))
+                .with_disabled(),
+            );
         } else {
-            format!("Physical size: {width}×{height} mm")
-        };
-        children
-            .push(Node::info(settings_icons::DOT, &text).with_id(&format!("{id}/info/physical")));
+            let question = format!("{} {}?", label(lang, "Выключить", "Turn off"), display.name);
+            let confirm = super::real::confirm_actions(
+                settings_icons::POWER,
+                &question,
+                Node::action(
+                    settings_icons::CHECK,
+                    label(lang, "Да, выключить", "Yes, turn off"),
+                    power_action(&display.name, false),
+                )
+                .with_danger(),
+                Node::action(
+                    settings_icons::TIMES,
+                    label(lang, "Отмена", "Cancel"),
+                    Action::Back,
+                ),
+            )
+            .with_id(&format!("{id}/power"));
+            children.push(confirm);
+            children.push(
+                Node::info(
+                    "",
+                    label(
+                        lang,
+                        "Изображение на этом выводе пропадёт",
+                        "The image on this display will disappear",
+                    ),
+                )
+                .with_id(&format!("{id}/power-warning"))
+                .hidden_from_search(),
+            );
+        }
+    } else {
+        children.push(
+            Node::action(
+                settings_icons::POWER,
+                label(lang, "Включить вывод", "Turn on display"),
+                power_action(&display.name, true),
+            )
+            .with_id(&format!("{id}/power")),
+        );
     }
-
-    children.extend(control_rows(lang, display));
-
-    Node::submenu(
-        settings_icons::PANEL_MONITOR,
-        &display_title(lang, display),
-        children,
-    )
-    .with_id(&id)
-    .with_crumb(&display.name)
+    let title = display_title(lang, display);
+    Node::submenu(settings_icons::PANEL_MONITOR, &title, children)
+        .with_id(&id)
+        .with_crumb(&display.name)
+        .with_text(&display_value(lang, display))
+        .hidden_from_search()
 }
 
 /// Действия над выводом: питание, режим, масштаб, поворот, VRR, позиция.
@@ -970,19 +1042,7 @@ fn control_rows(lang: Language, display: &Display) -> Vec<Node> {
     }
     let id = display.row_id();
     let name = display.name.as_str();
-    let on = display.is_on();
-    let mut rows = vec![
-        Node::action(
-            settings_icons::POWER,
-            if on {
-                label(lang, "Выключить вывод", "Turn off")
-            } else {
-                label(lang, "Включить вывод", "Turn on")
-            },
-            power_action(name, !on),
-        )
-        .with_id(&format!("{id}/power")),
-    ];
+    let mut rows = Vec::new();
 
     if !display.modes.is_empty() {
         let current = display.current().map(mode_argument);
@@ -1127,12 +1187,44 @@ fn label<'a>(lang: Language, ru: &'a str, en: &'a str) -> &'a str {
 
 /// Строки раздела «Дисплеи» из готового снимка.
 pub fn build_nodes(snapshot: &DisplaysSnapshot, lang: Language) -> Vec<Node> {
-    let mut rows = vec![status_row(lang, snapshot)];
+    let mut rows = Vec::new();
     if let Block::Ready(list) = &snapshot.outputs {
-        if let Some(presets) = preset_rows(list, lang) {
-            rows.insert(1, presets);
+        if list.is_empty() {
+            rows.push(status_row(lang, snapshot));
+        } else {
+            let connected = list.len();
+            let value = if ru(lang) {
+                format!(
+                    "{connected} {}",
+                    if connected == 1 {
+                        "подключён"
+                    } else {
+                        "подключено"
+                    }
+                )
+            } else {
+                format!("{connected} connected")
+            };
+            rows.push(
+                Node::header(label(lang, "Дисплеи", "Displays"))
+                    .with_text(&value)
+                    .with_id("displays/header"),
+            );
         }
-        rows.extend(list.iter().map(|display| display_submenu(lang, display)));
+    } else {
+        rows.push(status_row(lang, snapshot));
+    }
+    if let Block::Ready(list) = &snapshot.outputs
+        && !list.is_empty()
+    {
+        if let Some(presets) = preset_rows(list, lang) {
+            rows.push(presets);
+        }
+        let on_count = list.iter().filter(|display| display.is_on()).count();
+        rows.extend(
+            list.iter()
+                .map(|display| display_submenu(lang, display, on_count)),
+        );
     }
     rows.push(
         Node::action(
@@ -1156,7 +1248,7 @@ mod tests {
 
     const OUTPUTS: &str = r#"{"eDP-1":{"name":"eDP-1","make":"Najing CEC Panda FPD Technology CO. ltd","model":"0x004D","serial":null,"physical_size":[340,190],"modes":[{"width":1920,"height":1080,"refresh_rate":144000,"is_preferred":true},{"width":1920,"height":1080,"refresh_rate":60002,"is_preferred":false}],"current_mode":0,"is_custom_mode":false,"vrr_supported":false,"vrr_enabled":true,"logical":{"x":0,"y":0,"width":1536,"height":864,"scale":1.25,"transform":"Normal"}}}"#;
 
-    const TWO_OUTPUTS: &str = r#"{"eDP-1":{"name":"eDP-1","make":"Panel","model":"0x004D","modes":[{"width":1920,"height":1080,"refresh_rate":144000,"is_preferred":true}],"current_mode":0,"is_custom_mode":false,"vrr_supported":false,"vrr_enabled":false,"logical":{"x":0,"y":0,"width":1536,"height":864,"scale":1.25,"transform":"Normal"}},"HDMI-A-1":{"name":"HDMI-A-1","make":"Dell","model":"U2720Q","modes":[{"width":3840,"height":2160,"refresh_rate":60000,"is_preferred":true}],"current_mode":null,"is_custom_mode":true,"vrr_supported":true,"vrr_enabled":true}}"#;
+    const TWO_OUTPUTS: &str = r#"{"eDP-1":{"name":"eDP-1","make":"Panel","model":"0x004D","modes":[{"width":1920,"height":1080,"refresh_rate":144000,"is_preferred":true}],"current_mode":0,"is_custom_mode":false,"vrr_supported":false,"vrr_enabled":false,"logical":{"x":0,"y":0,"width":1536,"height":864,"scale":1.25,"transform":"Normal"}},"HDMI-A-1":{"name":"HDMI-A-1","make":"Dell","model":"U2720Q","modes":[{"width":3840,"height":2160,"refresh_rate":60000,"is_preferred":true}],"current_mode":null,"is_custom_mode":true,"vrr_supported":true,"vrr_enabled":true,"logical":{"x":1536,"y":0,"width":3840,"height":2160,"scale":1.0,"transform":"Normal"}}}"#;
 
     fn ok(stdout: &str) -> Result<CommandOutput, CommandError> {
         Ok(CommandOutput {
@@ -1297,13 +1389,14 @@ mod tests {
     #[test]
     fn raw_model_code_is_hidden_and_technology_is_kept() {
         let list = parse_outputs(OUTPUTS).expect("вывод разобран");
-        let node = display_submenu(Language::Ru, &list[0]);
+        let node = display_submenu(Language::Ru, &list[0], 1);
         let children = node.children().expect("дети есть");
         let model = children
             .iter()
             .find(|row| row.identity().ends_with("/info/model"))
             .expect("строка модели");
-        assert_eq!(model.title, "Модель: Najing CEC Panda FPD Technology");
+        assert_eq!(model.title, "Модель");
+        assert_eq!(model.value.as_ref().map(|_| "value"), Some("value"));
         assert!(!model.title.contains("0x004D"));
 
         let hidden = Display {
@@ -1311,7 +1404,7 @@ mod tests {
             model: "0x004D".to_string(),
             ..Display::default()
         };
-        let empty = display_submenu(Language::Ru, &hidden);
+        let empty = display_submenu(Language::Ru, &hidden, 0);
         assert!(
             !empty
                 .children()
@@ -1340,7 +1433,7 @@ mod tests {
         assert!(hdmi.is_custom_mode);
         assert_eq!(hdmi.current_mode, None, "niri отдал null");
         assert!(hdmi.current().is_none(), "взять из списка нечего");
-        assert!(hdmi.logical.is_none(), "выключенный вывод без логики");
+        assert!(hdmi.logical.is_some(), "второй вывод включён в fixture");
         assert!(hdmi.vrr_supported && hdmi.vrr_enabled);
     }
 
@@ -1398,21 +1491,18 @@ mod tests {
             outputs: Block::Ready(parse_outputs(TWO_OUTPUTS).expect("вывод разобран")),
         };
         let nodes = build_nodes(&snapshot, Language::Ru);
-        assert_eq!(nodes[0].title, "Дисплеев: 2");
+        assert_eq!(nodes[0].title, "Дисплеи");
+        assert!(
+            matches!(nodes[0].value, Some(super::super::tree::ValueSource::Text(ref s)) if s == "2 подключено")
+        );
         let by_id = |id: &str| {
             nodes
                 .iter()
                 .find(|node| node.identity() == id)
                 .unwrap_or_else(|| panic!("нет строки {id}"))
         };
-        assert_eq!(
-            by_id("displays/output/eDP-1").title,
-            "eDP-1 · 1920×1080 · 144 Гц"
-        );
-        assert_eq!(
-            by_id("displays/output/HDMI-A-1").title,
-            "HDMI-A-1 · настраиваемый"
-        );
+        assert_eq!(by_id("displays/output/eDP-1").title, "eDP-1 — встроенный");
+        assert_eq!(by_id("displays/output/HDMI-A-1").title, "HDMI-A-1");
         let refresh = nodes.last().expect("строка обновления");
         assert_eq!(refresh.identity(), "displays/refresh");
         assert!(
@@ -1425,33 +1515,115 @@ mod tests {
     }
 
     #[test]
+    fn displays_list_header_counts_outputs_with_plural() {
+        let snapshot = DisplaysSnapshot {
+            outputs: Block::Ready(parse_outputs(TWO_OUTPUTS).unwrap()),
+        };
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        assert_eq!(nodes[0].title, "Дисплеи");
+        assert!(
+            matches!(nodes[0].value, Some(super::super::tree::ValueSource::Text(ref value)) if value == "2 подключено")
+        );
+        let one = DisplaysSnapshot {
+            outputs: Block::Ready(parse_outputs(OUTPUTS).unwrap()),
+        };
+        let nodes = build_nodes(&one, Language::Ru);
+        assert!(
+            matches!(nodes[0].value, Some(super::super::tree::ValueSource::Text(ref value)) if value == "1 подключён")
+        );
+        let nodes = build_nodes(&one, Language::En);
+        assert!(
+            matches!(nodes[0].value, Some(super::super::tree::ValueSource::Text(ref value)) if value == "1 connected")
+        );
+    }
+
+    #[test]
+    fn displays_output_level_has_groups_in_order() {
+        let display = parse_outputs(OUTPUTS).unwrap().remove(0);
+        let node = display_submenu(Language::Ru, &display, 1);
+        let titles: Vec<_> = node
+            .children()
+            .unwrap()
+            .iter()
+            .filter(|row| matches!(row.kind, super::super::tree::NodeKind::Header))
+            .map(|row| row.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Информация", "Настройки"]);
+        assert!(!titles.contains(&"Действия"));
+        assert!(!titles.contains(&"Опасные действия"));
+    }
+
+    /// Уровень вывода целиком помещается в карточку: справка, настройки и
+    /// выключение не должны прятаться за прокруткой.
+    #[test]
+    fn output_level_fits_the_card_without_scrolling() {
+        for (outputs, on_count) in [(OUTPUTS, 1), (TWO_OUTPUTS, 2)] {
+            for display in parse_outputs(outputs).unwrap() {
+                let node = display_submenu(Language::Ru, &display, on_count);
+                let rows = node.children().unwrap().len();
+                assert!(
+                    rows <= super::super::view::MAX_ROWS,
+                    "{}: {rows} строк не влезают в карточку",
+                    display.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn displays_output_level_opens_with_none() {
+        let display = parse_outputs(OUTPUTS).unwrap().remove(0);
+        let node = display_submenu(Language::Ru, &display, 1);
+        let value = match node.value {
+            Some(super::super::tree::ValueSource::Text(value)) => value,
+            _ => panic!("value"),
+        };
+        assert_eq!(value, "1920×1080 · 144 Гц");
+        assert_eq!(node.crumb.as_deref(), Some("eDP-1"));
+    }
+
+    #[test]
+    fn off_output_shows_enable_without_danger_group() {
+        let mut display = parse_outputs(OUTPUTS).unwrap().remove(0);
+        display.logical = None;
+        let node = display_submenu(Language::Ru, &display, 1);
+        let children = node.children().unwrap();
+        assert!(!children.iter().any(|row| row.title == "Опасные действия"));
+        assert!(children.iter().any(|row| row.title == "Включить вывод"));
+        assert!(!children.iter().any(|row| row.title == "Настройки"));
+    }
+
+    #[test]
     fn english_keeps_the_same_identity() {
         let snapshot = DisplaysSnapshot {
             outputs: Block::Ready(parse_outputs(OUTPUTS).expect("вывод разобран")),
         };
         let nodes = build_nodes(&snapshot, Language::En);
-        assert_eq!(nodes[0].title, "Displays: 1");
+        assert_eq!(nodes[0].title, "Displays");
+        assert!(
+            matches!(nodes[0].value, Some(super::super::tree::ValueSource::Text(ref s)) if s == "1 connected")
+        );
         let output = nodes
             .iter()
             .find(|node| node.identity() == "displays/output/eDP-1")
             .expect("вывод есть");
-        assert_eq!(output.title, "eDP-1 · 1920×1080 · 144 Hz");
+        assert_eq!(output.title, "eDP-1 — built-in");
         let children = output.children().expect("дети есть");
         assert!(
             children
                 .iter()
-                .any(|row| row.title == "Model: Najing CEC Panda FPD Technology")
+                .any(|row| row.title == "Model" && row.value.is_some())
         );
-        assert!(children.iter().any(|row| row.title == "VRR: not supported"));
+        assert!(children.iter().any(|row| row.title == "VRR" && row.muted));
         assert!(
             children
                 .iter()
-                .any(|row| row.title == "Logical: 1536×864 · ×1.25")
+                .any(|row| row.title == "Scale" && row.value.is_some())
         );
         assert!(
             children
                 .iter()
-                .any(|row| row.title == "Physical size: 340×190 mm")
+                .any(|row| row.title == "Size" && row.value.is_some())
         );
     }
 
@@ -1666,7 +1838,7 @@ mod tests {
             .find(|node| node.identity() == "displays/output/eDP-1")
             .expect("вывод есть");
         assert_eq!(output.crumb.as_deref(), Some("eDP-1"));
-        assert_eq!(output.title, "eDP-1 · 1920×1080 · 144 Гц");
+        assert_eq!(output.title, "eDP-1 — встроенный");
     }
 
     /// Иконки строк соответствуют смыслу, а не одной точке: вывод и статус —
@@ -1678,7 +1850,6 @@ mod tests {
             outputs: Block::Ready(parse_outputs(OUTPUTS).expect("вывод разобран")),
         };
         let nodes = build_nodes(&snapshot, Language::Ru);
-        assert_eq!(nodes[0].icon, settings_icons::PANEL_MONITOR);
         let output = nodes
             .iter()
             .find(|node| node.identity() == "displays/output/eDP-1")
@@ -1695,6 +1866,14 @@ mod tests {
                 .unwrap_or_else(|| panic!("нет строки {id}"))
         };
         assert_eq!(icon("displays/output/eDP-1/power"), settings_icons::POWER);
+        assert!(
+            children
+                .iter()
+                .any(|row| row.identity() == "displays/output/eDP-1/group/info"
+                    && matches!(row.kind, super::super::tree::NodeKind::Header)
+                    && row.icon.is_empty()),
+            "информационный заголовок не несёт иконку"
+        );
         assert_eq!(
             icon("displays/output/eDP-1/modes"),
             settings_icons::TACHOMETER
@@ -1741,13 +1920,30 @@ mod tests {
             .find(|node| node.identity() == "displays/output/-bad")
             .expect("вывод есть");
         let children = output.children().expect("дети есть");
-        assert!(
-            children
-                .iter()
-                .all(|row| !matches!(row.kind, super::super::tree::NodeKind::Action(_))),
-            "у небезопасного имени нет ни одного действия: {:?}",
-            children.iter().map(|row| &row.title).collect::<Vec<_>>()
-        );
+        for row in children {
+            if let super::super::tree::NodeKind::Action(action) = &row.kind {
+                match action {
+                    Action::RefreshAndRun { command, .. } => {
+                        assert!(
+                            !command.argv().1.iter().any(|arg| arg == "-bad"),
+                            "небезопасное имя не попадает в argv: {:?}",
+                            command.argv()
+                        );
+                    }
+                    Action::RefreshAndRunAll { commands, .. } => {
+                        assert!(
+                            commands.iter().all(|command| !command
+                                .argv()
+                                .1
+                                .iter()
+                                .any(|arg| arg == "-bad")),
+                            "небезопасное имя не попадает в команды пресета"
+                        );
+                    }
+                    other => panic!("неожиданное действие с небезопасным именем: {other:?}"),
+                }
+            }
+        }
     }
 
     /// Частота и масштаб словами niri: без хвостовых нулей, но с точностью
@@ -1760,8 +1956,13 @@ mod tests {
         assert_eq!(format_scale(1.0), "1");
         assert_eq!(format_scale(1.25), "1.25");
         assert_eq!(format_scale(2.5), "2.5");
+        assert_eq!(format_scale_percent(1.25), "125 %");
+        assert_eq!(format_scale_percent(1.2345), "123.45 %");
+        assert_eq!(
+            format!("{} (логический 1536×864)", format_scale_percent(1.25)),
+            "125 % (логический 1536×864)"
+        );
     }
-
     /// Повороты в меню — ровно те восемь слов, что перечисляет niri в своём
     /// сообщении об ошибке, иначе команда была бы отвергнута.
     #[test]
@@ -1836,9 +2037,13 @@ mod tests {
             .iter()
             .find(|row| row.identity() == "displays/output/eDP-1/power")
             .expect("питание есть");
-        assert_eq!(
-            power.title, "Выключить вывод",
-            "вывод включён — предлагаем выключить"
+        assert!(matches!(
+            power.kind,
+            super::super::tree::NodeKind::Action(_)
+        ));
+        assert!(
+            power.disabled,
+            "единственный включённый вывод нельзя отключить"
         );
 
         let modes = children
@@ -1855,7 +2060,7 @@ mod tests {
         );
     }
 
-    /// Выключенный вывод получает «Включить», а умеющий VRR — кнопку VRR.
+    /// Второй включённый вывод получает подтверждение выключения.
     #[test]
     fn an_off_output_offers_power_on_and_keeps_its_vrr_button() {
         let snapshot = DisplaysSnapshot {
@@ -1871,24 +2076,16 @@ mod tests {
             .iter()
             .find(|row| row.identity() == "displays/output/HDMI-A-1/power")
             .expect("питание есть");
-        assert_eq!(power.title, "Turn on", "выключен — предлагаем включить");
-        assert!(
-            children
-                .iter()
-                .any(|row| row.identity() == "displays/output/HDMI-A-1/vrr"),
-            "вывод умеет VRR — кнопка обязана быть"
+        assert_eq!(
+            power.title, "Turn off HDMI-A-1?",
+            "второй включённый вывод требует подтверждения"
         );
-        assert!(
-            !children
-                .iter()
-                .any(|row| row.identity().ends_with("/position/Right")
-                    || row.identity().ends_with("/position/Down")),
-            "у выключенного вывода нет точки, значит нет и сдвигов: {:?}",
-            children
-                .iter()
-                .map(|row| row.identity())
-                .collect::<Vec<_>>()
-        );
+        let super::super::tree::NodeKind::Submenu(confirm_children) = &power.kind else {
+            panic!("питание должно быть подтверждением");
+        };
+        assert_eq!(confirm_children.len(), 2);
+        assert!(confirm_children.iter().all(|row| !row.search));
+        assert!(confirm_children.iter().any(|row| row.danger));
     }
 
     /// Всё, что меняет вывод, идёт через `RefreshAndRun` с ключом OUTPUTS:

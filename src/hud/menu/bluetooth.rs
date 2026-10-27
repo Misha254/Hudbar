@@ -1011,7 +1011,8 @@ fn device_children(
 /// Статусная строка внутри подменю устройства: обычная `Info`, лично по
 /// устройству и по ключу поля.
 fn info_line(device_id: &str, key: &str, text: String) -> Node {
-    Node::info(settings_icons::DOT, &text).with_id(&format!("{device_id}/info/{key}"))
+    let (title, value) = text.split_once(':').unwrap_or(("", text.as_str()));
+    Node::info_value(title.trim(), value.trim()).with_id(&format!("{device_id}/info/{key}"))
 }
 
 /// Строка о непрочитанном списке: пустой подменю «Нет устройств» молчит о
@@ -1420,6 +1421,48 @@ mod tests {
             assert_eq!(children.len(), 1);
             assert_eq!(children[0].title, "Нет устройств");
         }
+    }
+
+    /// Пустой список устройств — уровень из одного Info: открывается без
+    /// курсора.
+    #[test]
+    fn bluetooth_empty_list_has_no_selection() {
+        let snapshot = BluetoothSnapshot {
+            adapter: Block::Ready(parse_adapter(SHOW)),
+            known: Block::Ready(Vec::new()),
+            paired: Block::Ready(Vec::new()),
+            connected: Block::Ready(Vec::new()),
+            infos: HashMap::new(),
+        };
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        let mut menu = super::super::state::Menu::new(nodes);
+        let index = menu
+            .current()
+            .list
+            .items()
+            .iter()
+            .position(|item| item.title == "Сопряжённые")
+            .expect("список сопряжённых");
+        assert!(menu.current_mut().list.select(index));
+        assert_eq!(menu.enter(), super::super::state::Outcome::Pushed);
+        assert_eq!(menu.current().list.items()[0].title, "Нет устройств");
+        assert_eq!(menu.current().list.selected(), None);
+    }
+
+    /// Если статус адаптера — Info, корень раздела открывается без курсора,
+    /// хотя ниже есть выбираемые списки.
+    #[test]
+    fn bluetooth_root_with_info_status_has_no_selection() {
+        let snapshot = BluetoothSnapshot {
+            adapter: Block::Failed("не отвечает".to_string()),
+            ..BluetoothSnapshot::default()
+        };
+        let menu = super::super::state::Menu::new(build_nodes(&snapshot, Language::Ru));
+        assert!(matches!(
+            menu.current().list.items()[0].kind,
+            super::super::item::ItemKind::Info
+        ));
+        assert_eq!(menu.current().list.selected(), None);
     }
 
     #[test]

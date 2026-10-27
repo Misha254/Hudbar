@@ -1072,6 +1072,41 @@ mod tests {
         assert_eq!(nodes[0].title, "нет адаптера");
     }
 
+    /// Загрузка, пустой список и недоступность — одна Info: уровня без
+    /// курсора достаточно, Enter ничего не запускает.
+    #[test]
+    fn system_loading_empty_unavailable_have_no_selection() {
+        let key = ProviderKey::new("test");
+        let states: [SlotState<Vec<Node>>; 3] = [
+            SlotState::Loading,
+            SlotState::Ready(Vec::new()),
+            SlotState::Unavailable("нет адаптера".to_string()),
+        ];
+        for state in states {
+            let mut menu = super::super::state::Menu::new(slot_nodes(key, &state, Language::Ru));
+            assert_eq!(menu.current().list.selected(), None, "{state:?}");
+            assert_eq!(menu.enter(), super::super::state::Outcome::Idle);
+        }
+    }
+
+    /// Ошибка открывается без курсора, а первое движение вниз ведёт на
+    /// «Обновить», а не оставляет выбор на сообщении.
+    #[test]
+    fn system_error_opens_with_none_and_refresh_reachable_by_down() {
+        let key = ProviderKey::new("test");
+        let state: SlotState<Vec<Node>> = SlotState::Error("демон молчит".to_string());
+        let mut menu = super::super::state::Menu::new(slot_nodes(key, &state, Language::Ru));
+        assert_eq!(menu.current().list.selected(), None);
+        menu.move_sel(1);
+        let selected = menu
+            .current()
+            .list
+            .selected_item()
+            .expect("после вниз выбран «Обновить»");
+        assert_eq!(selected.title, refresh_title(Language::Ru));
+        assert_eq!(menu.current().list.selected(), Some(1));
+    }
+
     /// Английские подписи placeholders тоже заданы явно.
     #[test]
     fn placeholder_titles_are_translated() {

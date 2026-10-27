@@ -1493,4 +1493,20 @@ mod tests {
         let rows = build_nodes(&snapshot, Language::Ru);
         assert_eq!(rows[0].title, "Wi-Fi: вкл · HONOR 200");
     }
+
+    /// Раздел без адаптера — одна Info: курсора при открытии нет.
+    #[test]
+    fn wifi_info_status_level_has_no_selection() {
+        let snapshot = WifiSnapshot {
+            radio: Block::Ready(false),
+            device: Block::Ready(WifiDevice::default()),
+            active: None,
+            networks: Block::Ready(Vec::new()),
+        };
+        let rows = build_nodes(&snapshot, Language::Ru);
+        assert_eq!(rows.len(), 1);
+        let menu = super::super::state::Menu::new(rows);
+        assert_eq!(menu.current().list.items()[0].title, "Нет Wi-Fi адаптера");
+        assert_eq!(menu.current().list.selected(), None);
+    }
 }

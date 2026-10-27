@@ -45,7 +45,7 @@ pub use geometry::{
     METER_H, METER_W, MIN_ROWS, PAD, ROW_H, ROW_H_SEARCH, SCRIM, SCROLLBAR_INSET, SCROLLBAR_W,
     SEARCH_H, SEARCH_W, STATUS_DOT, THUMB_D, TOGGLE_D, VALUE_W, VOLUME_VALUE_W, apply_card_alpha,
     blend, card_height, card_height_for, card_rect, center_band, highlight_rect, layer_size,
-    luminance, row_at, row_band, row_height, rows_for, rows_shown, search_mode,
+    luminance, row_at, row_band, row_height, rows_for, rows_shown, search_mode, selectable_row_at,
 };
 #[allow(unused_imports)]
 pub use header::{crumbs_rect, search_rect};

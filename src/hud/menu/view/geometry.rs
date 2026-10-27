@@ -20,8 +20,10 @@ pub const CAPTION_GAP: f32 = 3.0;
 pub const CARD_INSET: f32 = 1.0;
 /// Минимум строк в карточке. Ниже карточка прыгает при каждом нажатии.
 pub const MIN_ROWS: usize = 5;
-/// Максимум строк: дальше список уже нужно прокручивать.
-pub const MAX_ROWS: usize = 10;
+/// Максимум строк: столько занимает самый длинный уровень меню — карточка
+/// вывода дисплея со справкой, настройками и выключением. Дальше список уже
+/// нужно прокручивать.
+pub const MAX_ROWS: usize = 14;
 /// Высота шапки с крошками и поиском.
 pub const HEADER_H: f32 = 52.0;
 /// Высота подвала с подсказками.
@@ -166,6 +168,17 @@ pub fn row_at(frame: &Frame, card: Rect, x: f32, y: f32) -> Option<usize> {
     let visible = ((y - list.y) / row_h).floor() as usize;
     let absolute = frame.top + visible;
     (absolute < frame.items.len()).then_some(absolute)
+}
+
+/// Строка под указателем, если её можно выбрать. Header и Info не получают
+/// ни клика, ни hover: указатель над ними означает «мимо».
+pub fn selectable_row_at(frame: &Frame, card: Rect, x: f32, y: f32) -> Option<usize> {
+    row_at(frame, card, x, y).filter(|index| {
+        frame
+            .items
+            .get(*index)
+            .is_some_and(|item| item.kind.is_selectable())
+    })
 }
 
 /// Делает пиксели карточки полупрозрачными. Буфер premultiplied, поэтому

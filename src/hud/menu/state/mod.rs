@@ -288,10 +288,12 @@ impl Menu {
     /// Enter на выбранной строке.
     pub fn enter(&mut self) -> Outcome {
         let depth = self.depth();
-        let index = self.current().list.selected();
-        let Some(item) = self.current().list.items().get(index).cloned() else {
+        let Some(item) = self.current().list.selected_item().cloned() else {
             return Outcome::Idle;
         };
+        if !item.kind.is_activatable() {
+            return Outcome::Idle;
+        }
         // Строка из глобального поиска пришла с путём: Enter открывает её
         // подменю и выбирает в нём, а не выполняет действие сразу.
         if depth == 0 && item.caption.is_some() {
@@ -424,6 +426,7 @@ impl Menu {
                     Outcome::Value
                 }
             }
+            ItemKind::Header | ItemKind::Info => Outcome::Idle,
         }
     }
 
@@ -519,8 +522,8 @@ pub struct Frame {
     pub trail: Vec<String>,
     /// Видимые строки.
     pub items: Vec<Item>,
-    /// Выбранный индекс.
-    pub selected: usize,
+    /// Выбранный индекс. `Some` всегда указывает на выбираемую строку.
+    pub selected: Option<usize>,
     /// Индекс первой видимой строки.
     pub top: usize,
     /// Запрос.
@@ -561,7 +564,7 @@ impl Menu {
 pub fn control_count(nodes: &[Node]) -> usize {
     nodes
         .iter()
-        .filter(|node| node.is_visible())
+        .filter(|node| node.is_visible() && !matches!(node.kind, NodeKind::Header | NodeKind::Info))
         .map(|node| match node.children() {
             Some(children) => control_count(children),
             None => 1,

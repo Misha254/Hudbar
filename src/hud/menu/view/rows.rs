@@ -70,7 +70,7 @@ pub fn scrollbar_rect(list: Rect, total: usize, top: usize) -> Option<Rect> {
 /// абсолютная: `enumerate` идёт до `skip`. Прибавлять тут `top` значило бы
 /// подсветить строку на `top` ниже нужной, то есть перескочить через
 /// выбранную, как только список прокрутится.
-pub(crate) fn selected_row(frame: &Frame) -> usize {
+pub(crate) fn selected_row(frame: &Frame) -> Option<usize> {
     frame.selected
 }
 
@@ -88,6 +88,14 @@ pub(crate) fn rows_view(
     let start = window_rows(frame, rows);
     let shown = start.len();
     let list = Rect::new(card.x, card.y + HEADER_H, card.w, shown as f32 * row_h);
+    // Колонки считаются по всему уровню, иначе прокрутка сдвигала бы value.
+    let info_title_w = frame
+        .items
+        .iter()
+        .filter(|item| info_value(item))
+        .map(|item| view.painter.text_width(&item.title, view.scale.label))
+        .fold(0.0f32, f32::max)
+        .min(list.w * 0.4);
     let selected_row = selected_row(frame);
     // Полоса подсветки рисуется до строк, чтобы содержимое выбранной строки
     // лежало поверх неё, как и при отрисовке внутри `row()`.
@@ -106,7 +114,8 @@ pub(crate) fn rows_view(
         // Без полосы близость равна обычному выбору, и цвета совпадают побитово.
         let near = match highlight.sliding {
             Some(pos) => (1.0 - (pos - index as f32).abs()).clamp(0.0, 1.0),
-            None => usize::from(*position == selected_row) as f32,
+            None if item.kind.is_selectable() && selected_row == Some(*position) => 1.0,
+            None => 0.0,
         };
         row(
             view,
@@ -114,10 +123,12 @@ pub(crate) fn rows_view(
             item,
             frame.lang,
             RowState {
-                selected: *position == selected_row,
+                selected: item.kind.is_selectable() && selected_row == Some(*position),
                 paint_selected: highlight.sliding.is_none(),
                 near,
-                hover: *position == highlight.hover.unwrap_or(usize::MAX),
+                hover: item.kind.is_selectable()
+                    && *position == highlight.hover.unwrap_or(usize::MAX),
+                info_title_w,
             },
         );
     }
@@ -166,6 +177,47 @@ fn highlight_band(view: &mut MenuView<'_>, rect: Rect) {
     );
 }
 
+/// Строка заголовка группы: подпись кеглем caption, muted, без иконки и
+/// шеврона. Снизу — hairline на всю ширину строки. Значение, если оно есть,
+/// прижимается к правому краю тем же кеглем и цветом.
+fn header_row(view: &mut MenuView<'_>, rect: Rect, item: &Item) {
+    let left = rect.x + PAD;
+    let right = rect.right() - PAD;
+    let value_w = if item.value.is_empty() { 0.0 } else { VALUE_W };
+    let title_right = (right - value_w - spacing::SM).max(left);
+    view.text_clipped(
+        &item.title,
+        view.scale.caption,
+        view.ui.muted,
+        center_band(
+            Rect::new(left, rect.y, (title_right - left).max(0.0), rect.h),
+            view.scale.caption * 2.0,
+        ),
+        Align::Start,
+    );
+    if !item.value.is_empty() {
+        view.text_clipped(
+            &item.value,
+            view.scale.caption,
+            view.ui.muted,
+            center_band(
+                Rect::new(right - value_w, rect.y, value_w, rect.h),
+                view.scale.caption * 2.0,
+            ),
+            Align::End,
+        );
+    }
+    let line = Rect::new(rect.x, rect.bottom() - 1.0, rect.w, 1.0);
+    fill_rect(
+        view.pixmap,
+        line.x * SCALE,
+        line.y * SCALE,
+        line.w * SCALE,
+        line.h * SCALE,
+        view.ui.border_subtle,
+    );
+}
+
 /// Состояние строки для отрисовки: что выбрано, что под указателем и насколько
 /// строка близка к едущей полосе.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -179,6 +231,7 @@ pub struct RowState {
     pub near: f32,
     /// Строка под указателем мыши.
     pub hover: bool,
+    info_title_w: f32,
 }
 
 /// Одна строка: иконка, название, значение справа и индикатор поведения.
@@ -186,9 +239,51 @@ pub struct RowState {
 /// `state.paint_selected` снимает с строки её фон: когда подсветка едет
 /// отдельной полосой, фон здесь нарисовался бы дважды и стоял бы на месте.
 fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: RowState) {
-    if state.selected && state.paint_selected {
+    if matches!(item.kind, ItemKind::Header) {
+        header_row(view, rect, item);
+        return;
+    }
+    if info_value(item) {
+        let left = rect.x + PAD;
+        let right = rect.right() - PAD;
+        let title_w = state.info_title_w;
+        let gap = spacing::MD;
+        let value_x = left + title_w + gap;
+        let value_w = (right - value_x).max(0.0);
+        let title_color = view.ui.muted;
+        let value_color = if item.disabled {
+            view.ui.text_disabled
+        } else if item.muted {
+            view.ui.muted
+        } else {
+            view.ui.text
+        };
+        view.text_clipped(
+            &item.title,
+            view.scale.label,
+            title_color,
+            center_band(
+                Rect::new(left, rect.y, title_w, rect.h),
+                view.scale.label * 2.0,
+            ),
+            Align::Start,
+        );
+        view.text_clipped(
+            &item.value,
+            view.scale.label,
+            value_color,
+            center_band(
+                Rect::new(value_x, rect.y, value_w, rect.h),
+                view.scale.label * 2.0,
+            ),
+            Align::Start,
+        );
+        return;
+    }
+    let selected = state.selected && !item.disabled;
+    if selected && state.paint_selected && item.kind.is_selectable() {
         highlight_band(view, rect);
-    } else if state.hover && !state.selected {
+    } else if state.hover && !selected && !item.disabled && item.kind.is_selectable() {
         // Подложка под указателем — та же заливка без смены цвета текста: мышь
         // показывает, где кликнёт, но не выбирает. Выбранная строка остаётся
         // акцентом даже под курсором, поэтому hover на неё не наносится.
@@ -207,18 +302,46 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
     // постепенно. На сплошной заливке акцента выбранный текст тёмный —
     // `on_primary`, а не акцент: акцентом он был бы невидим. При `near` ровно
     // 0 или 1 смешивание даёт прежние цвета побитово.
-    let near = state.near.clamp(0.0, 1.0);
-    let icon_color = blend(view.ui.muted, view.ui.on_primary, near);
-    let text_color = blend(view.ui.text, view.ui.on_primary, near);
+    let near = if item.disabled {
+        0.0
+    } else {
+        state.near.clamp(0.0, 1.0)
+    };
+    let base_color = if item.disabled {
+        view.ui.muted
+    } else if item.danger {
+        view.ui.danger
+    } else {
+        view.ui.text
+    };
+    let icon_base = if item.disabled {
+        view.ui.muted
+    } else if item.danger {
+        view.ui.danger
+    } else {
+        view.ui.muted
+    };
+    let icon_color = blend(icon_base, view.ui.on_primary, near);
+    let text_color = blend(base_color, view.ui.on_primary, near);
     // Второстепенный текст строки: подпись пути. На акценте — тоже тёмный.
-    let secondary_color = blend(view.ui.muted, view.ui.on_primary, near);
+    let secondary_base = if item.danger {
+        view.ui.danger
+    } else {
+        view.ui.muted
+    };
+    let secondary_color = blend(secondary_base, view.ui.on_primary, near);
     let two_line = !item.single_line();
     let icon_x = rect.x + PAD;
-    let label_x = icon_x + ICON + spacing::MD;
+    let label_x = if item.icon.is_empty() && matches!(item.kind, ItemKind::Header | ItemKind::Info)
+    {
+        rect.x + PAD
+    } else {
+        icon_x + ICON + spacing::MD
+    };
     let right = rect.right() - PAD;
     // Ширина зоны названия: до значения или до шеврона, чтобы длинное имя не
     // наезжало на правую часть.
-    let label_w = (right - trailing_w(&item.kind) - label_x).max(0.0);
+    let label_w = (right - trailing_w(item) - label_x).max(0.0);
     let label_rect = Rect::new(label_x, rect.y, label_w, rect.h);
     if !item.icon.is_empty() {
         let icon_rect = center_band(Rect::new(icon_x, rect.y, ICON, rect.h), row_band(view));
@@ -266,13 +389,22 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
     indicator(view, rect, item, two_line, lang, near);
 }
 
+fn info_value(item: &Item) -> bool {
+    matches!(item.kind, ItemKind::Info) && item.icon.is_empty() && !item.value.is_empty()
+}
+
 /// Дорожка полосы: от края названия до места значения справа. `None`, если
 /// названию не хватило места — тогда полосы просто нет.
 /// Сколько места справа от названия резервирует строка: шеврон, значение,
 /// миниатюра пикера или полоса громкости с процентом.
-pub(crate) fn trailing_w(kind: &ItemKind) -> f32 {
-    match kind {
-        ItemKind::Submenu | ItemKind::Leaf => CHEVRON_W,
+pub(crate) fn trailing_w(item: &Item) -> f32 {
+    match &item.kind {
+        // Подменю без значения сохраняет прежнюю геометрию. Дополнительное
+        // место нужно только непустому значению, иначе длинное имя обрезалось
+        // бы без причины.
+        ItemKind::Submenu if item.value.is_empty() => CHEVRON_W,
+        ItemKind::Submenu => CHEVRON_W + VALUE_W + spacing::SM,
+        ItemKind::Leaf => CHEVRON_W,
         ItemKind::Picker(_) => THUMB_D + CHEVRON_W + spacing::SM,
         // У громкости справа полоса с процентом, а не только число: уровень
         // должен читаться взглядом, не выбирая строку и не глядя в подпись.
@@ -370,7 +502,14 @@ fn indicator(
     near: f32,
 ) {
     let right = rect.right() - PAD;
-    let secondary = blend(view.ui.muted, view.ui.on_primary, near);
+    let secondary_base = if item.disabled {
+        view.ui.text_disabled
+    } else if item.danger {
+        view.ui.danger
+    } else {
+        view.ui.muted
+    };
+    let secondary = blend(secondary_base, view.ui.on_primary, near);
     if item.kind.is_toggle() {
         let dot = center_band(
             Rect::new(right - TOGGLE_D, rect.y, TOGGLE_D, rect.h),
