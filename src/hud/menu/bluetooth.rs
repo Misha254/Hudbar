@@ -1011,7 +1011,8 @@ fn device_children(
 /// Статусная строка внутри подменю устройства: обычная `Info`, лично по
 /// устройству и по ключу поля.
 fn info_line(device_id: &str, key: &str, text: String) -> Node {
-    Node::info(settings_icons::DOT, &text).with_id(&format!("{device_id}/info/{key}"))
+    let (title, value) = text.split_once(':').unwrap_or(("", text.as_str()));
+    Node::info_value(title.trim(), value.trim()).with_id(&format!("{device_id}/info/{key}"))
 }
 
 /// Строка о непрочитанном списке: пустой подменю «Нет устройств» молчит о

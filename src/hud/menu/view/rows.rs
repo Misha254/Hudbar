@@ -88,6 +88,14 @@ pub(crate) fn rows_view(
     let start = window_rows(frame, rows);
     let shown = start.len();
     let list = Rect::new(card.x, card.y + HEADER_H, card.w, shown as f32 * row_h);
+    // Колонки считаются по всему уровню, иначе прокрутка сдвигала бы value.
+    let info_title_w = frame
+        .items
+        .iter()
+        .filter(|item| info_value(item))
+        .map(|item| view.painter.text_width(&item.title, view.scale.label))
+        .fold(0.0f32, f32::max)
+        .min(list.w * 0.4);
     let selected_row = selected_row(frame);
     // Полоса подсветки рисуется до строк, чтобы содержимое выбранной строки
     // лежало поверх неё, как и при отрисовке внутри `row()`.
@@ -120,6 +128,7 @@ pub(crate) fn rows_view(
                 near,
                 hover: item.kind.is_selectable()
                     && *position == highlight.hover.unwrap_or(usize::MAX),
+                info_title_w,
             },
         );
     }
@@ -222,6 +231,7 @@ pub struct RowState {
     pub near: f32,
     /// Строка под указателем мыши.
     pub hover: bool,
+    info_title_w: f32,
 }
 
 /// Одна строка: иконка, название, значение справа и индикатор поведения.
@@ -231,6 +241,41 @@ pub struct RowState {
 fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: RowState) {
     if matches!(item.kind, ItemKind::Header) {
         header_row(view, rect, item);
+        return;
+    }
+    if info_value(item) {
+        let left = rect.x + PAD;
+        let right = rect.right() - PAD;
+        let title_w = state.info_title_w;
+        let gap = spacing::MD;
+        let value_x = left + title_w + gap;
+        let value_w = (right - value_x).max(0.0);
+        let title_color = view.ui.muted;
+        let value_color = if item.muted {
+            view.ui.muted
+        } else {
+            view.ui.text
+        };
+        view.text_clipped(
+            &item.title,
+            view.scale.label,
+            title_color,
+            center_band(
+                Rect::new(left, rect.y, title_w, rect.h),
+                view.scale.label * 2.0,
+            ),
+            Align::Start,
+        );
+        view.text_clipped(
+            &item.value,
+            view.scale.label,
+            value_color,
+            center_band(
+                Rect::new(value_x, rect.y, value_w, rect.h),
+                view.scale.label * 2.0,
+            ),
+            Align::Start,
+        );
         return;
     }
     if state.selected && state.paint_selected && item.kind.is_selectable() {
@@ -316,6 +361,10 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
         meter(view, rect, label_rect, level, item.muted, near);
     }
     indicator(view, rect, item, two_line, lang, near);
+}
+
+fn info_value(item: &Item) -> bool {
+    matches!(item.kind, ItemKind::Info) && item.icon.is_empty() && !item.value.is_empty()
 }
 
 /// Дорожка полосы: от края названия до места значения справа. `None`, если

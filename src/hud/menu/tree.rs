@@ -378,6 +378,13 @@ impl Node {
         }
     }
 
+    /// Информационная строка с отдельным значением справа.
+    /// Информационные строки намеренно не имеют иконки: подпись и значение
+    /// остаются различимыми для UI и не маскируются служебным глифом.
+    pub fn info_value(title: &str, value: &str) -> Self {
+        Self::info("", title).with_text(value)
+    }
+
     /// Заголовок группы. Живёт в списке, но не выбирается, не активируется и
     /// не попадает в глобальный поиск.
     pub fn header(title: &str) -> Self {
@@ -833,6 +840,23 @@ mod tests {
             from_text.value,
             Some(ValueSource::Text("текущее значение".to_string()))
         );
+    }
+
+    #[test]
+    fn info_value_has_no_icon_and_keeps_value_separate() {
+        let node = Node::info_value("CPU", "Ryzen");
+        assert_eq!(node.icon, "");
+        assert_eq!(node.title, "CPU");
+        assert_eq!(node_value(&node, Language::En), "Ryzen");
+        assert!(matches!(node.kind, NodeKind::Info));
+    }
+
+    #[test]
+    fn info_value_preserves_node_identity_and_info_behavior() {
+        let node = Node::info_value("RAM", "16 GiB").with_id("system/ram");
+        assert_eq!(node.identity(), "system/ram");
+        assert!(node.is_leaf());
+        assert!(matches!(node.kind, NodeKind::Info));
     }
 
     #[test]

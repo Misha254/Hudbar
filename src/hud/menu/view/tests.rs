@@ -925,6 +925,158 @@ fn info_never_gets_selected_or_hover_band() {
     assert_ne!(at_pixel(&pixmap, x * SCALE, y), ui.hover_bg);
 }
 
+#[test]
+fn info_value_columns_align_across_the_level() {
+    let frame = Menu::new(vec![
+        Node::info_value("Short", "VALUE"),
+        Node::info_value("A substantially longer title", "VALUE"),
+    ])
+    .frame();
+    let pixmap = render_card(&frame, None);
+    let (ui, _) = theme(palette::Palette::default());
+    let mut painter = TextPainter::new(&font_name());
+    let label_scale = theme(palette::Palette::default()).1.label;
+    let title_w = ["Short", "A substantially longer title"]
+        .iter()
+        .map(|title| painter.text_width(title, label_scale))
+        .fold(0.0f32, f32::max)
+        .min(CARD_W * 0.4);
+    let value_x = PAD + title_w + spacing::MD;
+    let a = ink_bounds(
+        &pixmap,
+        value_x,
+        HEADER_H,
+        CARD_W - PAD,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    )
+    .unwrap();
+    let b = ink_bounds(
+        &pixmap,
+        value_x,
+        HEADER_H + ROW_H,
+        CARD_W - PAD,
+        HEADER_H + 2.0 * ROW_H - 2.0,
+        ui.panel,
+    )
+    .unwrap();
+    assert!((a.0 - b.0).abs() < 2.0, "value columns: {a:?} vs {b:?}");
+
+    // Даже title за пределами видимого окна участвует в общей колонке;
+    // фиксированный cap не позволяет ему отнять больше 40% списка.
+    let long_title = "Длинное имя поля, которое намеренно шире сорока процентов карточки";
+    let mut items = vec![Node::info_value("Короткое", "значение")];
+    for _ in 0..12 {
+        items.push(Node::action("a", "Обычная строка", Action::Back));
+    }
+    items.push(Node::info_value(long_title, "внизу"));
+    let mut long_frame = Menu::new(items).frame();
+    long_frame.top = 0;
+    let long_pixmap = render_card(&long_frame, None);
+    let mut painter = TextPainter::new(&font_name());
+    let label_scale = theme(palette::Palette::default()).1.label;
+    let title_width = painter.text_width(long_title, label_scale);
+    assert!(title_width > CARD_W * 0.4);
+    let value_x = PAD + title_width.min(CARD_W * 0.4) + spacing::MD;
+    let first_value = ink_bounds(
+        &long_pixmap,
+        value_x,
+        HEADER_H,
+        CARD_W - PAD,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    )
+    .unwrap();
+    assert!(first_value.0 >= value_x - 2.0);
+}
+
+#[test]
+fn info_value_clips_long_value() {
+    let value_text = "Очень длинное значение ".repeat(20);
+    let frame = Menu::new(vec![Node::info_value("Поле", &value_text)]).frame();
+    let pixmap = render_card(&frame, None);
+    let (ui, _) = theme(palette::Palette::default());
+    let mut painter = TextPainter::new(&font_name());
+    let label_scale = theme(palette::Palette::default()).1.label;
+    let value_x = PAD + painter.text_width("Поле", label_scale) + spacing::MD;
+    let value = ink_bounds(
+        &pixmap,
+        value_x,
+        HEADER_H,
+        CARD_W - PAD,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    )
+    .expect("value visible");
+    let mut painter = TextPainter::new(&font_name());
+    let available = CARD_W - PAD - value_x;
+    assert!(
+        painter.text_width(&value_text, theme(palette::Palette::default()).1.label) > available
+    );
+    assert!(value.1 <= CARD_W - PAD);
+    assert!(
+        value.1 - value.0 <= available + 2.0,
+        "длинное значение обрезано: {value:?}"
+    );
+}
+
+#[test]
+fn info_value_muted_value_uses_muted_color() {
+    let mut frame = Menu::new(vec![Node::info_value("Поле", "значение")]).frame();
+    frame.items[0].muted = true;
+    let pixmap = render_card(&frame, None);
+    let (ui, _) = theme(palette::Palette::default());
+    let mut painter = TextPainter::new(&font_name());
+    let label_scale = theme(palette::Palette::default()).1.label;
+    let value_x = PAD + painter.text_width("Поле", label_scale) + spacing::MD;
+    let bounds = ink_bounds(
+        &pixmap,
+        value_x,
+        HEADER_H,
+        CARD_W - PAD,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    )
+    .expect("value visible");
+    let expected = blend(ui.panel, ui.muted, ui.muted.3 as f32 / 255.0);
+    assert!(((bounds.0 + bounds.1) * 0.5) < CARD_W - PAD);
+    let found = ((bounds.0 * SCALE) as u32..=(bounds.1 * SCALE) as u32).any(|x| {
+        (((HEADER_H + 4.0) * SCALE) as u32..((HEADER_H + ROW_H - 4.0) * SCALE) as u32).any(|y| {
+            let p = at_pixel(&pixmap, x as f32, y as f32);
+            (p.0 as i16 - expected.0 as i16).abs() <= 2
+                && (p.1 as i16 - expected.1 as i16).abs() <= 2
+                && (p.2 as i16 - expected.2 as i16).abs() <= 2
+        })
+    });
+    assert!(found, "muted value should use muted role");
+}
+
+#[test]
+fn info_value_has_no_chevron_or_selection() {
+    let mut frame = Menu::new(vec![
+        Node::info_value("Поле", "значение"),
+        Node::action("a", "Действие", Action::Back),
+    ])
+    .frame();
+    frame.selected = Some(0);
+    let plain = render_card(&frame, None);
+    let hovered = render_card_hover(&frame, None, Some(0));
+    assert_eq!(plain.data(), hovered.data());
+    let (ui, _) = theme(palette::Palette::default());
+    assert_eq!(
+        ink_bounds(
+            &plain,
+            CARD_W - PAD - CHEVRON_W,
+            HEADER_H,
+            CARD_W - PAD,
+            HEADER_H + ROW_H - 2.0,
+            ui.panel
+        ),
+        None
+    );
+    assert_ne!(pixel_in_row(&plain, &frame, 0.0), ui.accent);
+}
+
 /// Без выбора в списке нет акцентной полосы ни на одной строке.
 #[test]
 fn no_selection_draws_no_highlight_band() {

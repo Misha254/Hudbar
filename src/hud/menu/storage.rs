@@ -389,15 +389,8 @@ fn status_row(lang: Language, snapshot: &StorageSnapshot) -> Node {
 /// Подменю одного накопителя: разделы, их точки монтирования и кнопки.
 fn disk_submenu(lang: Language, disk: &Disk) -> Node {
     let mut children = vec![
-        Node::info(
-            settings_icons::DOT,
-            &if ru(lang) {
-                format!("Диск: {}", disk.path)
-            } else {
-                format!("Disk: {}", disk.path)
-            },
-        )
-        .with_id(&format!("{}/path", disk.row_id())),
+        Node::info_value(if ru(lang) { "Диск" } else { "Disk" }, &disk.path)
+            .with_id(&format!("{}/path", disk.row_id())),
     ];
 
     for volume in &disk.volumes {

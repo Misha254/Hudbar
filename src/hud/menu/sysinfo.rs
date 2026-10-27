@@ -78,14 +78,13 @@ fn rows(lang: Language) -> Vec<Node> {
     nodes
 }
 
-/// Строка-справка: «Метка: значение». Точка — служебная иконка, как у путей
-/// внутри дисков в «Накопителях».
+/// Строка-справка с отдельными подписью и значением.
 fn info(lang: Language, ru_label: &str, en_label: &str, value: &str, id: &str) -> Node {
     let label = match lang {
         Language::Ru => ru_label,
         Language::En => en_label,
     };
-    Node::info(settings_icons::DOT, &format!("{label}: {value}")).with_id(id)
+    Node::info_value(label, value).with_id(id)
 }
 
 fn os_row(lang: Language) -> Option<String> {
