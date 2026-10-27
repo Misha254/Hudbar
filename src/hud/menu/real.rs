@@ -1103,6 +1103,14 @@ fn targets_in(home: &std::path::Path) -> Vec<(&'static str, &'static str, String
 /// сам, «Отмена» — обычное действие [`Action::Back`], а у вопроса вообще нет
 /// команды, поэтому исполнителю она и не достанется. Внутренние строки
 /// скрыты от глобального поиска: в общем списке два «Отмена» — шум.
+pub(crate) fn confirm_actions(icon: &'static str, question: &str, yes: Node, cancel: Node) -> Node {
+    Node::submenu(
+        icon,
+        question,
+        vec![yes.hidden_from_search(), cancel.hidden_from_search()],
+    )
+}
+
 fn confirm_node(
     icon: &'static str,
     question: &'static str,
@@ -1111,14 +1119,11 @@ fn confirm_node(
     program: &'static str,
     args: &'static [&'static str],
 ) -> Node {
-    Node::submenu(
+    confirm_actions(
         icon,
         question,
-        vec![
-            Node::action(settings_icons::CHECK, yes, Action::Spawn(program, args))
-                .hidden_from_search(),
-            Node::action(settings_icons::TIMES, cancel, Action::Back).hidden_from_search(),
-        ],
+        Node::action(settings_icons::CHECK, yes, Action::Spawn(program, args)),
+        Node::action(settings_icons::TIMES, cancel, Action::Back),
     )
 }
 

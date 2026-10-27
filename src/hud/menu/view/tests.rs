@@ -450,6 +450,8 @@ fn plain_item() -> super::super::item::Item {
         },
         level: None,
         muted: false,
+        danger: false,
+        disabled: false,
         origin: super::super::item::Origin { depth: 0, index: 0 },
     }
 }
@@ -1469,6 +1471,127 @@ fn palette_for() -> UiPalette {
     theme(palette::Palette::default()).0
 }
 
+#[test]
+fn danger_color_differs_from_text() {
+    let (ui, _) = theme(palette::Palette::default());
+    assert_ne!(ui.danger, ui.text);
+    assert!(super::super::ui_tokens::contrast(ui.danger, ui.panel) >= 3.0);
+}
+
+fn has_color(
+    pixmap: &tiny_skia::Pixmap,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    want: palette::Rgba,
+) -> bool {
+    ((y0 * SCALE) as u32..(y1 * SCALE) as u32).any(|y| {
+        ((x0 * SCALE) as u32..(x1 * SCALE) as u32).any(|x| {
+            let got = at_pixel(pixmap, x as f32, y as f32);
+            got.3.abs_diff(want.3) <= 1
+                && (got.0 as i16 - want.0 as i16).abs() <= 3
+                && (got.1 as i16 - want.1 as i16).abs() <= 3
+                && (got.2 as i16 - want.2 as i16).abs() <= 3
+        })
+    })
+}
+
+/// Ожидаемый пиксель там, где глиф цвета `front` покрыл карточку `card`
+/// целиком. Буфер premultiplied, а `at_pixel` распаковывает его по итоговой
+/// альфе, поэтому полупрозрачный `muted` над полупрозрачной карточкой даёт не
+/// свой straight-цвет, а смесь с `card`; непрозрачные роли не меняются.
+fn ink_on_card(front: palette::Rgba, card: palette::Rgba) -> palette::Rgba {
+    let fg = front.3 as f32 / 255.0;
+    let bg = card.3 as f32 / 255.0;
+    let out_a = fg + bg * (1.0 - fg);
+    let channel =
+        |f: u8, c: u8| ((f as f32 * fg + c as f32 * bg * (1.0 - fg)) / out_a).round() as u8;
+    palette::Rgba(
+        channel(front.0, card.0),
+        channel(front.1, card.1),
+        channel(front.2, card.2),
+        (out_a * 255.0).round() as u8,
+    )
+}
+
+#[test]
+fn unselected_danger_uses_danger_color() {
+    let mut frame = Menu::new(vec![
+        Node::submenu(
+            "!",
+            "Опасно",
+            vec![Node::action("", "Продолжить", Action::Back)],
+        )
+        .with_danger(),
+    ])
+    .frame();
+    frame.selected = None;
+    let pixmap = render_card(&frame, None);
+    let ui = palette_for();
+    assert!(has_color(
+        &pixmap,
+        PAD,
+        HEADER_H,
+        CARD_W - PAD,
+        HEADER_H + ROW_H,
+        ui.danger
+    ));
+}
+
+#[test]
+fn selected_danger_keeps_accent_and_on_primary() {
+    let frame = Menu::new(vec![
+        Node::action("!", "Опасно", Action::Back).with_danger(),
+    ])
+    .frame();
+    let pixmap = render_card(&frame, None);
+    let ui = palette_for();
+    assert_eq!(pixel_in_row(&pixmap, &frame, 0.0), ui.accent);
+    assert!(has_color(
+        &pixmap,
+        PAD,
+        HEADER_H,
+        CARD_W - PAD,
+        HEADER_H + ROW_H,
+        ui.on_primary
+    ));
+}
+
+#[test]
+fn disabled_info_uses_muted_title_and_disabled_value() {
+    let frame = Menu::new(vec![Node::info_value("Поле", "значение").with_disabled()]).frame();
+    let pixmap = render_card(&frame, None);
+    let ui = palette_for();
+    let mut painter = TextPainter::new(&font_name());
+    let title_w = painter
+        .text_width("Поле", theme(palette::Palette::default()).1.label)
+        .min(CARD_W * 0.4);
+    let value_x = PAD + title_w + spacing::MD;
+    assert!(
+        has_color(
+            &pixmap,
+            PAD,
+            HEADER_H,
+            value_x,
+            HEADER_H + ROW_H,
+            ink_on_card(ui.muted, ui.panel),
+        ),
+        "название info_value рисуется muted"
+    );
+    assert!(
+        has_color(
+            &pixmap,
+            value_x,
+            HEADER_H,
+            CARD_W - PAD,
+            HEADER_H + ROW_H,
+            ink_on_card(ui.text_disabled, ui.panel),
+        ),
+        "значение выключенного info_value рисуется text_disabled"
+    );
+}
+
 fn card(rows: usize) -> Rect {
     card_rect(1200.0, 800.0, rows, false)
 }
@@ -1728,6 +1851,8 @@ fn row_hit_test_maps_a_point_to_an_item() {
                 keywords: &[],
                 level: None,
                 muted: false,
+                danger: false,
+                disabled: false,
                 kind: super::super::item::ItemKind::Leaf,
                 origin: super::super::item::Origin { depth: 0, index },
             })
@@ -1768,6 +1893,8 @@ fn hit_test_uses_the_search_row_height() {
                 keywords: &[],
                 level: None,
                 muted: false,
+                danger: false,
+                disabled: false,
                 kind: super::super::item::ItemKind::Leaf,
                 origin: super::super::item::Origin { depth: 0, index },
             })

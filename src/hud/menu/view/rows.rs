@@ -251,7 +251,9 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
         let value_x = left + title_w + gap;
         let value_w = (right - value_x).max(0.0);
         let title_color = view.ui.muted;
-        let value_color = if item.muted {
+        let value_color = if item.disabled {
+            view.ui.text_disabled
+        } else if item.muted {
             view.ui.muted
         } else {
             view.ui.text
@@ -278,9 +280,10 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
         );
         return;
     }
-    if state.selected && state.paint_selected && item.kind.is_selectable() {
+    let selected = state.selected && !item.disabled;
+    if selected && state.paint_selected && item.kind.is_selectable() {
         highlight_band(view, rect);
-    } else if state.hover && !state.selected && item.kind.is_selectable() {
+    } else if state.hover && !selected && !item.disabled && item.kind.is_selectable() {
         // Подложка под указателем — та же заливка без смены цвета текста: мышь
         // показывает, где кликнёт, но не выбирает. Выбранная строка остаётся
         // акцентом даже под курсором, поэтому hover на неё не наносится.
@@ -299,11 +302,34 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
     // постепенно. На сплошной заливке акцента выбранный текст тёмный —
     // `on_primary`, а не акцент: акцентом он был бы невидим. При `near` ровно
     // 0 или 1 смешивание даёт прежние цвета побитово.
-    let near = state.near.clamp(0.0, 1.0);
-    let icon_color = blend(view.ui.muted, view.ui.on_primary, near);
-    let text_color = blend(view.ui.text, view.ui.on_primary, near);
+    let near = if item.disabled {
+        0.0
+    } else {
+        state.near.clamp(0.0, 1.0)
+    };
+    let base_color = if item.disabled {
+        view.ui.muted
+    } else if item.danger {
+        view.ui.danger
+    } else {
+        view.ui.text
+    };
+    let icon_base = if item.disabled {
+        view.ui.muted
+    } else if item.danger {
+        view.ui.danger
+    } else {
+        view.ui.muted
+    };
+    let icon_color = blend(icon_base, view.ui.on_primary, near);
+    let text_color = blend(base_color, view.ui.on_primary, near);
     // Второстепенный текст строки: подпись пути. На акценте — тоже тёмный.
-    let secondary_color = blend(view.ui.muted, view.ui.on_primary, near);
+    let secondary_base = if item.danger {
+        view.ui.danger
+    } else {
+        view.ui.muted
+    };
+    let secondary_color = blend(secondary_base, view.ui.on_primary, near);
     let two_line = !item.single_line();
     let icon_x = rect.x + PAD;
     let label_x = if item.icon.is_empty() && matches!(item.kind, ItemKind::Header | ItemKind::Info)
@@ -476,7 +502,14 @@ fn indicator(
     near: f32,
 ) {
     let right = rect.right() - PAD;
-    let secondary = blend(view.ui.muted, view.ui.on_primary, near);
+    let secondary_base = if item.disabled {
+        view.ui.text_disabled
+    } else if item.danger {
+        view.ui.danger
+    } else {
+        view.ui.muted
+    };
+    let secondary = blend(secondary_base, view.ui.on_primary, near);
     if item.kind.is_toggle() {
         let dot = center_band(
             Rect::new(right - TOGGLE_D, rect.y, TOGGLE_D, rect.h),

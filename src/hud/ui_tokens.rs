@@ -148,6 +148,9 @@ pub struct UiPalette {
     /// из палитры matugen, а не придумывается: на сплошной заливке акцента
     /// только он и читается.
     pub on_primary: palette::Rgba,
+    /// Опасное действие. Начинается с `error`; если контраст к панели ниже
+    /// 3:1, смешивается с `text` минимальной долей, которая проходит порог.
+    pub danger: palette::Rgba,
 
     // Производные роли. Не используются отрисовкой, но заданы здесь, чтобы
     // компоненты дизайн-системы не изобретали цвета заново.
@@ -213,11 +216,37 @@ fn extend(base: UiPalette) -> UiPalette {
     }
 }
 
+/// Опасный цвет: `error`, пока он читается на панели как графика.
+///
+/// Если контраст ниже 3:1, бинарный поиск берёт минимальную долю `text`
+/// в `mix(error, text, t)`. Существующие роли не меняются.
+fn danger_color(error: palette::Rgba, text: palette::Rgba, panel: palette::Rgba) -> palette::Rgba {
+    if contrast(error, panel) >= 3.0 {
+        return error;
+    }
+    let mut low = 0.0;
+    let mut high = 1.0;
+    let mut best = text;
+    for _ in 0..24 {
+        let mid = (low + high) / 2.0;
+        let mixed = mix(error, text, mid);
+        if contrast(mixed, panel) >= 3.0 {
+            best = mixed;
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    best
+}
+
 /// Палитра окна: цвета берутся из matugen.
 pub fn ui_palette(p: palette::Palette) -> UiPalette {
+    let panel = mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA);
+    let danger = danger_color(p.error, p.text, panel);
     let base = UiPalette {
         base: p.base.with_a(BG_ALPHA),
-        panel: mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA),
+        panel,
         idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
         // Рамка карточки — не украшение, а граница слоя: у слоя ровно размер
         // карточки, тени нет, и отделяет её только эта линия. На 0.35 к
@@ -234,6 +263,7 @@ pub fn ui_palette(p: palette::Palette) -> UiPalette {
         // Роль matugen как есть: тёмная схема даёт тёмный текст на светлом
         // акценте, светлая — светлый на тёмном.
         on_primary: p.on_primary,
+        danger,
         surface: palette::Rgba(0, 0, 0, 0),
         surface_hover: palette::Rgba(0, 0, 0, 0),
         border_subtle: palette::Rgba(0, 0, 0, 0),
@@ -428,6 +458,7 @@ mod tests {
             ("тумблер: заливка", ui.accent, ui.panel, 3.0),
             ("миниатюра выбора", ui.picker_thumb, ui.panel, 3.0),
             ("заглушка иконки", ui.placeholder, ui.panel, 3.0),
+            ("опасное действие", ui.danger, ui.panel, 3.0),
         ]
     }
 
@@ -463,6 +494,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn danger_color_differs_from_text() {
+        let ui = ui_palette(palette::Palette::default());
+        assert_ne!(
+            ui.danger, ui.text,
+            "danger не должен совпасть с обычным текстом"
+        );
+        assert!(contrast(ui.danger, ui.panel) >= 3.0);
+        for light in [false, true] {
+            for scheme in MODEL_SCHEMES {
+                let ui = ui_palette(model_palette(scheme, light));
+                assert_ne!(ui.danger, ui.text, "{scheme}");
+                assert!(
+                    contrast(ui.danger, ui.panel) >= 3.0,
+                    "{scheme} danger ниже 3:1"
+                );
+            }
+        }
+    }
+
     /// `muted` держит запас над порогом мелкого текста.
     ///
     /// WCAG требует 4.5:1, но `muted` — роль с самым большим числом
@@ -494,7 +545,7 @@ mod tests {
     /// таблицей, а не набором отдельных утверждений.
     #[test]
     fn the_thresholds_are_the_ones_the_audit_asked_for() {
-        assert_eq!(pairs(&ui_palette(palette::Palette::default())).len(), 22);
+        assert_eq!(pairs(&ui_palette(palette::Palette::default())).len(), 23);
         for (_, _, _, need) in pairs(&ui_palette(palette::Palette::default())) {
             assert!(need == 0.0 || need == 3.0 || need == 4.5, "порог {need}");
         }

@@ -190,6 +190,10 @@ pub struct Node {
     pub level: Option<u8>,
     /// Заглушено ли устройство: у полосы горит значок mute.
     pub muted: bool,
+    /// Опасное действие, требующее особого акцента в интерфейсе.
+    pub danger: bool,
+    /// Строка недоступна для действия, но остаётся видимой.
+    pub disabled: bool,
 }
 
 impl PartialEq for Node {
@@ -205,6 +209,8 @@ impl PartialEq for Node {
             && self.search == other.search
             && self.level == other.level
             && self.muted == other.muted
+            && self.danger == other.danger
+            && self.disabled == other.disabled
     }
 }
 
@@ -231,6 +237,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -248,6 +256,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -265,6 +275,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -288,6 +300,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -324,6 +338,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -341,6 +357,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -358,6 +376,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -375,6 +395,8 @@ impl Node {
             search: true,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -400,6 +422,8 @@ impl Node {
             search: false,
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
         }
     }
 
@@ -456,6 +480,17 @@ impl Node {
         let level = level.min(100);
         self.level = Some(level);
         self.muted = muted;
+        self
+    }
+
+    /// Помечает действие как опасное.
+    pub fn with_danger(mut self) -> Self {
+        self.danger = true;
+        self
+    }
+
+    pub fn with_disabled(mut self) -> Self {
+        self.disabled = true;
         self
     }
 
@@ -658,6 +693,8 @@ pub fn row_for(node: &Node, depth: usize, index: usize, lang: Language) -> Item 
         // значения меняет команда из строки.
         level: node.level,
         muted: node.muted,
+        danger: node.danger,
+        disabled: node.disabled,
         origin: Origin { depth, index },
     }
 }

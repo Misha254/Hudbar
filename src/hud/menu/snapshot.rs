@@ -54,6 +54,8 @@ pub enum Subject {
     Displays,
     /// Подменю одного вывода eDP-1.
     DisplaysOutput,
+    /// Подтверждение отключения одного из двух включённых выводов.
+    DisplaysConfirm,
     /// Глубокий след: HUD → Система → Устройства → Дисплеи → eDP-1.
     DeepCrumbs,
     /// Кадр так, как его рисует живое окно: карточка от нуля, без
@@ -64,13 +66,14 @@ pub enum Subject {
 
 impl Subject {
     /// Все доступные состояния для подсказки.
-    pub const ALL: [Subject; 7] = [
+    pub const ALL: [Subject; 8] = [
         Subject::Root,
         Subject::Style,
         Subject::Search,
         Subject::Empty,
         Subject::Displays,
         Subject::DisplaysOutput,
+        Subject::DisplaysConfirm,
         Subject::DeepCrumbs,
     ];
 
@@ -83,6 +86,7 @@ impl Subject {
             Subject::Empty => "empty",
             Subject::Displays => "displays",
             Subject::DisplaysOutput => "displays-output",
+            Subject::DisplaysConfirm => "displays-confirm",
             Subject::DeepCrumbs => "deep-crumbs",
             Subject::Window => "window",
         }
@@ -97,6 +101,7 @@ impl Subject {
             Subject::Empty => "пусто",
             Subject::Displays => "раздел «Дисплеи»",
             Subject::DisplaysOutput => "подменю вывода",
+            Subject::DisplaysConfirm => "подтверждение дисплея",
             Subject::DeepCrumbs => "глубокие крошки",
             Subject::Window => "окно",
         }
@@ -116,6 +121,7 @@ impl Subject {
 /// Фиксированный ответ `niri msg --json outputs` с одним выводом: тот же,
 /// что в тестах раздела «Дисплеи», поэтому снимок не зависит от машины.
 const ONE_OUTPUT: &str = r#"{"eDP-1":{"name":"eDP-1","make":"Najing CEC Panda FPD Technology CO. ltd","model":"0x004D","serial":null,"physical_size":[340,190],"modes":[{"width":1920,"height":1080,"refresh_rate":144000,"is_preferred":true},{"width":1920,"height":1080,"refresh_rate":60002,"is_preferred":false}],"current_mode":0,"is_custom_mode":false,"vrr_supported":false,"vrr_enabled":true,"logical":{"x":0,"y":0,"width":1536,"height":864,"scale":1.25,"transform":"Normal"}}}"#;
+const TWO_OUTPUTS: &str = r#"{"eDP-1":{"name":"eDP-1","make":"Panel","model":"0x004D","modes":[{"width":1920,"height":1080,"refresh_rate":144000,"is_preferred":true}],"current_mode":0,"is_custom_mode":false,"vrr_supported":false,"logical":{"x":0,"y":0,"width":1536,"height":864,"scale":1.25,"transform":"Normal"}},"HDMI-A-1":{"name":"HDMI-A-1","make":"Dell","model":"U2720Q","modes":[{"width":3840,"height":2160,"refresh_rate":60000,"is_preferred":true}],"current_mode":0,"is_custom_mode":false,"vrr_supported":true,"logical":{"x":1536,"y":0,"width":3840,"height":2160,"scale":1.0,"transform":"Normal"}}}"#;
 
 /// Раздел «Дисплеи» из фиксированного снимка: без запуска niri.
 fn displays_section(outputs: &str) -> Node {
@@ -178,6 +184,11 @@ pub fn subject_menu(subject: Subject) -> Menu {
         Subject::DisplaysOutput => {
             menu = displays_menu(ONE_OUTPUT);
             enter_titled(&mut menu, "eDP-1");
+        }
+        Subject::DisplaysConfirm => {
+            menu = displays_menu(TWO_OUTPUTS);
+            enter_titled(&mut menu, "HDMI-A-1");
+            enter_titled(&mut menu, "Выключить");
         }
         Subject::DeepCrumbs => {
             let devices = Node::submenu(

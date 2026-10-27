@@ -132,6 +132,10 @@ pub struct Item {
     pub level: Option<u8>,
     /// Устройство заглушено: показывается значком у полосы.
     pub muted: bool,
+    /// Опасное действие, требующее особого акцента интерфейса.
+    pub danger: bool,
+    /// Строка недоступна для действия, но остаётся видимой.
+    pub disabled: bool,
     /// Поведение строки.
     pub kind: ItemKind,
     /// Место строки в дереве.
@@ -541,6 +545,8 @@ mod tests {
         Item {
             level: None,
             muted: false,
+            danger: false,
+            disabled: false,
             icon: "",
             id: title.to_string(),
             title: title.to_string(),
