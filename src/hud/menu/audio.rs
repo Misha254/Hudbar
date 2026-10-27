@@ -1054,4 +1054,28 @@ mod tests {
         assert!(!slot.is_refreshing());
         assert!(matches!(slot.state(), SlotState::Ready(nodes) if nodes.len() == ready));
     }
+
+    /// Когда инструментов нет, уровень начинается со справки: курсора при
+    /// открытии нет, хотя ниже есть «Обновить».
+    #[test]
+    fn audio_info_first_level_has_no_selection() {
+        let snapshot = AudioSnapshot {
+            output: Block::Missing,
+            input: Block::Missing,
+            sinks: Block::Missing,
+            sources: Block::Missing,
+            sink_default: None,
+            source_default: None,
+        };
+        let nodes = build_nodes(&snapshot, Language::Ru);
+        let mut menu = super::super::state::Menu::new(nodes);
+        assert!(matches!(
+            menu.current().list.items()[0].kind,
+            super::super::item::ItemKind::Info
+        ));
+        assert_eq!(menu.current().list.selected(), None);
+        menu.move_sel(1);
+        let selected = menu.current().list.selected().expect("курсор");
+        assert_eq!(menu.current().list.items()[selected].title, "Обновить");
+    }
 }

@@ -772,6 +772,44 @@ mod tests {
         assert_eq!(actions, 2, "размонтирование и извлечение");
     }
 
+    /// Подменю диска начинается с Info: размонтирование и извлечение не
+    /// выбираются сами при открытии, Enter не может сработать случайно.
+    #[test]
+    fn storage_disk_does_not_autoselect_unmount_or_eject() {
+        let disk = Disk {
+            path: "/dev/sdb".to_string(),
+            model: Some("DataTraveler".to_string()),
+            size: 32 << 30,
+            transport: Some("usb".to_string()),
+            rotational: false,
+            removable: true,
+            volumes: vec![Volume {
+                path: "/dev/sdb1".to_string(),
+                size: 31 << 30,
+                fs: Some("exfat".to_string()),
+                mount: Some("/mnt/data".to_string()),
+            }],
+        };
+        let snapshot = StorageSnapshot {
+            disks: Block::Ready(vec![disk]),
+        };
+        let mut menu = super::super::state::Menu::new(build_nodes(&snapshot, Language::Ru));
+        assert_eq!(menu.enter(), super::super::state::Outcome::Pushed);
+        assert_eq!(menu.current().list.selected(), None);
+        assert!(matches!(
+            menu.current().list.items()[0].kind,
+            super::super::item::ItemKind::Info
+        ));
+        menu.move_sel(1);
+        let selected = menu
+            .current()
+            .list
+            .selected_item()
+            .expect("первая выбираемая строка — размонтирование");
+        assert_eq!(selected.title, "Размонтировать /dev/sdb1");
+        assert!(selected.id.ends_with("/unmount"));
+    }
+
     /// Живой опрос хоста: только read-only команда `lsblk --json`.
     /// Запускается вручную (`cargo test --bin hud-menu-rs -- --ignored live`).
     #[test]

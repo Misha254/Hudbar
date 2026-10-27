@@ -24,7 +24,16 @@ pub fn section(lang: Language) -> Node {
             Language::Ru => "О системе",
             Language::En => "System info",
         },
-        &["specs", "характеристики", "железо", "hardware"] as &[&str],
+        &[
+            "specs",
+            "характеристики",
+            "железо",
+            "hardware",
+            "cpu",
+            "ram",
+            "ядро",
+            "kernel",
+        ] as &[&str],
     );
     Node::submenu(settings_icons::ABOUT, title, rows(lang))
         .with_id("system/info")
@@ -321,7 +330,55 @@ fn battery_health_text(full: u64, design: u64, limit: Option<u64>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::state::{Menu, Outcome};
     use super::*;
+
+    /// Раздел из одних Info открывается без курсора: первая строка не
+    /// выбирается, и Enter при открытии ничего не запускает.
+    #[test]
+    fn sysinfo_level_has_no_selection() {
+        let mut menu = Menu::new(vec![section(Language::Ru)]);
+        assert_eq!(menu.enter(), Outcome::Pushed);
+        assert_eq!(menu.current().list.selected(), None);
+        for item in menu.current().list.items() {
+            assert!(
+                !item.kind.is_selectable(),
+                "в разделе только справки: {}",
+                item.title
+            );
+        }
+    }
+
+    /// Поисковые слова живут на родительском разделе и покрывают железо и
+    /// ядро; сами строки-справки в поиск не попадают.
+    #[test]
+    fn sysinfo_search_words_live_on_the_section() {
+        let root = vec![section(Language::Ru)];
+        let words = &root[0].keywords;
+        for word in ["характеристики", "железо", "specs", "cpu", "ram", "ядро"]
+        {
+            assert!(words.contains(&word), "нет слова поиска {word}");
+        }
+        for (word, expected) in [
+            ("cpu", "О системе"),
+            ("ядро", "О системе"),
+            ("kernel", "О системе"),
+            ("ram", "О системе"),
+        ] {
+            let mut menu = Menu::new(root.clone());
+            for ch in word.chars() {
+                menu.type_char(ch);
+            }
+            let titles: Vec<&str> = menu
+                .current()
+                .list
+                .items()
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect();
+            assert_eq!(titles, vec![expected], "запрос {word}");
+        }
+    }
 
     #[test]
     fn distro_name_strips_quotes() {

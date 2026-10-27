@@ -729,10 +729,10 @@ mod tests {
         assert_eq!(rows[1].caption, None, "корень без родителей");
     }
 
-    /// Header и Info не становятся самостоятельными результатами поиска,
-    /// даже если у Info заданы слова поиска.
+    /// Заголовок группы не становится результатом поиска, даже если у него
+    /// заданы слова поиска.
     #[test]
-    fn header_and_info_are_not_search_results() {
+    fn search_group_header_title_does_not_match() {
         let nodes = vec![
             Node::header("Заголовок").search_as(&["header"]),
             Node::info("i", "Информация").search_as(&["info"]),
@@ -741,12 +741,27 @@ mod tests {
         let rows = search_rows(&nodes, 0, Language::Ru);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Действие");
+
+        let mut menu = super::super::state::Menu::new(nodes);
+        for ch in "Заголовок".chars() {
+            menu.type_char(ch);
+        }
+        assert!(
+            menu.current().list.items().is_empty(),
+            "заголовок группы не ищется: {:?}",
+            menu.current()
+                .list
+                .items()
+                .iter()
+                .map(|item| &item.title)
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Подменю из одних Info остаётся находимым по своему заголовку: Info
     /// не превращается в отдельный результат, но и раздел не пропадает.
     #[test]
-    fn info_only_submenu_is_found_by_its_parent_title() {
+    fn info_only_section_is_found_by_its_title() {
         let nodes = vec![Node::submenu(
             "s",
             "Дисплей",

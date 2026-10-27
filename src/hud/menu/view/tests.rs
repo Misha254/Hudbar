@@ -623,10 +623,10 @@ fn hover_paints_only_the_row_under_the_pointer() {
     );
 }
 
-/// Клик и hover по Header/Info — мимо: у строки нет выбираемого индекса, и
-/// соседняя строка не должна получить действие.
+/// Клик по Header/Info — мимо: у строки нет выбираемого индекса, и соседняя
+/// строка не должна получить действие.
 #[test]
-fn header_and_info_are_not_click_or_hover_targets() {
+fn click_on_header_or_info_is_noop() {
     let menu = Menu::new(vec![
         Node::header("Заголовок"),
         Node::info("i", "Информация"),
@@ -644,12 +644,23 @@ fn header_and_info_are_not_click_or_hover_targets() {
         assert_eq!(
             selectable_row_at(&frame, card, x, y),
             None,
-            "Header/Info не цель клика и hover"
+            "Header/Info не цель клика"
         );
     }
     let y = HEADER_H + 2.0 * row_h + row_h / 2.0;
     assert_eq!(selectable_row_at(&frame, card, x, y), Some(2));
+}
 
+/// Hover по Header/Info не рисует подложку; обычная строка под указателем
+/// подсвечивается.
+#[test]
+fn hover_on_header_or_info_is_none() {
+    let menu = Menu::new(vec![
+        Node::header("Заголовок"),
+        Node::info("i", "Информация"),
+        Node::action("a", "Действие", Action::Back),
+    ]);
+    let frame = menu.frame();
     let plain = render_card_hover(&frame, None, None);
     for slot in [0, 1] {
         let hovered = render_card_hover(&frame, None, Some(slot));
