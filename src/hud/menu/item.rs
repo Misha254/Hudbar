@@ -385,6 +385,13 @@ impl ItemList {
 
     /// Сдвиг выбора на `delta` выбираемых строк. `Header` и `Info`
     /// пропускаются, список зациклен только по выбираемым строкам.
+    ///
+    /// На краю списка окно сразу показывает начало или конец, а не едет по
+    /// строке за нажатие: справки над первым пунктом иначе приходилось бы
+    /// вычитывать вслепую. Вверх с первого пункта сначала открывается начало
+    /// списка (курсор остаётся на месте), а круг замыкается уже следующим
+    /// нажатием. Вниз с последнего пункта круг замыкается сразу на первый
+    /// пункт, и окно показывает начало вместе с шапкой и справкой.
     pub fn move_sel(&mut self, delta: isize) {
         if delta == 0 {
             self.ensure_visible();
@@ -401,11 +408,34 @@ impl ItemList {
             self.clamp_scroll();
             return;
         }
-        let target = match self.selected.filter(|index| {
+        let current = self.selected.filter(|index| {
             self.items
                 .get(*index)
                 .is_some_and(|item| item.kind.is_selectable())
-        }) {
+        });
+        if delta.abs() == 1
+            && let Some(current) = current
+        {
+            let step = delta.signum();
+            let at_edge = if step < 0 {
+                current == selectable[0]
+            } else {
+                current == *selectable.last().expect("список выбираемых не пуст")
+            };
+            if at_edge {
+                if step < 0 {
+                    if self.top > 0 {
+                        self.reveal_start();
+                        return;
+                    }
+                } else {
+                    self.selected = Some(selectable[0]);
+                    self.reveal_start();
+                    return;
+                }
+            }
+        }
+        let target = match current {
             Some(current) => {
                 let ordinal = selectable
                     .iter()
@@ -457,19 +487,34 @@ impl ItemList {
         self.clamp_selection();
     }
 
-    /// Курсор на первой выбираемой строке, но только если она уже первая
-    /// физическая строка. Уровень, начинающийся с Header/Info, остаётся без
-    /// выбора до первого движения.
+    /// Показывает начало списка: шапку и справку над первым пунктом. Если
+    /// выбранная строка не помещается на первую страницу, окно доводится до
+    /// неё: курсор не должен оказаться за кадром.
+    fn reveal_start(&mut self) {
+        self.top = 0;
+        self.ensure_visible();
+    }
+
+    /// Курсор на первой строке после ведущих заголовков группы. Заголовки —
+    /// разметка, а не пункт, поэтому раздел «Дисплеи» открывается с выбранным
+    /// первым действием. Если первой содержательной строкой идёт Info,
+    /// выбор не ставится: справку читают до действия, и Enter при открытии не
+    /// должен сработать случайно.
     pub(crate) fn apply_opening(&mut self) {
         if self.selected.is_some() {
             return;
         }
-        if self
+        let index = self
             .items
-            .first()
-            .is_some_and(|item| item.kind.is_selectable())
+            .iter()
+            .position(|item| !matches!(item.kind, ItemKind::Header));
+        if let Some(index) = index
+            && self
+                .items
+                .get(index)
+                .is_some_and(|item| item.kind.is_selectable())
         {
-            self.selected = Some(0);
+            self.selected = Some(index);
             self.ensure_visible();
         }
     }
@@ -618,7 +663,7 @@ mod tests {
             item_of("header", 3, ItemKind::Header),
             item_of("leaf", 4, ItemKind::Leaf),
         ]);
-        assert_eq!(list.selected(), None, "ведущие Header/Info не выбираются");
+        assert_eq!(list.selected(), None, "ведущая Info оставляет без выбора");
 
         assert!(!list.select(0), "Header не выбирается");
         assert_eq!(list.selected(), None, "сосед не подставляется");
@@ -643,10 +688,8 @@ mod tests {
             item_of("b", 3, ItemKind::Leaf),
             item_of("header", 4, ItemKind::Header),
         ]);
-        assert_eq!(list.selected(), None);
+        assert_eq!(list.selected(), Some(1), "открытие — первая выбираемая");
 
-        list.move_sel(1);
-        assert_eq!(list.selected(), Some(1), "вниз с None — первая выбираемая");
         list.move_sel(1);
         assert_eq!(list.selected(), Some(3), "Info пропущен");
         list.move_sel(1);
@@ -654,6 +697,9 @@ mod tests {
         list.move_sel(-1);
         assert_eq!(list.selected(), Some(3), "вверх через Header");
 
+        list.clear_selection();
+        list.move_sel(1);
+        assert_eq!(list.selected(), Some(1), "вниз с None — первая");
         list.clear_selection();
         list.move_sel(-1);
         assert_eq!(list.selected(), Some(3), "вверх с None — последняя");
@@ -694,6 +740,7 @@ mod tests {
             item_of("b", 3, ItemKind::Leaf),
             item_of("c", 4, ItemKind::Leaf),
         ]);
+        list.clear_selection();
         list.set_page(2);
         assert_eq!(list.selected(), None);
 
@@ -768,6 +815,62 @@ mod tests {
 
         list.move_sel(-4);
         assert_eq!(list.top(), 0);
+    }
+
+    /// На первом выбираемом пункте шаг вверх сразу открывает справки над ним:
+    /// курсор по Info не ходит, но окно не должно ползти по строке за
+    /// нажатие. Следующее нажатие замыкает круг на последний пункт.
+    #[test]
+    fn moving_up_at_the_first_row_opens_the_leading_info_at_once() {
+        let mut list = ItemList::new(vec![
+            item_of("header", 0, ItemKind::Header),
+            item_of("info1", 1, ItemKind::Info),
+            item_of("info2", 2, ItemKind::Info),
+            item_of("info3", 3, ItemKind::Info),
+            item_of("a", 4, ItemKind::Leaf),
+            item_of("b", 5, ItemKind::Leaf),
+            item_of("c", 6, ItemKind::Leaf),
+        ]);
+        list.set_page(5);
+        assert_eq!(list.selected(), None, "ведущая Info оставляет без выбора");
+        assert!(list.select_last());
+        assert_eq!(list.top(), 2, "окно на нижней странице");
+
+        list.move_sel(-1);
+        assert_eq!(list.selected(), Some(5));
+        assert_eq!(list.top(), 2, "курсор ходит внутри окна");
+
+        list.move_sel(-1);
+        assert_eq!(list.selected(), Some(4), "курсор на первом пункте");
+        assert_eq!(list.top(), 2, "окно ещё внизу");
+
+        list.move_sel(-1);
+        assert_eq!(list.selected(), Some(4), "на краю курсор стоит");
+        assert_eq!(list.top(), 0, "начало списка открывается одним нажатием");
+
+        list.move_sel(-1);
+        assert_eq!(list.selected(), Some(6), "следующее нажатие замыкает круг");
+        assert_eq!(list.top(), 2, "круг показывает конец списка");
+    }
+
+    /// Вниз с последнего пункта круг замыкается сразу на первый, а окно
+    /// показывает начало вместе с шапкой и справкой.
+    #[test]
+    fn moving_down_at_the_last_row_wraps_to_the_first_and_the_window_start() {
+        let mut list = ItemList::new(vec![
+            item_of("header", 0, ItemKind::Header),
+            item_of("info", 1, ItemKind::Info),
+            item_of("a", 2, ItemKind::Leaf),
+            item_of("b", 3, ItemKind::Leaf),
+            item_of("c", 4, ItemKind::Leaf),
+        ]);
+        list.set_page(3);
+        assert!(list.select_last());
+        assert_eq!(list.top(), 2, "окно на нижней странице");
+
+        list.move_sel(1);
+        assert_eq!(list.selected(), Some(2), "круг на первый пункт");
+        assert_eq!(list.top(), 0, "окно сразу показывает начало");
     }
 
     #[test]

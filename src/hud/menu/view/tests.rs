@@ -344,8 +344,8 @@ fn highlight_is_absolute_not_offset_by_the_scroll() {
 /// его конец.
 #[test]
 fn no_empty_rows_are_drawn_below_the_last_one() {
-    let mut menu = Menu::new(rows(12));
-    for _ in 0..11 {
+    let mut menu = Menu::new(rows(30));
+    for _ in 0..29 {
         menu.move_sel(1);
     }
     let frame = menu.frame();
@@ -1603,9 +1603,16 @@ fn card_is_at_least_five_rows_tall() {
 }
 
 #[test]
-fn card_stops_growing_at_ten_rows() {
-    assert_eq!(card_height(10), HEADER_H + 10.0 * ROW_H + FOOTER_H);
-    assert_eq!(card_height(50), card_height(10), "дальше список листается");
+fn card_stops_growing_at_the_row_cap() {
+    assert_eq!(
+        card_height(MAX_ROWS),
+        HEADER_H + MAX_ROWS as f32 * ROW_H + FOOTER_H
+    );
+    assert_eq!(
+        card_height(50),
+        card_height(MAX_ROWS),
+        "дальше список листается"
+    );
 }
 
 #[test]
