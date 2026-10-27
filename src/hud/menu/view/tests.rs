@@ -67,6 +67,37 @@ fn at_pixel(pixmap: &tiny_skia::Pixmap, x: f32, y: f32) -> palette::Rgba {
     palette::Rgba(un(px[0]), un(px[1]), un(px[2]), px[3])
 }
 
+/// Пиксели одной строки списка: полная ширина карточки, высота `ROW_H`.
+fn row_pixels(pixmap: &tiny_skia::Pixmap, slot: usize) -> Vec<u8> {
+    let stride = pixmap.width() as usize * 4;
+    let top = ((HEADER_H + slot as f32 * ROW_H) * SCALE) as usize;
+    let height = (ROW_H * SCALE) as usize;
+    pixmap.data()[top * stride..(top + height) * stride].to_vec()
+}
+
+/// Границы непустых пикселей в прямоугольнике строки, в логических пикселях.
+/// Фон карточки — `panel`; hairline и текст отличаются от него.
+fn ink_bounds(
+    pixmap: &tiny_skia::Pixmap,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    bg: palette::Rgba,
+) -> Option<(f32, f32)> {
+    let mut left = f32::MAX;
+    let mut right = f32::MIN;
+    for y in (y0 * SCALE) as u32..(y1 * SCALE) as u32 {
+        for x in (x0 * SCALE) as u32..(x1 * SCALE) as u32 {
+            if at_pixel(pixmap, x as f32, y as f32) != bg {
+                left = left.min(x as f32 / SCALE);
+                right = right.max(x as f32 / SCALE);
+            }
+        }
+    }
+    (left <= right).then_some((left, right))
+}
+
 /// Список из `count` строк с выбором `selected`.
 fn frame_with(count: usize, selected: usize) -> Frame {
     let mut menu = Menu::new(rows(count));
@@ -634,6 +665,242 @@ fn header_and_info_are_not_click_or_hover_targets() {
         plain.data(),
         "hover по обычной строке обязан рисоваться"
     );
+}
+
+/// Header — caption-кегль и muted, снизу hairline на всю ширину строки.
+#[test]
+fn header_uses_caption_size_muted_and_hairline() {
+    let frame = Menu::new(vec![Node::header("Заголовок")]).frame();
+    let pixmap = render_card(&frame, None);
+    let (ui, scale) = theme(palette::Palette::default());
+
+    let hairline_y = HEADER_H + ROW_H - 0.5;
+    assert_eq!(
+        at_pixel(&pixmap, CARD_W / 2.0 * SCALE, hairline_y * SCALE),
+        ui.border_subtle,
+        "под Header обязана быть hairline"
+    );
+
+    let (left, right) = ink_bounds(
+        &pixmap,
+        PAD,
+        HEADER_H,
+        CARD_W - PAD,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    )
+    .expect("подпись Header видна");
+    assert!(
+        (PAD - 0.5..=PAD + 2.0).contains(&left),
+        "без иконки: {left}"
+    );
+    assert!(
+        right < CARD_W - PAD,
+        "hairline не должен попасть в замер: {right}"
+    );
+
+    let mut painter = TextPainter::new(&font_name());
+    let caption_w = painter.text_width("Заголовок", scale.caption);
+    let label_w = painter.text_width("Заголовок", scale.label);
+    let ink_w = right - left;
+    assert!(
+        (ink_w - caption_w).abs() < (ink_w - label_w).abs(),
+        "Header рисуется caption-кеглем: ink {ink_w}, caption {caption_w}, label {label_w}"
+    );
+
+    // Полупрозрачный `muted` ложится на непрозрачную панель: полное покрытие
+    // глифа даёт ровно эту смесь, а не сам цвет с альфой.
+    // Полупрозрачный `muted` ложится на панель: полное покрытие глифа даёт
+    // смесь цвета с панелью.
+    let expected = blend(ui.panel, ui.muted, ui.muted.3 as f32 / 255.0);
+    let mut muted = false;
+    for y in ((HEADER_H + 4.0) * SCALE) as u32..((HEADER_H + ROW_H - 4.0) * SCALE) as u32 {
+        for x in (PAD * SCALE) as u32..((CARD_W - PAD) * SCALE) as u32 {
+            let p = at_pixel(&pixmap, x as f32, y as f32);
+            let d = (p.0 as i32 - expected.0 as i32).abs()
+                + (p.1 as i32 - expected.1 as i32).abs()
+                + (p.2 as i32 - expected.2 as i32).abs();
+            // Карточка полупрозрачна, поэтому альфа пикселя отличается от
+            // расчётной: цвет сравнивается без неё, с допуском на округление.
+            if d <= 2 {
+                muted = true;
+            }
+        }
+    }
+    assert!(muted, "текст Header обязан быть muted");
+}
+
+/// У Header нет иконки и шеврона, hover его не подсвечивает.
+#[test]
+fn header_has_no_icon_chevron_or_hover() {
+    let frame = Menu::new(vec![Node::header("Заголовок")]).frame();
+    let plain = render_card(&frame, None);
+    let hovered = render_card_hover(&frame, None, Some(0));
+    assert_eq!(hovered.data(), plain.data(), "Header не получает hover");
+
+    let (left, _) = ink_bounds(
+        &plain,
+        PAD,
+        HEADER_H,
+        CARD_W,
+        HEADER_H + ROW_H - 2.0,
+        theme(palette::Palette::default()).0.panel,
+    )
+    .expect("подпись Header видна");
+    assert!(
+        left <= PAD + 2.0,
+        "подпись начинается без отступа под иконку"
+    );
+
+    let (ui, _) = theme(palette::Palette::default());
+    let chevron = ink_bounds(
+        &plain,
+        CARD_W - PAD - CHEVRON_W,
+        HEADER_H,
+        CARD_W - PAD,
+        HEADER_H + ROW_H - 2.0,
+        ui.panel,
+    );
+    assert_eq!(chevron, None, "у Header не должно быть шеврона");
+}
+
+/// Header и Info занимают те же 40 px, что и обычная строка.
+#[test]
+fn header_and_info_keep_row_height_forty() {
+    assert_eq!(row_height(false), ROW_H);
+    for count in 5..8 {
+        assert_eq!(
+            card_height(count + 1) - card_height(count),
+            ROW_H,
+            "каждая строка — ровно ROW_H"
+        );
+    }
+    let frame = Menu::new(vec![
+        Node::header("Заголовок"),
+        Node::info("i", "Информация"),
+    ])
+    .frame();
+    assert_eq!(row_height(search_mode(&frame)), ROW_H);
+}
+
+/// У Info нет шеврона: Enter ничего не открывает.
+#[test]
+fn info_has_no_chevron() {
+    let frame = Menu::new(vec![Node::info("i", "Информация")]).frame();
+    let pixmap = render_card(&frame, None);
+    let (ui, _) = theme(palette::Palette::default());
+    assert_eq!(
+        ink_bounds(
+            &pixmap,
+            CARD_W - PAD - CHEVRON_W,
+            HEADER_H,
+            CARD_W - PAD,
+            HEADER_H + ROW_H - 2.0,
+            ui.panel,
+        ),
+        None,
+        "Info не рисует шеврон"
+    );
+}
+
+/// Info не получает ни выбранной заливки, ни hover, даже если в кадре
+/// ошибочно оказался индекс этой строки.
+#[test]
+fn info_never_gets_selected_or_hover_band() {
+    let mut frame = Menu::new(vec![
+        Node::info("", "Информация"),
+        Node::action("a", "Действие", Action::Back),
+    ])
+    .frame();
+    frame.selected = Some(0);
+    let pixmap = render_card_hover(&frame, None, Some(0));
+    let (ui, _) = theme(palette::Palette::default());
+    let x = CARD_W - 48.0;
+    let y = (HEADER_H + ROW_H / 2.0) * SCALE;
+    assert_ne!(at_pixel(&pixmap, x * SCALE, y), ui.accent);
+    assert_ne!(at_pixel(&pixmap, x * SCALE, y), ui.hover_bg);
+}
+
+/// Без выбора в списке нет акцентной полосы ни на одной строке.
+#[test]
+fn no_selection_draws_no_highlight_band() {
+    let frame = Menu::new(vec![
+        Node::header("Заголовок"),
+        Node::info("i", "Информация"),
+        Node::action("a", "Действие", Action::Back),
+    ])
+    .frame();
+    assert_eq!(frame.selected, None);
+    let pixmap = render_card(&frame, None);
+    let (ui, _) = theme(palette::Palette::default());
+    for slot in [0.0, 1.0, 2.0] {
+        assert_ne!(
+            pixel_in_row(&pixmap, &frame, slot),
+            ui.accent,
+            "строка {slot} не должна быть подсвечена"
+        );
+    }
+}
+
+/// Счётчик подвала считает выбираемые строки, а не все физические.
+#[test]
+fn footer_counts_selectable_not_physical_rows() {
+    let mut frame = Menu::new(vec![
+        Node::header("Заголовок"),
+        Node::action("a", "Первый", Action::Back),
+        Node::info("i", "Информация"),
+        Node::action("b", "Второй", Action::Back),
+    ])
+    .frame();
+    frame.selected = Some(3);
+    assert_eq!(super::footer::counter_text(&frame), "2/2");
+}
+
+/// Без выбора — прочерк, на пустом списке — ноль из нуля.
+#[test]
+fn footer_with_none_shows_dash() {
+    let frame = Menu::new(vec![
+        Node::info("i", "Информация"),
+        Node::action("a", "Действие", Action::Back),
+    ])
+    .frame();
+    assert_eq!(frame.selected, None);
+    assert_eq!(super::footer::counter_text(&frame), "—/1");
+    assert_eq!(
+        super::footer::counter_text(&Menu::new(Vec::new()).frame()),
+        "0/0"
+    );
+}
+
+/// Header не меняет пиксели обычных строк: та же строка до и после него
+/// рисуется одинаково.
+#[test]
+fn ordinary_rows_remain_pixel_identical() {
+    let ordinary = || {
+        vec![
+            Node::action("a", "Первый", Action::Back),
+            Node::action("b", "Второй", Action::Back),
+            Node::action("c", "Третий", Action::Back),
+        ]
+    };
+    let mut plain = Menu::new(ordinary()).frame();
+    plain.selected = None;
+    let mut with_header = Menu::new({
+        let mut nodes = vec![Node::header("Заголовок")];
+        nodes.extend(ordinary());
+        nodes
+    })
+    .frame();
+    with_header.selected = None;
+
+    let plain_pixmap = render_card(&plain, None);
+    let header_pixmap = render_card(&with_header, None);
+    assert_eq!(
+        row_pixels(&plain_pixmap, 0),
+        row_pixels(&header_pixmap, 1),
+        "обычная строка после Header должна совпадать побитово"
+    );
+    assert_eq!(row_pixels(&plain_pixmap, 1), row_pixels(&header_pixmap, 2));
 }
 
 /// Мышь над выбранной строкой не превращает акцент в слабую подложку hover:

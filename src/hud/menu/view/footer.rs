@@ -77,25 +77,7 @@ pub(crate) fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
             );
         }
         None => {
-            // Счётчик считает выбираемые элементы, а не физические строки:
-            // Header и Info не являются пунктами выбора. На пустом списке
-            // «0/0», при отсутствии выбора — «—/N».
-            let selectable_total = frame
-                .items
-                .iter()
-                .filter(|item| item.kind.is_selectable())
-                .count();
-            let counter = match frame.selected {
-                Some(index) if index < frame.items.len() => {
-                    let ordinal = frame.items[..=index]
-                        .iter()
-                        .filter(|item| item.kind.is_selectable())
-                        .count();
-                    format!("{ordinal}/{selectable_total}")
-                }
-                _ if selectable_total == 0 => "0/0".to_string(),
-                _ => format!("—/{selectable_total}"),
-            };
+            let counter = counter_text(frame);
             view.text_clipped(
                 &counter,
                 view.scale.caption,
@@ -104,6 +86,28 @@ pub(crate) fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
                 Align::End,
             );
         }
+    }
+}
+
+/// Счётчик выбираемых строк: «n/m», «—/m» без выбора и «0/0» на пустом
+/// списке. Header и Info не считаются пунктами выбора, поэтому физическая
+/// длина списка здесь не подходит.
+pub(crate) fn counter_text(frame: &Frame) -> String {
+    let selectable_total = frame
+        .items
+        .iter()
+        .filter(|item| item.kind.is_selectable())
+        .count();
+    match frame.selected {
+        Some(index) if index < frame.items.len() => {
+            let ordinal = frame.items[..=index]
+                .iter()
+                .filter(|item| item.kind.is_selectable())
+                .count();
+            format!("{ordinal}/{selectable_total}")
+        }
+        _ if selectable_total == 0 => "0/0".to_string(),
+        _ => format!("—/{selectable_total}"),
     }
 }
 
@@ -122,7 +126,7 @@ pub(crate) fn hints_width(view: &mut MenuView<'_>, hints: &[&str]) -> f32 {
 /// Самая широкая строка счётчика. Список длиннее сотни строк в меню не
 /// бывает, но резерв обязан быть отвязан от того, что показано сейчас, иначе
 /// подсказки прыгали бы в момент появления статуса.
-pub(crate) const COUNTER_SAMPLES: [&str; 2] = ["0/0", "100/100"];
+pub(crate) const COUNTER_SAMPLES: [&str; 3] = ["0/0", "100/100", "—/100"];
 
 /// Ключ кэша резерва подвала: язык и кегль подписи.
 #[derive(Clone, Copy, PartialEq)]

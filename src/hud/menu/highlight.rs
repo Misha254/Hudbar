@@ -150,6 +150,12 @@ mod tests {
     }
 
     #[test]
+    fn highlight_position_none_is_none() {
+        assert_eq!(position(None, 0), None);
+        assert_eq!(position(None, 7), None);
+    }
+
+    #[test]
     fn position_never_goes_negative() {
         assert!(
             (position(Some(1), 5).unwrap() - 0.0).abs() < 1e-6,

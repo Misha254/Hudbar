@@ -168,6 +168,47 @@ fn highlight_band(view: &mut MenuView<'_>, rect: Rect) {
     );
 }
 
+/// Строка заголовка группы: подпись кеглем caption, muted, без иконки и
+/// шеврона. Снизу — hairline на всю ширину строки. Значение, если оно есть,
+/// прижимается к правому краю тем же кеглем и цветом.
+fn header_row(view: &mut MenuView<'_>, rect: Rect, item: &Item) {
+    let left = rect.x + PAD;
+    let right = rect.right() - PAD;
+    let value_w = if item.value.is_empty() { 0.0 } else { VALUE_W };
+    let title_right = (right - value_w - spacing::SM).max(left);
+    view.text_clipped(
+        &item.title,
+        view.scale.caption,
+        view.ui.muted,
+        center_band(
+            Rect::new(left, rect.y, (title_right - left).max(0.0), rect.h),
+            view.scale.caption * 2.0,
+        ),
+        Align::Start,
+    );
+    if !item.value.is_empty() {
+        view.text_clipped(
+            &item.value,
+            view.scale.caption,
+            view.ui.muted,
+            center_band(
+                Rect::new(right - value_w, rect.y, value_w, rect.h),
+                view.scale.caption * 2.0,
+            ),
+            Align::End,
+        );
+    }
+    let line = Rect::new(rect.x, rect.bottom() - 1.0, rect.w, 1.0);
+    fill_rect(
+        view.pixmap,
+        line.x * SCALE,
+        line.y * SCALE,
+        line.w * SCALE,
+        line.h * SCALE,
+        view.ui.border_subtle,
+    );
+}
+
 /// Состояние строки для отрисовки: что выбрано, что под указателем и насколько
 /// строка близка к едущей полосе.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -188,6 +229,10 @@ pub struct RowState {
 /// `state.paint_selected` снимает с строки её фон: когда подсветка едет
 /// отдельной полосой, фон здесь нарисовался бы дважды и стоял бы на месте.
 fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: RowState) {
+    if matches!(item.kind, ItemKind::Header) {
+        header_row(view, rect, item);
+        return;
+    }
     if state.selected && state.paint_selected && item.kind.is_selectable() {
         highlight_band(view, rect);
     } else if state.hover && !state.selected && item.kind.is_selectable() {
@@ -216,7 +261,12 @@ fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: 
     let secondary_color = blend(view.ui.muted, view.ui.on_primary, near);
     let two_line = !item.single_line();
     let icon_x = rect.x + PAD;
-    let label_x = icon_x + ICON + spacing::MD;
+    let label_x = if item.icon.is_empty() && matches!(item.kind, ItemKind::Header | ItemKind::Info)
+    {
+        rect.x + PAD
+    } else {
+        icon_x + ICON + spacing::MD
+    };
     let right = rect.right() - PAD;
     // Ширина зоны названия: до значения или до шеврона, чтобы длинное имя не
     // наезжало на правую часть.
