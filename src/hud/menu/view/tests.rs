@@ -275,7 +275,7 @@ fn highlight_stays_on_the_selected_row_after_scrolling() {
         menu.move_sel(1);
     }
     let frame = menu.frame();
-    assert_eq!(frame.selected, 8, "выбрана девятая строка");
+    assert_eq!(frame.selected, Some(8), "выбрана девятая строка");
     assert_eq!(selected_row(&frame), frame.selected, "подсветка = выбор");
 }
 
@@ -291,7 +291,7 @@ fn highlight_is_absolute_not_offset_by_the_scroll() {
     }
     let frame = menu.frame();
     assert!(frame.top > 0, "список прокручен: {}", frame.top);
-    let row = selected_row(&frame);
+    let row = selected_row(&frame).expect("выбор есть");
     let window: Vec<usize> = window_rows(&frame, MAX_ROWS)
         .iter()
         .map(|(index, _)| *index)
@@ -302,7 +302,7 @@ fn highlight_is_absolute_not_offset_by_the_scroll() {
     );
     assert_ne!(
         row,
-        frame.top + frame.selected,
+        frame.top + frame.selected.expect("выбор есть"),
         "индекс не должен смещаться на top={}",
         frame.top
     );
@@ -589,6 +589,50 @@ fn hover_paints_only_the_row_under_the_pointer() {
         pixel_in_row(&hovered, &frame, 3.0),
         ui.accent,
         "выбранная строка осталась выбранной"
+    );
+}
+
+/// Клик и hover по Header/Info — мимо: у строки нет выбираемого индекса, и
+/// соседняя строка не должна получить действие.
+#[test]
+fn header_and_info_are_not_click_or_hover_targets() {
+    let menu = Menu::new(vec![
+        Node::header("Заголовок"),
+        Node::info("i", "Информация"),
+        Node::action("a", "Действие", Action::Back),
+    ]);
+    let frame = menu.frame();
+    assert_eq!(frame.selected, None);
+    let card = Rect::new(0.0, 0.0, CARD_W, 400.0);
+    let row_h = row_height(search_mode(&frame));
+    let x = PAD;
+
+    for slot in [0.0, 1.0] {
+        let y = HEADER_H + slot * row_h + row_h / 2.0;
+        assert_eq!(row_at(&frame, card, x, y), Some(slot as usize));
+        assert_eq!(
+            selectable_row_at(&frame, card, x, y),
+            None,
+            "Header/Info не цель клика и hover"
+        );
+    }
+    let y = HEADER_H + 2.0 * row_h + row_h / 2.0;
+    assert_eq!(selectable_row_at(&frame, card, x, y), Some(2));
+
+    let plain = render_card_hover(&frame, None, None);
+    for slot in [0, 1] {
+        let hovered = render_card_hover(&frame, None, Some(slot));
+        assert_eq!(
+            hovered.data(),
+            plain.data(),
+            "hover по Header/Info не рисует подсветку"
+        );
+    }
+    let hovered = render_card_hover(&frame, None, Some(2));
+    assert_ne!(
+        hovered.data(),
+        plain.data(),
+        "hover по обычной строке обязан рисоваться"
     );
 }
 
@@ -1111,7 +1155,7 @@ fn secret_input_renders_the_mask_in_the_same_card() {
     let frame = Frame {
         trail: vec!["HUD".to_string(), "Wi-Fi".to_string()],
         items: Vec::new(),
-        selected: 0,
+        selected: Some(0),
         top: 0,
         query: String::new(),
         total: 0,
@@ -1132,7 +1176,7 @@ fn search_mode_is_driven_by_the_query() {
     let mut frame = Frame {
         trail: vec!["HUD".to_string()],
         items: Vec::new(),
-        selected: 0,
+        selected: Some(0),
         top: 0,
         query: String::new(),
         total: 0,
@@ -1165,7 +1209,7 @@ fn row_hit_test_maps_a_point_to_an_item() {
                 origin: super::super::item::Origin { depth: 0, index },
             })
             .collect(),
-        selected: 0,
+        selected: Some(0),
         top: 2,
         query: String::new(),
         total: 6,
@@ -1205,7 +1249,7 @@ fn hit_test_uses_the_search_row_height() {
                 origin: super::super::item::Origin { depth: 0, index },
             })
             .collect(),
-        selected: 0,
+        selected: Some(0),
         top: 0,
         query: "x".to_string(),
         total: 3,

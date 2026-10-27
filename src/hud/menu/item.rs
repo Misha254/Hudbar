@@ -53,6 +53,11 @@ pub enum ItemKind {
         /// Переключение mute.
         mute: super::system::CommandSpec,
     },
+    /// Заголовок группы. Не выбирается и не активируется.
+    Header,
+    /// Информационная строка: состояние, подсказка, сообщение. Не выбирается
+    /// и не активируется, но остаётся видимой в своём разделе.
+    Info,
 }
 
 impl ItemKind {
@@ -83,6 +88,18 @@ impl ItemKind {
     /// Внешний выбор ли это: у него вместо значения рисуется миниатюра.
     pub fn is_picker(&self) -> bool {
         matches!(self, ItemKind::Picker(_))
+    }
+
+    /// Можно ли выбрать строку клавиатурой или кликом.
+    pub fn is_selectable(&self) -> bool {
+        !matches!(self, ItemKind::Header | ItemKind::Info)
+    }
+
+    /// Может ли Enter что-то сделать с этой строкой. Контекст (корень,
+    /// отсутствие пути поиска) по-прежнему решает `Menu::enter`, но Header и
+    /// Info не активируются нигде.
+    pub fn is_activatable(&self) -> bool {
+        !matches!(self, ItemKind::Header | ItemKind::Info)
     }
 }
 
@@ -170,7 +187,7 @@ pub struct ItemList {
     all: Vec<Item>,
     items: Vec<Item>,
     query: String,
-    selected: usize,
+    selected: Option<usize>,
     top: usize,
     page: usize,
 }
@@ -191,6 +208,7 @@ impl ItemList {
             ..Self::default()
         };
         list.refilter();
+        list.apply_opening();
         list
     }
 
@@ -209,8 +227,9 @@ impl ItemList {
         &self.query
     }
 
-    /// Индекс выбранной строки в видимой части.
-    pub fn selected(&self) -> usize {
+    /// Индекс выбранной строки в видимой части. `Some` всегда указывает на
+    /// выбираемую строку.
+    pub fn selected(&self) -> Option<usize> {
         self.selected
     }
 
@@ -238,9 +257,12 @@ impl ItemList {
         self.items.len()
     }
 
-    /// Выбранная строка, если список не пуст.
+    /// Выбранная строка, если выбор есть и он всё ещё указывает на выбираемую
+    /// строку.
     pub fn selected_item(&self) -> Option<&Item> {
-        self.items.get(self.selected)
+        self.selected
+            .and_then(|index| self.items.get(index))
+            .filter(|item| item.kind.is_selectable())
     }
 
     /// Строки, попадающие в окно карточки.
@@ -250,45 +272,53 @@ impl ItemList {
     }
 
     /// Пересобирает видимую часть под текущий запрос. Выбор старается уцелеть:
-    /// если выбранная строка выжила, она остаётся выбранной, иначе выбирается
-    /// ближайшая по прежней позиции.
+    /// если выбранная строка выжила, она остаётся выбранной. Если нет — выбора
+    /// нет: соседняя строка не выбирается автоматически.
     pub fn refilter(&mut self) {
-        let previous = self.items.get(self.selected).map(|item| item.origin);
-        let previous_pos = self.selected;
+        let previous = self
+            .selected
+            .and_then(|index| self.items.get(index))
+            .map(|item| item.origin);
         self.items = self
             .all
             .iter()
             .filter(|item| item.matches(&self.query))
             .cloned()
             .collect();
-        self.selected = match previous {
-            Some(origin) => self
-                .items
+        self.selected = previous.and_then(|origin| {
+            self.items
                 .iter()
-                .position(|item| item.origin == origin)
-                .unwrap_or(previous_pos.min(self.items.len().saturating_sub(1))),
-            None => 0,
-        };
+                .position(|item| item.origin == origin && item.kind.is_selectable())
+        });
         self.clamp_scroll();
         self.ensure_visible();
     }
 
-    /// Заменяет набор строк уровня и сразу применяет запрос.
+    /// Заменяет набор строк уровня и сразу применяет запрос. Выбор сбрасывается:
+    /// вызывающий сам решает, что восстанавливать по id.
     pub fn set_items(&mut self, items: Vec<Item>) {
         self.all = items;
-        self.selected = 0;
+        self.selected = None;
         self.top = 0;
         self.refilter();
     }
 
-    /// Заменить видимые строки, сохранив выбор и прокрутку. Отличие от
-    /// `set_items` в том, что выбор не сбрасывается: список перерисовывают
-    /// под тем же курсором (отметка «выполняется» на занятой строке).
+    /// Заменить видимые строки, сохранив выбор по стабильному id. Отличие от
+    /// `set_items` в том, что список перерисовывают под тем же курсором (отметка
+    /// «выполняется» на занятой строке).
     pub fn replace_items(&mut self, items: Vec<Item>) {
+        let previous = self.selected_item().map(|item| item.id.clone());
         self.all = items;
-        let selected = self.selected.min(self.all.len().saturating_sub(1));
-        self.selected = selected;
+        self.selected = None;
         self.refilter();
+        if let Some(id) = previous
+            && let Some(index) = self
+                .items
+                .iter()
+                .position(|item| item.id == id && item.kind.is_selectable())
+        {
+            self.select(index);
+        }
     }
 
     /// Добавляет символ к запросу и перефильтровывает.
@@ -314,32 +344,82 @@ impl ItemList {
         }
     }
 
-    /// Выбирает строку по индексу видимой части.
-    pub fn select(&mut self, index: usize) {
-        if self.items.is_empty() {
-            self.selected = 0;
-            self.top = 0;
-            return;
+    /// Выбирает строку по индексу видимой части. `Header`, `Info` и индекс вне
+    /// диапазона — no-op: соседняя строка не выбирается.
+    pub fn select(&mut self, index: usize) -> bool {
+        if !self
+            .items
+            .get(index)
+            .is_some_and(|item| item.kind.is_selectable())
+        {
+            return false;
         }
-        self.selected = index.min(self.items.len() - 1);
+        self.selected = Some(index);
         self.ensure_visible();
+        true
     }
 
-    /// Сдвиг выбора на `delta` строк. Список зациклен: вниз с последней
-    /// строки — на первую, вверх с первой — на последнюю. Удержание стрелки
-    /// листает по кругу, пока клавишу не отпустишь: повторы шлёт композитор,
-    /// а круг замыкается здесь. Большие шаги тоже идут по модулю длины.
+    /// Выбирает первую выбираемую строку.
+    pub fn select_first(&mut self) -> bool {
+        let Some(index) = self.items.iter().position(|item| item.kind.is_selectable()) else {
+            return false;
+        };
+        self.select(index)
+    }
+
+    /// Выбирает последнюю выбираемую строку.
+    pub fn select_last(&mut self) -> bool {
+        let Some(index) = self
+            .items
+            .iter()
+            .rposition(|item| item.kind.is_selectable())
+        else {
+            return false;
+        };
+        self.select(index)
+    }
+
+    /// Сдвиг выбора на `delta` выбираемых строк. `Header` и `Info`
+    /// пропускаются, список зациклен только по выбираемым строкам.
     pub fn move_sel(&mut self, delta: isize) {
-        if self.items.is_empty() {
+        if delta == 0 {
+            self.ensure_visible();
             return;
         }
-        let len = self.items.len() as isize;
-        self.selected = (self.selected as isize + delta).rem_euclid(len) as usize;
+        let selectable: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| item.kind.is_selectable().then_some(index))
+            .collect();
+        if selectable.is_empty() {
+            self.selected = None;
+            self.clamp_scroll();
+            return;
+        }
+        let target = match self.selected.filter(|index| {
+            self.items
+                .get(*index)
+                .is_some_and(|item| item.kind.is_selectable())
+        }) {
+            Some(current) => {
+                let ordinal = selectable
+                    .iter()
+                    .position(|index| *index == current)
+                    .unwrap_or(0);
+                let next =
+                    (ordinal as isize + delta).rem_euclid(selectable.len() as isize) as usize;
+                selectable[next]
+            }
+            None if delta > 0 => selectable[0],
+            None => *selectable.last().expect("список выбираемых не пуст"),
+        };
+        self.selected = Some(target);
         self.ensure_visible();
     }
 
     /// Прокрутка колесом или PageUp/PageDown: двигает верхнюю строку, выбор
-    /// остаётся тем же индексом.
+    /// остаётся тем же индексом. При отсутствии выбора выбор не создаётся.
     pub fn scroll(&mut self, lines: isize) {
         if self.items.is_empty() {
             return;
@@ -362,13 +442,37 @@ impl ItemList {
 
     /// Доводит выбор в видимую часть списка.
     pub fn ensure_visible(&mut self) {
-        if self.selected < self.top {
-            self.top = self.selected;
-        } else if self.selected >= self.top + self.page {
-            self.top = self.selected + 1 - self.page;
+        if let Some(selected) = self.selected {
+            if selected < self.top {
+                self.top = selected;
+            } else if selected >= self.top + self.page {
+                self.top = selected + 1 - self.page;
+            }
         }
         self.top = self.top.min(self.max_top());
         self.clamp_selection();
+    }
+
+    /// Курсор на первой выбираемой строке, но только если она уже первая
+    /// физическая строка. Уровень, начинающийся с Header/Info, остаётся без
+    /// выбора до первого движения.
+    pub(crate) fn apply_opening(&mut self) {
+        if self.selected.is_some() {
+            return;
+        }
+        if self
+            .items
+            .first()
+            .is_some_and(|item| item.kind.is_selectable())
+        {
+            self.selected = Some(0);
+            self.ensure_visible();
+        }
+    }
+
+    /// Убирает выбор, не подставляя соседнюю строку.
+    pub(crate) fn clear_selection(&mut self) {
+        self.selected = None;
     }
 
     fn clamp_scroll(&mut self) {
@@ -376,10 +480,12 @@ impl ItemList {
     }
 
     fn clamp_selection(&mut self) {
-        if self.items.is_empty() {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(self.items.len() - 1);
+        if !self.selected.is_some_and(|index| {
+            self.items
+                .get(index)
+                .is_some_and(|item| item.kind.is_selectable())
+        }) {
+            self.selected = None;
         }
     }
 }
@@ -393,6 +499,8 @@ impl PartialEq for ItemKind {
         match (self, other) {
             (ItemKind::Submenu, ItemKind::Submenu) => true,
             (ItemKind::Leaf, ItemKind::Leaf) => true,
+            (ItemKind::Header, ItemKind::Header) => true,
+            (ItemKind::Info, ItemKind::Info) => true,
             (ItemKind::Action(left), ItemKind::Action(right)) => left == right,
             (ItemKind::Toggle { .. }, ItemKind::Toggle { .. }) => true,
             (ItemKind::Choice { options: left, .. }, ItemKind::Choice { options: right, .. }) => {
@@ -454,13 +562,20 @@ mod tests {
         )
     }
 
+    fn item_of(title: &str, index: usize, kind: ItemKind) -> Item {
+        Item {
+            kind,
+            ..item(title, 0, index)
+        }
+    }
+
     /// Список, только что собранный, обязан показывать первую строку: иначе
     /// окно открывалось бы прокрученным на один пункт.
     #[test]
     fn fresh_list_starts_at_the_first_row() {
         let list = list(&["one", "two", "three"]);
         assert_eq!(list.top(), 0, "список не должен быть прокручен");
-        assert_eq!(list.selected(), 0);
+        assert_eq!(list.selected(), Some(0));
         assert_eq!(list.page(), ItemList::DEFAULT_PAGE);
     }
 
@@ -471,8 +586,145 @@ mod tests {
         assert_eq!(list.selected_item(), None);
         list.move_sel(1);
         list.scroll(3);
-        assert_eq!(list.selected(), 0);
+        assert_eq!(list.selected(), None);
         assert_eq!(list.top(), 0);
+    }
+
+    /// Header и Info — строки без выбора: уровень из одних таких строк
+    /// остаётся без курсора, а не получает нулевой индекс.
+    #[test]
+    fn headers_and_info_leave_the_level_without_a_cursor() {
+        for kind in [ItemKind::Header, ItemKind::Info] {
+            let list = ItemList::new(vec![item_of("row", 0, kind)]);
+            assert_eq!(list.selected(), None);
+            assert_eq!(list.selected_item(), None);
+        }
+    }
+
+    /// `Some` всегда указывает только на выбираемую строку. Select по
+    /// Header, Info или за границей — no-op, соседняя строка не выбирается.
+    #[test]
+    fn selection_never_lands_on_header_or_info() {
+        let mut list = ItemList::new(vec![
+            item_of("header", 0, ItemKind::Header),
+            item_of("info", 1, ItemKind::Info),
+            item_of("leaf", 2, ItemKind::Leaf),
+            item_of("header", 3, ItemKind::Header),
+            item_of("leaf", 4, ItemKind::Leaf),
+        ]);
+        assert_eq!(list.selected(), None, "ведущие Header/Info не выбираются");
+
+        assert!(!list.select(0), "Header не выбирается");
+        assert_eq!(list.selected(), None, "сосед не подставляется");
+        assert!(!list.select(1), "Info не выбирается");
+        assert_eq!(list.selected(), None);
+        assert!(list.select(2));
+        assert_eq!(list.selected(), Some(2));
+        assert!(!list.select(3), "Header не выбирается");
+        assert_eq!(list.selected(), Some(2), "прежний выбор не сдвинулся");
+        assert!(!list.select(99), "индекс вне диапазона — no-op");
+        assert_eq!(list.selected(), Some(2));
+    }
+
+    /// Стрелки ходят только по выбираемым строкам и замыкаются по ним же;
+    /// из состояния без выбора первая стрелка встаёт на край.
+    #[test]
+    fn moves_skip_headers_and_info_and_wrap_over_the_selectable_rows() {
+        let mut list = ItemList::new(vec![
+            item_of("header", 0, ItemKind::Header),
+            item_of("a", 1, ItemKind::Leaf),
+            item_of("info", 2, ItemKind::Info),
+            item_of("b", 3, ItemKind::Leaf),
+            item_of("header", 4, ItemKind::Header),
+        ]);
+        assert_eq!(list.selected(), None);
+
+        list.move_sel(1);
+        assert_eq!(list.selected(), Some(1), "вниз с None — первая выбираемая");
+        list.move_sel(1);
+        assert_eq!(list.selected(), Some(3), "Info пропущен");
+        list.move_sel(1);
+        assert_eq!(list.selected(), Some(1), "круг только по выбираемым");
+        list.move_sel(-1);
+        assert_eq!(list.selected(), Some(3), "вверх через Header");
+
+        list.clear_selection();
+        list.move_sel(-1);
+        assert_eq!(list.selected(), Some(3), "вверх с None — последняя");
+    }
+
+    /// Home/End ставят курсор на крайние выбираемые строки, а не на
+    /// физические края списка.
+    #[test]
+    fn home_and_end_pick_the_selectable_edges() {
+        let mut list = ItemList::new(vec![
+            item_of("header", 0, ItemKind::Header),
+            item_of("a", 1, ItemKind::Leaf),
+            item_of("info", 2, ItemKind::Info),
+            item_of("b", 3, ItemKind::Leaf),
+            item_of("header", 4, ItemKind::Header),
+        ]);
+        assert!(list.select_last());
+        assert_eq!(list.selected(), Some(3));
+        assert!(list.select_first());
+        assert_eq!(list.selected(), Some(1));
+
+        for kind in [ItemKind::Header, ItemKind::Info] {
+            let mut list = ItemList::new(vec![item_of("row", 0, kind)]);
+            assert!(!list.select_first());
+            assert!(!list.select_last());
+            assert_eq!(list.selected(), None);
+        }
+    }
+
+    /// PageUp/PageDown двигают только окно: из состояния без выбора они не
+    /// создают курсор.
+    #[test]
+    fn scrolling_without_a_selection_does_not_create_one() {
+        let mut list = ItemList::new(vec![
+            item_of("header", 0, ItemKind::Header),
+            item_of("info", 1, ItemKind::Info),
+            item_of("a", 2, ItemKind::Leaf),
+            item_of("b", 3, ItemKind::Leaf),
+            item_of("c", 4, ItemKind::Leaf),
+        ]);
+        list.set_page(2);
+        assert_eq!(list.selected(), None);
+
+        list.scroll(1);
+        assert_eq!(list.top(), 1);
+        assert_eq!(list.selected(), None, "PageDown не выбирает строку");
+        list.scroll(-1);
+        assert_eq!(list.top(), 0);
+        assert_eq!(list.selected(), None, "PageUp не выбирает строку");
+    }
+
+    /// Фильтр сохраняет выбор, пока строка жива, и не подставляет нулевую
+    /// строку, когда выбранная исчезла.
+    #[test]
+    fn refilter_keeps_the_survivor_and_never_falls_back_to_zero() {
+        let mut list = list(&["Apps", "Panel", "Style"]);
+        list.select(1);
+        for ch in "nel".chars() {
+            list.type_char(ch);
+        }
+        assert_eq!(list.items()[0].title, "Panel");
+        assert_eq!(list.selected(), Some(0), "выжившая строка осталась выбрана");
+
+        list.clear_query();
+        list.select(2);
+        for ch in "pa".chars() {
+            list.type_char(ch);
+        }
+        assert_eq!(list.items()[0].title, "Panel");
+        assert_eq!(list.selected(), None, "потерянный выбор не стал нулём");
+
+        list.clear_query();
+        assert_eq!(
+            list.selected(),
+            None,
+            "после очистки курсор не появился сам"
+        );
     }
 
     /// Удержание стрелки листает список по кругу: вниз с последней строки —
@@ -482,17 +734,21 @@ mod tests {
         let mut list = list(&["a", "b", "c"]);
         list.set_page(2);
         list.move_sel(-1);
-        assert_eq!(list.selected(), 2, "вверх с первой — на последнюю");
+        assert_eq!(list.selected(), Some(2), "вверх с первой — на последнюю");
 
         list.move_sel(1);
-        assert_eq!(list.selected(), 0, "вниз с последней — на первую");
+        assert_eq!(list.selected(), Some(0), "вниз с последней — на первую");
 
         list.move_sel(10);
-        assert_eq!(list.selected(), 1, "большой шаг тоже по кругу: 10 % 3");
+        assert_eq!(
+            list.selected(),
+            Some(1),
+            "большой шаг тоже по кругу: 10 % 3"
+        );
 
         list.select(0);
         list.move_sel(-10);
-        assert_eq!(list.selected(), 2, "вверх по кругу: -10 % 3");
+        assert_eq!(list.selected(), Some(2), "вверх по кругу: -10 % 3");
     }
 
     #[test]
@@ -500,7 +756,7 @@ mod tests {
         let mut list = list(&["a", "b", "c", "d", "e"]);
         list.set_page(2);
         list.move_sel(4);
-        assert_eq!(list.selected(), 4);
+        assert_eq!(list.selected(), Some(4));
         assert_eq!(list.top(), 3, "нижняя строка должна стать нижней в окне");
         assert_eq!(list.window().len(), 2);
 
@@ -521,7 +777,7 @@ mod tests {
 
         list.select(1);
         list.scroll(1);
-        assert_eq!(list.selected(), 1, "колесо двигает вид, а не выбор");
+        assert_eq!(list.selected(), Some(1), "колесо двигает вид, а не выбор");
     }
 
     #[test]
@@ -584,10 +840,7 @@ mod tests {
         assert_eq!(list.items()[0].title, "Panel");
         assert_eq!(
             list.selected(),
-            list.items()
-                .iter()
-                .position(|item| item.title == "Style")
-                .unwrap_or(0)
+            list.items().iter().position(|item| item.title == "Style")
         );
     }
 
@@ -640,5 +893,12 @@ mod tests {
         assert!(ItemKind::Submenu.is_submenu());
         assert!(!ItemKind::Action(Action::Niri(&["msg"])).has_value());
         assert!(ItemKind::Picker("wallpaper").is_picker());
+
+        assert!(!ItemKind::Header.is_selectable());
+        assert!(!ItemKind::Header.is_activatable());
+        assert!(!ItemKind::Info.is_selectable());
+        assert!(!ItemKind::Info.is_activatable());
+        assert!(ItemKind::Leaf.is_selectable());
+        assert!(ItemKind::Submenu.is_activatable());
     }
 }

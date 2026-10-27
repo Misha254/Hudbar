@@ -559,7 +559,7 @@ mod tests {
                 "Wi-Fi".to_string(),
             ],
             items: Vec::new(),
-            selected: 0,
+            selected: Some(0),
             top: 0,
             query: String::new(),
             total: 0,
@@ -591,7 +591,7 @@ mod tests {
         assert_eq!(frame.total, 8);
         assert_eq!(frame.trail, vec!["HUD".to_string()]);
         assert_eq!(frame.query, "");
-        assert_eq!(frame.selected, 2, "выбран «Стиль»");
+        assert_eq!(frame.selected, Some(2), "выбран «Стиль»");
     }
 
     #[test]

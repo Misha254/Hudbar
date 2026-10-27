@@ -303,8 +303,11 @@ impl MenuApp {
             MenuInput::Nudge(_) | MenuInput::Volume(_) => {}
             MenuInput::Page(lines) => self.menu.scroll(lines * PAGE),
             MenuInput::Jump(end) => {
-                let last = self.menu.current().list.len().saturating_sub(1);
-                self.menu.current_mut().list.select(usize::from(end) * last);
+                if end {
+                    self.menu.current_mut().list.select_last();
+                } else {
+                    self.menu.current_mut().list.select_first();
+                }
             }
             MenuInput::Activate => self.activate(),
             MenuInput::Back => {
@@ -382,7 +385,7 @@ impl MenuApp {
     fn click(&mut self, x: f32, y: f32) {
         let frame = self.menu.frame();
         let card = self.card(&frame);
-        if let Some(index) = view::row_at(&frame, card, x, y) {
+        if let Some(index) = view::selectable_row_at(&frame, card, x, y) {
             self.menu.current_mut().list.select(index);
             self.activate();
         }
@@ -425,7 +428,7 @@ impl MenuApp {
         let openness = self.ctx.openness_now(now);
         let frame_now = self.menu.frame();
         debug_log(&format!(
-            "слоев: {} строк: {} выбрано: {} top: {} первая: {:?}",
+            "слоев: {} строк: {} выбрано: {:?} top: {} первая: {:?}",
             frame_now.items.len(),
             frame_now.total,
             frame_now.selected,

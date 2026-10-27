@@ -38,8 +38,9 @@ pub fn level_of(depth: usize, query: &str, items: usize) -> Level {
 }
 
 /// Позиция выбранной строки в окне списка: смещение от верхней видимой строки.
-pub fn position(selected: usize, top: usize) -> f32 {
-    (selected as f32 - top as f32).max(0.0)
+/// `None` — выбора нет, подсвечивать нечего.
+pub fn position(selected: Option<usize>, top: usize) -> Option<f32> {
+    selected.map(|selected| (selected as f32 - top as f32).max(0.0))
 }
 
 /// Позиция подсветки для отрисовки.
@@ -52,6 +53,7 @@ pub fn draw_position(pos: f32) -> f32 {
 pub struct Highlight {
     pos: Tween,
     level: Option<Level>,
+    visible: bool,
 }
 
 impl Highlight {
@@ -61,17 +63,31 @@ impl Highlight {
         Self {
             pos: Tween::settled(0.0, now),
             level: None,
+            visible: false,
         }
     }
 
-    /// Позиция выбранной строки на текущем кадре.
-    pub fn update(&mut self, level: Level, target: f32, now: Instant, settings: AnimSettings) {
+    /// Позиция выбранной строки на текущем кадре. `None` в `target` — выбора
+    /// нет: старая полоса не должна оставаться на экране.
+    pub fn update(
+        &mut self,
+        level: Level,
+        target: Option<f32>,
+        now: Instant,
+        settings: AnimSettings,
+    ) {
         let same_level = self.level.as_ref() == Some(&level);
         self.level = Some(level);
+        let Some(target) = target else {
+            self.visible = false;
+            self.pos = Tween::settled(0.0, now);
+            return;
+        };
         let target = target.max(0.0);
-        if !same_level {
+        if !self.visible || !same_level {
             // Другой уровень, запрос или число строк: список пересобран, и
             // прежняя позиция не имеет отношения к новой. Скользить некуда.
+            self.visible = true;
             self.pos = Tween::settled(target, now);
             return;
         }
@@ -89,17 +105,16 @@ impl Highlight {
         self.pos = tween;
     }
 
-    /// Позиция для `render_window`. `None`, пока подсветка не началась: это
-    /// тот же путь, который рисует выбранную строку внутри `row()`.
+    /// Позиция для `render_window`. `None`, пока подсветка не началась или
+    /// пока выбора нет: это тот же путь, который рисует выбранную строку
+    /// внутри `row()`.
     pub fn row(&self, now: Instant) -> Option<f32> {
-        self.level
-            .as_ref()
-            .map(|_| draw_position(self.pos.value(now)))
+        self.visible.then(|| draw_position(self.pos.value(now)))
     }
 
     /// Идёт ли ход: пока едет, окно обязано перерисовываться.
     pub fn animating(&self, now: Instant) -> bool {
-        !self.pos.done(now)
+        self.visible && !self.pos.done(now)
     }
 }
 
@@ -122,21 +137,22 @@ mod tests {
 
     fn started(now: Instant, settings: AnimSettings) -> Highlight {
         let mut highlight = Highlight::new(now);
-        highlight.update(level(), 3.0, now, settings);
+        highlight.update(level(), Some(3.0), now, settings);
         highlight
     }
 
     #[test]
     fn position_is_the_offset_from_the_top_row() {
-        assert!((position(0, 0) - 0.0).abs() < 1e-6);
-        assert!((position(4, 0) - 4.0).abs() < 1e-6);
-        assert!((position(7, 3) - 4.0).abs() < 1e-6);
+        assert!((position(Some(0), 0).unwrap() - 0.0).abs() < 1e-6);
+        assert!((position(Some(4), 0).unwrap() - 4.0).abs() < 1e-6);
+        assert!((position(Some(7), 3).unwrap() - 4.0).abs() < 1e-6);
+        assert_eq!(position(None, 3), None, "без выбора позиции нет");
     }
 
     #[test]
     fn position_never_goes_negative() {
         assert!(
-            (position(1, 5) - 0.0).abs() < 1e-6,
+            (position(Some(1), 5).unwrap() - 0.0).abs() < 1e-6,
             "выбор выше окна списка не должен уводить подсветку в минус"
         );
     }
@@ -147,11 +163,25 @@ mod tests {
         assert!((highlight.row(ms(0)).unwrap() - 3.0).abs() < 1e-6);
     }
 
+    /// Пропавший выбор гасит полосу сразу: старая подсветка не должна
+    /// остаться висеть на прежней строке.
+    #[test]
+    fn a_missing_selection_hides_the_band() {
+        let settings = AnimSettings::default();
+        let mut highlight = started(ms(0), settings);
+        assert!(highlight.row(ms(0)).is_some());
+
+        highlight.update(level(), None, ms(10), settings);
+        assert!(highlight.row(ms(10)).is_none());
+        assert!(highlight.row(ms(500)).is_none());
+        assert!(!highlight.animating(ms(10)));
+    }
+
     #[test]
     fn a_change_of_selection_slides() {
         let settings = AnimSettings::default();
         let mut highlight = started(ms(0), settings);
-        highlight.update(level(), 4.0, ms(10), settings);
+        highlight.update(level(), Some(4.0), ms(10), settings);
 
         let at_start = highlight.row(ms(10)).unwrap();
         let midway = highlight.row(ms(55)).unwrap();
@@ -169,7 +199,7 @@ mod tests {
     fn a_change_of_level_snaps() {
         let settings = AnimSettings::default();
         let mut highlight = started(ms(0), settings);
-        highlight.update(level_of(2, "", 12), 6.0, ms(10), settings);
+        highlight.update(level_of(2, "", 12), Some(6.0), ms(10), settings);
 
         assert!(
             (highlight.row(ms(10)).unwrap() - 6.0).abs() < 1e-6,
@@ -182,7 +212,7 @@ mod tests {
     fn a_typed_query_snaps() {
         let settings = AnimSettings::default();
         let mut highlight = started(ms(0), settings);
-        highlight.update(level_of(1, "wif", 12), 1.0, ms(10), settings);
+        highlight.update(level_of(1, "wif", 12), Some(1.0), ms(10), settings);
 
         assert!((highlight.row(ms(10)).unwrap() - 1.0).abs() < 1e-6);
         assert!(!highlight.animating(ms(10)));
@@ -194,8 +224,8 @@ mod tests {
         // растёт при том же уровне.
         let settings = AnimSettings::default();
         let mut highlight = Highlight::new(ms(0));
-        highlight.update(level_of(1, "", 2), 1.0, ms(0), settings);
-        highlight.update(level_of(1, "", 9), 4.0, ms(200), settings);
+        highlight.update(level_of(1, "", 2), Some(1.0), ms(0), settings);
+        highlight.update(level_of(1, "", 9), Some(4.0), ms(200), settings);
 
         assert!(
             (highlight.row(ms(200)).unwrap() - 4.0).abs() < 1e-6,
@@ -208,7 +238,7 @@ mod tests {
         // `top` уехал вместе с `selected`: строка та же на экране, хода нет.
         let settings = AnimSettings::default();
         let mut highlight = started(ms(0), settings);
-        highlight.update(level(), position(5, 2), ms(10), settings);
+        highlight.update(level(), position(Some(5), 2), ms(10), settings);
 
         assert!(
             (highlight.row(ms(10)).unwrap() - 3.0).abs() < 1e-6,
@@ -222,7 +252,7 @@ mod tests {
         let settings = AnimSettings::default();
         let mut highlight = started(ms(0), settings);
         // Выбор тот же, окно сдвинулось: строка физически уехала вверх.
-        highlight.update(level(), position(5, 3), ms(10), settings);
+        highlight.update(level(), position(Some(5), 3), ms(10), settings);
 
         let midway = highlight.row(ms(55)).unwrap();
         assert!(
@@ -238,12 +268,12 @@ mod tests {
         // отсчитывать ход от текущего значения.
         let settings = AnimSettings::default();
         let mut highlight = started(ms(0), settings);
-        highlight.update(level(), 8.0, ms(10), settings);
+        highlight.update(level(), Some(8.0), ms(10), settings);
 
         let mut now = ms(10);
         for _ in 0..100 {
             now += Duration::from_millis(16);
-            highlight.update(level(), 8.0, now, settings);
+            highlight.update(level(), Some(8.0), now, settings);
         }
 
         assert!((highlight.row(now).unwrap() - 8.0).abs() < 1e-6);
@@ -254,7 +284,7 @@ mod tests {
     fn a_move_runs_for_the_declared_time() {
         let settings = AnimSettings::default();
         let mut highlight = started(ms(0), settings);
-        highlight.update(level(), 5.0, ms(10), settings);
+        highlight.update(level(), Some(5.0), ms(10), settings);
 
         assert!(
             highlight.animating(ms(10)),
@@ -271,7 +301,7 @@ mod tests {
     fn disabled_animations_jump_to_the_target() {
         let settings = AnimSettings::new(false, 1.0);
         let mut highlight = started(ms(0), settings);
-        highlight.update(level(), 7.0, ms(10), settings);
+        highlight.update(level(), Some(7.0), ms(10), settings);
 
         assert!(
             (highlight.row(ms(10)).unwrap() - 7.0).abs() < 1e-6,

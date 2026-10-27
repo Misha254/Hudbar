@@ -38,7 +38,9 @@ impl Level {
         }
     }
 
-    /// Пересобирает строки из узлов и сохраняет выбор, если он выжил.
+    /// Пересобирает строки из узлов и сохраняет выбор, если он выжил. Потеря
+    /// выбора не подставляет первую строку: уровень без выбираемых строк или
+    /// с исчезнувшей строкой остаётся без курсора.
     pub fn rebuild(&mut self, nodes: &[Node], lang: Language) {
         let previous = self.list.selected_item().map(|item| item.id.clone());
         let query = self.list.query().to_string();
@@ -52,10 +54,22 @@ impl Level {
         self.list
             .set_page(super::super::view::rows_shown(self.list.len()));
         self.set_query(&query);
-        if let Some(id) = previous
-            && let Some(index) = self.list.items().iter().position(|item| item.id == id)
-        {
-            self.list.select(index);
+        match previous {
+            Some(id) => {
+                let index = self
+                    .list
+                    .items()
+                    .iter()
+                    .position(|item| item.id == id && item.kind.is_selectable());
+                self.list.clear_selection();
+                if let Some(index) = index {
+                    self.list.select(index);
+                }
+            }
+            // Загрузка динамического раздела начиналась с Info. Когда данные
+            // пришли, курсор ставится по тем же правилам, что и при открытии:
+            // только если первая физическая строка выбираема.
+            None => self.list.apply_opening(),
         }
     }
 

@@ -40,10 +40,16 @@ impl Menu {
             }
         }
         for (level, row) in self.levels.iter_mut().zip(position.rows.iter()) {
+            level.list.clear_selection();
             if row.is_empty() {
                 continue;
             }
-            if let Some(index) = level.list.items().iter().position(|item| &item.id == row) {
+            if let Some(index) = level
+                .list
+                .items()
+                .iter()
+                .position(|item| item.id == *row && item.kind.is_selectable())
+            {
                 level.list.select(index);
             }
         }
@@ -70,7 +76,7 @@ impl Menu {
                 .list
                 .items()
                 .iter()
-                .position(|row| row.title == target)
+                .position(|row| row.title == target && row.kind.is_selectable())
         {
             self.current_mut().list.select(index);
         }

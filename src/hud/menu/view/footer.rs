@@ -77,14 +77,25 @@ pub(crate) fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
             );
         }
         None => {
-            // На пустом списке счётчик был бы «1/0»: читается как ошибка.
-            // Там ноль из нуля.
-            let index = if frame.total == 0 {
-                0
-            } else {
-                frame.selected + 1
+            // Счётчик считает выбираемые элементы, а не физические строки:
+            // Header и Info не являются пунктами выбора. На пустом списке
+            // «0/0», при отсутствии выбора — «—/N».
+            let selectable_total = frame
+                .items
+                .iter()
+                .filter(|item| item.kind.is_selectable())
+                .count();
+            let counter = match frame.selected {
+                Some(index) if index < frame.items.len() => {
+                    let ordinal = frame.items[..=index]
+                        .iter()
+                        .filter(|item| item.kind.is_selectable())
+                        .count();
+                    format!("{ordinal}/{selectable_total}")
+                }
+                _ if selectable_total == 0 => "0/0".to_string(),
+                _ => format!("—/{selectable_total}"),
             };
-            let counter = format!("{index}/{}", frame.total);
             view.text_clipped(
                 &counter,
                 view.scale.caption,

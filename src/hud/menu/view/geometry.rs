@@ -168,6 +168,17 @@ pub fn row_at(frame: &Frame, card: Rect, x: f32, y: f32) -> Option<usize> {
     (absolute < frame.items.len()).then_some(absolute)
 }
 
+/// Строка под указателем, если её можно выбрать. Header и Info не получают
+/// ни клика, ни hover: указатель над ними означает «мимо».
+pub fn selectable_row_at(frame: &Frame, card: Rect, x: f32, y: f32) -> Option<usize> {
+    row_at(frame, card, x, y).filter(|index| {
+        frame
+            .items
+            .get(*index)
+            .is_some_and(|item| item.kind.is_selectable())
+    })
+}
+
 /// Делает пиксели карточки полупрозрачными. Буфер premultiplied, поэтому
 /// домножаются все четыре канала: цвета уже «внутри» альфы.
 pub fn apply_card_alpha(pixmap: &mut tiny_skia::Pixmap, card: Rect, alpha: f32) {

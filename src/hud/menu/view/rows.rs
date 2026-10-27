@@ -70,7 +70,7 @@ pub fn scrollbar_rect(list: Rect, total: usize, top: usize) -> Option<Rect> {
 /// абсолютная: `enumerate` идёт до `skip`. Прибавлять тут `top` значило бы
 /// подсветить строку на `top` ниже нужной, то есть перескочить через
 /// выбранную, как только список прокрутится.
-pub(crate) fn selected_row(frame: &Frame) -> usize {
+pub(crate) fn selected_row(frame: &Frame) -> Option<usize> {
     frame.selected
 }
 
@@ -106,7 +106,8 @@ pub(crate) fn rows_view(
         // Без полосы близость равна обычному выбору, и цвета совпадают побитово.
         let near = match highlight.sliding {
             Some(pos) => (1.0 - (pos - index as f32).abs()).clamp(0.0, 1.0),
-            None => usize::from(*position == selected_row) as f32,
+            None if item.kind.is_selectable() && selected_row == Some(*position) => 1.0,
+            None => 0.0,
         };
         row(
             view,
@@ -114,10 +115,11 @@ pub(crate) fn rows_view(
             item,
             frame.lang,
             RowState {
-                selected: *position == selected_row,
+                selected: item.kind.is_selectable() && selected_row == Some(*position),
                 paint_selected: highlight.sliding.is_none(),
                 near,
-                hover: *position == highlight.hover.unwrap_or(usize::MAX),
+                hover: item.kind.is_selectable()
+                    && *position == highlight.hover.unwrap_or(usize::MAX),
             },
         );
     }
@@ -186,9 +188,9 @@ pub struct RowState {
 /// `state.paint_selected` снимает с строки её фон: когда подсветка едет
 /// отдельной полосой, фон здесь нарисовался бы дважды и стоял бы на месте.
 fn row(view: &mut MenuView<'_>, rect: Rect, item: &Item, lang: Language, state: RowState) {
-    if state.selected && state.paint_selected {
+    if state.selected && state.paint_selected && item.kind.is_selectable() {
         highlight_band(view, rect);
-    } else if state.hover && !state.selected {
+    } else if state.hover && !state.selected && item.kind.is_selectable() {
         // Подложка под указателем — та же заливка без смены цвета текста: мышь
         // показывает, где кликнёт, но не выбирает. Выбранная строка остаётся
         // акцентом даже под курсором, поэтому hover на неё не наносится.

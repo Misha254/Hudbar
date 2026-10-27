@@ -59,6 +59,8 @@ pub enum NodeKind {
     /// Статичная строка: версия, подсказка. Значения и поведения нет, Enter
     /// ничего не делает.
     Info,
+    /// Заголовок группы строк. Не выбирается, не активируется и не ищется.
+    Header,
 }
 
 /// Узел меню.
@@ -264,6 +266,24 @@ impl Node {
         }
     }
 
+    /// Заголовок группы. Живёт в списке, но не выбирается, не активируется и
+    /// не попадает в глобальный поиск.
+    pub fn header(title: &str) -> Self {
+        Self {
+            icon: "",
+            title: title.to_string(),
+            id: String::new(),
+            crumb: None,
+            kind: NodeKind::Header,
+            visible: None,
+            keywords: &[],
+            value: None,
+            search: false,
+            level: None,
+            muted: false,
+        }
+    }
+
     /// Задаёт устойчивую личность узла: путь и выбор строки восстанавливаются
     /// по ней, а не по заголовку.
     pub fn with_id(mut self, id: &str) -> Self {
@@ -380,7 +400,8 @@ pub fn node_value(kind: &NodeKind, lang: Language) -> String {
         | NodeKind::Picker(_)
         | NodeKind::Dynamic { .. }
         | NodeKind::Volume { .. }
-        | NodeKind::Info => String::new(),
+        | NodeKind::Info
+        | NodeKind::Header => String::new(),
         NodeKind::Toggle { get, .. } => {
             let on = get();
             match lang {
@@ -442,7 +463,8 @@ pub fn item_kind(kind: &NodeKind) -> ItemKind {
         // Динамический вход рисуется как подменю той же стрелкой: отдельный
         // рендер не нужен, содержимое подтянется при входе.
         NodeKind::Dynamic { .. } => ItemKind::Submenu,
-        NodeKind::Info => ItemKind::Leaf,
+        NodeKind::Info => ItemKind::Info,
+        NodeKind::Header => ItemKind::Header,
         NodeKind::Action(action) => ItemKind::Action(action.clone()),
         NodeKind::Volume { down, up, mute } => ItemKind::Volume {
             down: down.clone(),
@@ -518,7 +540,9 @@ pub fn level_rows(nodes: &[Node], depth: usize, lang: Language) -> Vec<Item> {
 
 /// Путь к узлу в дереве: заголовки от корня до родителя.
 pub fn path_to(nodes: &[Node], target: &Node) -> Option<Vec<String>> {
-    for node in nodes.iter().filter(|node| node.is_visible() && node.search) {
+    for node in nodes.iter().filter(|node| {
+        node.is_visible() && node.search && !matches!(node.kind, NodeKind::Header | NodeKind::Info)
+    }) {
         if node.title == target.title {
             return Some(Vec::new());
         }
@@ -532,26 +556,41 @@ pub fn path_to(nodes: &[Node], target: &Node) -> Option<Vec<String>> {
     None
 }
 
-/// Все листья дерева вместе с путём до них. `path` — заголовки родителей,
-/// они же become caption строки в глобальном поиске.
-pub fn leaves_with_path(
+/// Все выбираемые листья дерева вместе с путём до них. `path` — заголовки
+/// родителей, они же становятся caption строки в глобальном поиске.
+///
+/// Header и Info не становятся результатами. Если подменю состоит только из
+/// Info, наружу отдаётся само подменю: раздел остаётся находимым по своему
+/// заголовку, но его информационные строки не активируются из поиска.
+fn collect_search(
     nodes: &[Node],
     path: &mut Vec<String>,
     out: &mut Vec<(Node, Vec<String>)>,
-) {
+) -> bool {
+    let mut has_info = false;
     for node in nodes.iter().filter(|node| node.is_visible() && node.search) {
-        match node.children() {
-            Some(children) => {
-                path.push(node.title.clone());
-                leaves_with_path(children, path, out);
-                path.pop();
-            }
-            None => out.push((node.clone(), path.clone())),
+        match &node.kind {
+            NodeKind::Header => {}
+            NodeKind::Info => has_info = true,
+            _ => match node.children() {
+                Some(children) => {
+                    let before = out.len();
+                    path.push(node.title.clone());
+                    let child_info = collect_search(children, path, out);
+                    path.pop();
+                    if out.len() == before && child_info {
+                        out.push((node.clone(), path.clone()));
+                    }
+                    has_info |= child_info;
+                }
+                None => out.push((node.clone(), path.clone())),
+            },
         }
     }
+    has_info
 }
 
-/// Строки глобального поиска: листья с путём до источника.
+/// Строки глобального поиска: выбираемые листья с путём до источника.
 ///
 /// Строка сохраняет иконку и поведение узла: иначе найденный тумблер
 /// выглядел бы как обычный пункт и потерял кружок, а иконка пропала бы вовсе.
@@ -560,7 +599,7 @@ pub fn leaves_with_path(
 pub fn search_rows(nodes: &[Node], depth: usize, lang: Language) -> Vec<Item> {
     let mut path = Vec::new();
     let mut leaves = Vec::new();
-    leaves_with_path(nodes, &mut path, &mut leaves);
+    collect_search(nodes, &mut path, &mut leaves);
     leaves
         .into_iter()
         .enumerate()
@@ -688,6 +727,36 @@ mod tests {
         assert_eq!(rows[0].title, "Обои");
         assert_eq!(rows[0].value, "", "у пикера вместо значения миниатюра");
         assert_eq!(rows[1].caption, None, "корень без родителей");
+    }
+
+    /// Header и Info не становятся самостоятельными результатами поиска,
+    /// даже если у Info заданы слова поиска.
+    #[test]
+    fn header_and_info_are_not_search_results() {
+        let nodes = vec![
+            Node::header("Заголовок").search_as(&["header"]),
+            Node::info("i", "Информация").search_as(&["info"]),
+            Node::action("a", "Действие", Action::Back),
+        ];
+        let rows = search_rows(&nodes, 0, Language::Ru);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Действие");
+    }
+
+    /// Подменю из одних Info остаётся находимым по своему заголовку: Info
+    /// не превращается в отдельный результат, но и раздел не пропадает.
+    #[test]
+    fn info_only_submenu_is_found_by_its_parent_title() {
+        let nodes = vec![Node::submenu(
+            "s",
+            "Дисплей",
+            vec![Node::info("i", "Модель").search_as(&["model"])],
+        )];
+        let rows = search_rows(&nodes, 0, Language::Ru);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Дисплей");
+        assert!(rows[0].kind.is_submenu());
+        assert_eq!(rows[0].caption, None, "у корневого раздела пути нет");
     }
 
     #[test]
