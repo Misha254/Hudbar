@@ -1,24 +1,36 @@
-//! Яркость экрана: sysfs вместо запуска процесса.
+//! Яркость экрана: uevent ядра вместо опроса sysfs.
 //!
 //! `brightnessctl` и `light` меняют `/sys/class/backlight/<устройство>/brightness`,
-//! и события там нет: клавиша пишет файл, а узнать об этом можно только
-//! прочитав его. Поэтому значение сверяется чтением одного маленького файла
-//! раз в сто миллисекунд. Это дешевле, чем гонять `brightnessctl` (громкость
-//! именно поэтому перешла на `pactl subscribe`), и не зависит от того, чем
-//! крутят яркость: клавишей, ползунком или руками из терминала.
+//! и ядро на каждую запись шлёт `KOBJ_CHANGE` в netlink-группу uevent. Подписка
+//! на неё даёт оверлею ту же мгновенную реакцию, что у громкости с
+//! `pactl subscribe`, и не тратит пробуждения в простое. Событие — только повод
+//! перечитать процент: значение берётся из sysfs, поэтому неважно, чем яркость
+//! меняли — клавишей, ползунком или записью в файл.
+//!
+//! Если сокет uevent открыть не удалось, остаётся прежний путь — чтение файла
+//! раз в сто миллисекунд.
 //!
 //! Внешние мониторы через `ddcutil` сюда не входят осознанно: яркость там
 //! читается по I2C сотни миллисекунд на запрос, и опрос шины в темпе OSD
 //! стоил бы дороже самого оверлея. Появится такой монитор — источником
 //! события должен стать тот, кто меняет яркость, а не опрос шины (ROADMAP, F).
 
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use nix::errno::Errno;
+use nix::sys::socket::{
+    AddressFamily, MsgFlags, NetlinkAddr, SockFlag, SockProtocol, SockType, bind, recv, socket,
+};
+
 use super::{Shared, Sys};
 
-/// Как часто сверяется значение.
+/// Группа netlink, в которую ядро шлёт uevent.
+const UEVENT_GROUP: u32 = 1;
+
+/// Запасной опрос, когда uevent недоступен.
 ///
 /// Сто миллисекунд — предел, за которым нажатие клавиши уже читается как
 /// «опоздало»: оверлей звука появляется мгновенно по `pactl subscribe`, и
@@ -26,9 +38,9 @@ use super::{Shared, Sys};
 /// кэша, а не процесс, поэтому такой темп ничего не стоит.
 const POLL: Duration = Duration::from_millis(100);
 
-/// Пауза, когда устройства нет вовсе (десктоп без подсветки): искать его
-/// десять раз в секунду незачем, хватит раза в пять секунд.
-const MISSING_RETRY: Duration = Duration::from_secs(5);
+/// Пауза перед переподключением и при отсутствии устройства: десять раз в
+/// секунду искать нечего, хватит раза в пять секунд.
+const RETRY: Duration = Duration::from_secs(5);
 
 const ROOT: &str = "/sys/class/backlight";
 
@@ -117,15 +129,65 @@ fn refresh(shared: &Shared, value: Option<u8>) {
     }
 }
 
+/// Слушает uevent до обрыва сокета. `false` — подписка недоступна, и дальше
+/// работает запасной опрос; `true` — сокет сломался, имеет смысл переподключиться.
+fn watch(shared: &Shared) -> bool {
+    let Ok(fd) = socket(
+        AddressFamily::Netlink,
+        SockType::Raw,
+        SockFlag::SOCK_CLOEXEC,
+        SockProtocol::NetlinkKObjectUEvent,
+    ) else {
+        return false;
+    };
+    if bind(fd.as_raw_fd(), &NetlinkAddr::new(0, UEVENT_GROUP)).is_err() {
+        return false;
+    }
+    // Начальное значение читается уже после подписки: изменение между `bind` и
+    // этим чтением не потеряется, а случившееся раньше уже попало в файл.
+    refresh(shared, read());
+
+    let mut buf = [0u8; 8192];
+    loop {
+        match recv(fd.as_raw_fd(), &mut buf, MsgFlags::empty()) {
+            Ok(size) if is_backlight_event(&buf[..size]) => refresh(shared, read()),
+            Ok(_) => {}
+            // Сигнал прервал ожидание — просто ждём следующее событие.
+            Err(Errno::EINTR) => {}
+            Err(_) => return true,
+        }
+    }
+}
+
+/// Запасной путь, если uevent недоступен: прежний опрос sysfs.
+fn poll_sysfs(shared: &Shared) -> ! {
+    loop {
+        let value = read();
+        // Нет устройства — не долбим каталог каждый кадр: на десктопе его
+        // не будет никогда, а через пять секунд появится не позже.
+        let pause = if value.is_some() { POLL } else { RETRY };
+        refresh(shared, value);
+        std::thread::sleep(pause);
+    }
+}
+
+/// Относится ли сообщение к подсветке.
+///
+/// Поля uevent разделены нулями, поэтому сравнивается поле целиком, а не
+/// подстрока: `SUBSYSTEM=backlight` не должен совпадать со случайным путём.
+fn is_backlight_event(message: &[u8]) -> bool {
+    message
+        .split(|byte| *byte == 0)
+        .any(|field| field == b"SUBSYSTEM=backlight")
+}
+
 pub fn spawn(shared: Arc<Shared>) {
     std::thread::spawn(move || {
         loop {
-            let value = read();
-            // Нет устройства — не долбим каталог каждый кадр: на десктопе его
-            // не будет никогда, а через пять секунд появится не позже.
-            let pause = if value.is_some() { POLL } else { MISSING_RETRY };
-            refresh(&shared, value);
-            std::thread::sleep(pause);
+            if !watch(&shared) {
+                poll_sysfs(&shared);
+            }
+            std::thread::sleep(RETRY);
         }
     });
 }
@@ -261,6 +323,22 @@ mod tests {
         assert_eq!(read_root(&root), None);
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn backlight_uevent_is_recognized() {
+        let message = b"change@/devices/pci0000:00/0000:00:02.0/drm/card1/card1-eDP-1/intel_backlight\0ACTION=change\0DEVPATH=/devices/pci0000:00/0000:00:02.0/drm/card1/card1-eDP-1/intel_backlight\0SUBSYSTEM=backlight\0";
+
+        assert!(is_backlight_event(message));
+    }
+
+    #[test]
+    fn other_udev_events_are_ignored() {
+        assert!(!is_backlight_event(b"change@/devices/foo\0SUBSYSTEM=net\0"));
+        assert!(!is_backlight_event(
+            b"change@/devices/backlight\0ACTION=change\0"
+        ));
+        assert!(!is_backlight_event(b""));
     }
 
     #[test]

@@ -47,7 +47,7 @@ path = "src/bin/hud_apps.rs"
 chrono = "0.4.45"
 cosmic-text = "0.19.0"
 dbus = "0.9.12"
-nix = { version = "0.31.3", features = ["poll", "fs", "signal", "user"] }
+nix = { version = "0.31.3", features = ["poll", "fs", "signal", "socket", "user"] }
 png = "0.18.1"
 # Иконки приложений в темах (Adwaita, Papirus, Bibata) — это в основном SVG, а
 # PNG в hicolor лежит штук двадцать. resvg нужен, чтобы лаунчер показывал
