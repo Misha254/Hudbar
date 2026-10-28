@@ -1,0 +1,11 @@
+[theme]
+border = "#b8cacb"
+text = "#e3e2e2"
+time = "#c7c6c6"
+container = "#121414"
+title = "#b8cacb"
+greet = "#e3e2e2"
+prompt = "#b8cacb"
+input = "#e3e2e2"
+action = "#c7c6c6"
+button = "#b8cacb"

@@ -121,6 +121,7 @@ pkill -x hudbar; hudbar &
 - [Архитектура](docs/ARCHITECTURE.md) — кадр, карта файлов, типичные правки.
 - [Компоненты](docs/COMPONENTS.md) — какой бинарник за что отвечает.
 - [Меню niri](docs/niri-menu.md) и [обои](docs/wallpaper.md) — подробности окон.
+- [Единая тема](docs/theme.md) — GTK, Qt и экран входа.
 - [ROADMAP](docs/ROADMAP.md) — что сделано и что дальше.
 - [Дизайн](docs/design/) — макеты и референсы.
 
