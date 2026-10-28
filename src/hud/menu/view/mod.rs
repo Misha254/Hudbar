@@ -38,6 +38,8 @@ mod secret;
 mod tests;
 
 #[cfg(test)]
+pub(crate) use footer::{HintKind, hint_levels};
+#[cfg(test)]
 pub use footer::{layout_hints, right_zone_width, zone_misses};
 #[allow(unused_imports)] // бины берут только свои константы; здесь панель биндит обеих
 pub use geometry::{

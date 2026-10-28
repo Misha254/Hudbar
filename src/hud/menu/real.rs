@@ -25,7 +25,7 @@ use super::system::ProviderKey;
 use super::tree::Node;
 use super::values;
 
-/// Версия пакета для строки «О программе».
+/// Версия пакета для строки «Версия» раздела «Hudbar».
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const LANG_OPTS: [&str; 2] = ["Русский", "English"];
@@ -156,6 +156,28 @@ fn has_keybinds() -> bool {
 }
 fn has_yazibinds() -> bool {
     has("hud-yazibinds-rs")
+}
+/// Высота панели одним значением для корневой строки «Панель»: состояние
+/// видно без входа в раздел.
+fn height_value() -> String {
+    format!("{:.0} px", values::height())
+}
+/// Строка языка на корне. Язык — настройка всего интерфейса, а не деталь
+/// оформления: в «Стиле» её приходилось искать, теперь она на виду.
+fn language_row(lang: Language) -> Node {
+    let (title, kw) = match lang {
+        Language::Ru => ("Язык", &["language", "язык"][..]),
+        Language::En => ("Language", &["language", "язык"][..]),
+    };
+    Node::choice(
+        settings_icons::LANGUAGE,
+        title,
+        &LANG_OPTS,
+        values::language,
+        values::set_language,
+    )
+    .with_id("language")
+    .search_as(kw)
 }
 /// Подпись модуля панели на языке окна.
 fn module_title(module: Module, lang: Language) -> &'static str {
@@ -341,7 +363,9 @@ fn panel_section(lang: Language) -> Node {
         animations_group(lang),
         order_section(lang),
     ];
-    Node::submenu(settings_icons::PANEL_MONITOR, title, children).search_as(kw)
+    Node::submenu(settings_icons::PANEL_MONITOR, title, children)
+        .with_value(height_value)
+        .search_as(kw)
 }
 
 /// Группа тумблеров модулей: что вообще живёт на панели.
@@ -504,7 +528,7 @@ fn order_section(lang: Language) -> Node {
     Node::submenu(settings_icons::UP, title, children).search_as(kw)
 }
 
-/// Раздел «Стиль»: тема, язык, обои и схема.
+/// Раздел «Стиль»: обои и схема matugen. Язык переехал на корень.
 fn style_section(lang: Language) -> Node {
     style_section_with(lang, WallpaperTools::detect())
 }
@@ -521,16 +545,7 @@ fn style_section_with(lang: Language, wallpaper: WallpaperTools) -> Node {
         Language::Ru => ru,
         Language::En => en,
     };
-    let mut children = vec![
-        Node::choice(
-            settings_icons::LANGUAGE,
-            t("Язык", "Language"),
-            &LANG_OPTS,
-            values::language,
-            values::set_language,
-        )
-        .search_as(&["language", "язык"]),
-    ];
+    let mut children = Vec::new();
     if wallpaper.chooses() {
         children.push(wallpaper_row(lang, wallpaper.picker));
     }
@@ -800,7 +815,6 @@ fn system_section(lang: Language) -> Node {
         Language::En => en,
     };
     let mut children = vec![
-        dnd_row(lang),
         Node::dynamic(
             settings_icons::SOUND,
             t("Звук", "Audio"),
@@ -830,9 +844,9 @@ fn system_section(lang: Language) -> Node {
         .search_as(&["power", "питание", "профиль", "battery"]),
         updates_group(lang),
     ];
-    // Панель управления дописывается отдельно: целей может не оказаться
-    // вовсе, и пустую строку в разделе показывать нечего. «О системе»
-    // замыкает список — паспорт в конце документа.
+    // «Конфиги» дописываются отдельно: целей может не оказаться вовсе, и
+    // пустую строку в разделе показывать нечего. «О системе» замыкает
+    // список — паспорт в конце документа.
     children.extend(control_node(lang));
     children.push(super::sysinfo::section(lang));
     Node::submenu(settings_icons::SYSTEM, title, children).search_as(kw)
@@ -1030,12 +1044,12 @@ fn control_node_with(
     }
     let (title, kw) = match lang {
         Language::Ru => (
-            "Панель управления",
-            &["control", "управление", "конфиг", "конфиги"][..],
+            "Конфиги",
+            &["control", "config", "управление", "конфиг", "конфиги"][..],
         ),
         Language::En => (
-            "Control panel",
-            &["control", "panel", "config", "configs"][..],
+            "Configs",
+            &["control", "config", "configs", "управление", "конфиги"][..],
         ),
     };
     Some(
@@ -1195,45 +1209,39 @@ fn power_section(lang: Language) -> Node {
     .search_as(kw)
 }
 
-/// Раздел «О программе»: версия и перезапуск панели.
+/// Раздел «Hudbar»: версия и перезапуск панели. Название без кириллической
+/// «О»: в шрифте меню она читалась как ноль («0 программе»).
 fn about_section(lang: Language) -> Node {
-    let (title, version_title, restart, kw) = match lang {
-        Language::Ru => (
-            "О программе",
-            "Версия",
-            "Перезапуск панели",
-            &["about", "о программе"],
-        ),
-        Language::En => (
-            "About",
-            "Version",
-            "Restart panel",
-            &["about", "о программе"],
-        ),
+    let (version_title, restart, kw) = match lang {
+        Language::Ru => ("Версия", "Перезапуск панели", &["about", "о программе"][..]),
+        Language::En => ("Version", "Restart panel", &["about", "о программе"][..]),
     };
     Node::submenu(
         settings_icons::ABOUT,
-        title,
+        "Hudbar",
         vec![
             Node::info_value(version_title, VERSION),
             Node::action(settings_icons::SYSTEM, restart, Action::RestartHudbar),
         ],
     )
+    .with_value(|| VERSION.to_string())
     .search_as(kw)
 }
 
 /// Настоящее дерево на указанном языке. Порядок корня повторяет `SECTIONS`,
-/// чтобы прямой вход по идентификатору не зависел от подписей.
+/// чтобы прямой вход по идентификатору не зависел от подписей: сначала
+/// настройки и система, потом инструменты и справка.
 pub fn tree_in(lang: Language) -> Vec<Node> {
     vec![
         apps_section(lang),
         panel_section(lang),
         style_section(lang),
         notifications_section(lang),
-        capture_section(lang),
-        keybinds_section(lang),
+        language_row(lang),
         system_section(lang),
         power_section(lang),
+        capture_section(lang),
+        keybinds_section(lang),
         about_section(lang),
     ]
 }
@@ -1256,7 +1264,7 @@ mod tests {
     use super::super::state::{self, Outcome};
     use super::*;
 
-    /// Панель управления — подменю с целями, а не запуск второго лаунчера.
+    /// «Конфиги» — подменю с целями, а не запуск второго лаунчера.
     /// Цели здесь свои: настоящий список зависит от того, какие конфиги лежат
     /// на машине, и на чистой машине такой тест не проверял бы ничего.
     #[test]
@@ -1279,7 +1287,7 @@ mod tests {
             ),
         ];
         let control = control_node_with(Language::Ru, targets).expect("цель есть");
-        assert_eq!(control.title, "Панель управления");
+        assert_eq!(control.title, "Конфиги");
         let super::super::tree::NodeKind::Submenu(children) = &control.kind else {
             panic!("ожидалось подменю, {:?}", control.kind);
         };
@@ -1628,11 +1636,16 @@ mod tests {
     }
 
     #[test]
-    fn root_has_nine_sections_in_order() {
+    fn root_has_ten_sections_in_order() {
         for lang in [Language::Ru, Language::En] {
             let menu = Menu::new(tree_in(lang));
             assert_eq!(menu.depth(), 0);
-            assert_eq!(menu.frame().items.len(), 9);
+            assert_eq!(menu.frame().items.len(), 10);
+            assert_eq!(
+                menu.frame().items.len(),
+                super::super::SECTIONS.len(),
+                "порядок прямого входа повторяет корень"
+            );
         }
         let ru = Menu::new(tree_in(Language::Ru));
         let frame = ru.frame();
@@ -1644,26 +1657,33 @@ mod tests {
                 "Панель",
                 "Стиль",
                 "Уведомления",
-                "Захват",
-                "Бинды",
+                "Язык",
                 "Система",
                 "Питание",
-                "О программе"
+                "Захват",
+                "Бинды",
+                "Hudbar"
             ]
         );
     }
 
     #[test]
-    fn searching_dnd_finds_system_rows_without_abbreviations() {
+    fn searching_dnd_finds_the_notifications_row() {
         let mut menu = Menu::new(tree_in(Language::Ru));
         for ch in "dnd".chars() {
             menu.type_char(ch);
         }
         let frame = menu.frame();
-        assert!(
-            frame.items.len() >= 2,
-            "dnd должен находиться: {}",
-            frame.items.len()
+        let notifications: Vec<&str> = frame
+            .items
+            .iter()
+            .filter(|item| item.caption.as_deref() == Some("Уведомления ›"))
+            .map(|item| item.title.as_str())
+            .collect();
+        assert_eq!(
+            notifications,
+            ["Не беспокоить"],
+            "в «Уведомлениях» ровно одна строка DND"
         );
         for item in &frame.items {
             assert!(
@@ -1672,10 +1692,6 @@ mod tests {
                 item.title
             );
         }
-        assert!(
-            frame.items.iter().any(|item| item.title == "Не беспокоить"),
-            "точное название на месте"
-        );
     }
 
     #[test]
@@ -1919,10 +1935,7 @@ mod tests {
         assert_eq!(menu.enter(), Outcome::Pushed);
         let frame = menu.frame();
         let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
-        assert_eq!(
-            titles,
-            ["Язык", "Выбрать обои…", "Случайные обои", "Схема matugen"]
-        );
+        assert_eq!(titles, ["Выбрать обои…", "Случайные обои", "Схема matugen"]);
 
         let no_tools = WallpaperTools {
             picker: false,
@@ -1932,7 +1945,7 @@ mod tests {
         assert_eq!(menu.enter(), Outcome::Pushed);
         let frame = menu.frame();
         let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
-        assert_eq!(titles, ["Язык", "Схема matugen"]);
+        assert_eq!(titles, ["Схема matugen"]);
     }
 
     /// В английском дереве не должно оставаться кириллицы: подписи приходят

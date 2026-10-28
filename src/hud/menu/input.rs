@@ -50,8 +50,8 @@ pub enum MenuInput {
     Move(isize),
     /// `Shift+↑`/`Shift+↓` над действием «порядок модулей».
     Nudge(isize),
-    /// `Shift+←`/`Shift+→` на строке громкости: шаг вниз или вверх.
-    Volume(i32),
+    /// `Shift+←`/`Shift+→`: шаг значения — числа или громкости.
+    Step(i32),
     /// Прокрутить список на страницу.
     Page(isize),
     /// В начало или в конец.
@@ -148,11 +148,11 @@ pub fn translate(event: KeyEvent, query: &str) -> MenuInput {
             _ => 1,
         });
     }
-    // `Shift+←/→` — шаг громкости на строке-ползунке. Обычные стрелки
-    // заняты: `←` возвращает на уровень выше, `→` входит в подменю. Раньше
-    // громкость менялась отдельными строками, и таскать её было нечем.
+    // `Shift+←/→` — шаг значения: число в строке настройки или громкость на
+    // ползунке. Обычные стрелки заняты: `←` возвращает на уровень выше, `→`
+    // входит в подменю.
     if event.shift && !event.ctrl && matches!(event.key, Key::Left | Key::Right) {
-        return MenuInput::Volume(match event.key {
+        return MenuInput::Step(match event.key {
             Key::Left => -1,
             _ => 1,
         });
@@ -255,18 +255,19 @@ mod tests {
         }
     }
 
-    /// `Shift+←/→` — шаг громкости на ползунке. Обычные стрелки заняты:
-    /// `←` возвращает на уровень выше, `→` входит в подменю, и отдавать их
-    /// ползунку означало бы сломать привычку.
+    /// `Shift+←/→` — шаг значения: у числа меняет число, у ползунка
+    /// громкость. Обычные стрелки заняты: `←` возвращает на уровень выше,
+    /// `→` входит в подменю, и отдавать их настройке означало бы сломать
+    /// привычку.
     #[test]
-    fn shift_arrows_drive_the_volume_slider() {
+    fn shift_arrows_step_a_value() {
         let shift = |key| KeyEvent {
             key,
             shift: true,
             ..KeyEvent::default()
         };
-        assert_eq!(translate(shift(Key::Left), ""), MenuInput::Volume(-1));
-        assert_eq!(translate(shift(Key::Right), ""), MenuInput::Volume(1));
+        assert_eq!(translate(shift(Key::Left), ""), MenuInput::Step(-1));
+        assert_eq!(translate(shift(Key::Right), ""), MenuInput::Step(1));
         // Без Shift стрелки остаются навигацией.
         assert_eq!(translate(press(Key::Left), ""), MenuInput::Back);
         assert_eq!(translate(press(Key::Right), ""), MenuInput::Activate);

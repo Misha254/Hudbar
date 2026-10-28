@@ -146,9 +146,9 @@ const USAGE: &str = "\
 hud-menu-rs — меню HUDbar
 
   hud-menu-rs [раздел][/строка]
-      Открыть меню. Раздел: apps, panel, style, notifications, capture,
-      keybinds, system, power, about. Вложенный уровень — через слэш:
-      hud-menu-rs system/control откроет «Панель управления» сразу.
+      Открыть меню. Раздел: apps, panel, style, notifications, language,
+      system, power, capture, keybinds, about. Вложенный уровень — через
+      слэш: hud-menu-rs system/control откроет «Конфиги» сразу.
       Неизвестное имя открывает корень.
   hud-menu-rs --action <личность строки>
       Выполнить строку меню по её личности, не открывая окно. Для биндов,
@@ -321,8 +321,18 @@ impl MenuApp {
         match input {
             MenuInput::Ignore => {}
             MenuInput::Move(delta) => self.menu.move_sel(delta),
-            MenuInput::Volume(delta) => {
-                self.menu.adjust_volume(delta);
+            MenuInput::Step(delta) => {
+                // Сначала число: у строки настройки это единственный способ
+                // изменить значение. Если строка не числовая, шаг уходит
+                // ползунку громкости.
+                if self.menu.adjust_value(delta) == Outcome::Changed {
+                    // Значение настройки могло попасть в подпись родителя
+                    // («Панель · 27 px»), поэтому дерево пересобирается с
+                    // возвратом на прежнее место.
+                    self.rebuild_after_change();
+                } else {
+                    self.menu.adjust_volume(delta);
+                }
             }
             MenuInput::Nudge(delta) => {
                 if self.menu.nudge_module(delta as i32) == Outcome::Changed {

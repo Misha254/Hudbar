@@ -1,5 +1,6 @@
 use super::super::canvas::fill_rect;
 use super::super::geom::Rect;
+use super::super::item::ItemKind;
 use super::super::settings::Language;
 use super::super::state::Frame;
 use super::super::strings;
@@ -7,6 +8,74 @@ use super::super::text::{Align, SCALE};
 use super::super::ui_tokens::{mix, spacing};
 use super::MenuView;
 use super::geometry::{FOOTER_H, PAD, STATUS_DOT, center_band};
+
+/// Что делает Enter на выбранной строке. Подсказка в подвале зависит от
+/// вида строки: «ENTER ОТКРЫТЬ» на тумблере или числе врала бы.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HintKind {
+    Open,
+    Toggle,
+    Choice,
+    Adjust,
+}
+
+/// Вид подсказки по строке под курсором. Без выбора — обычное «открыть».
+fn hint_kind(frame: &Frame) -> HintKind {
+    match frame
+        .selected
+        .and_then(|index| frame.items.get(index))
+        .map(|item| &item.kind)
+    {
+        Some(ItemKind::Number { .. } | ItemKind::Volume { .. }) => HintKind::Adjust,
+        Some(ItemKind::Toggle { .. }) => HintKind::Toggle,
+        Some(ItemKind::Choice { .. }) => HintKind::Choice,
+        _ => HintKind::Open,
+    }
+}
+
+/// Подпись «Enter» на нужном уровне детализации.
+fn enter_hint(chrome: &strings::Chrome, kind: HintKind, level: usize) -> &'static str {
+    match (kind, level) {
+        (HintKind::Open, 0) => chrome.open,
+        (HintKind::Open, 1) => chrome.open_medium,
+        (HintKind::Open, _) => chrome.open_short,
+        (HintKind::Toggle, 0 | 1) => chrome.toggle,
+        (HintKind::Toggle, _) => chrome.toggle_short,
+        (HintKind::Choice, 0 | 1) => chrome.choice,
+        (HintKind::Choice, _) => chrome.choice_short,
+        (HintKind::Adjust, 0) => chrome.adjust,
+        (HintKind::Adjust, 1) => chrome.adjust_medium,
+        (HintKind::Adjust, _) => chrome.adjust_short,
+    }
+}
+
+/// Три уровня подсказок для вида строки. На корне подсказка «назад»
+/// не нужна: возвращаться некуда, `Esc` закрывает меню.
+pub(crate) fn hint_levels(lang: Language, kind: HintKind, at_root: bool) -> [Vec<&'static str>; 3] {
+    let chrome = strings::chrome(lang);
+    let mut levels: [Vec<&'static str>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for (level, hints) in levels.iter_mut().enumerate() {
+        hints.push(match level {
+            0 => chrome.select,
+            1 => chrome.select_medium,
+            _ => chrome.select_short,
+        });
+        hints.push(enter_hint(&chrome, kind, level));
+        if !at_root {
+            hints.push(match level {
+                0 => chrome.back,
+                1 => chrome.back_medium,
+                _ => chrome.back_short,
+            });
+        }
+        hints.push(match level {
+            0 => chrome.close,
+            1 => chrome.close_medium,
+            _ => chrome.close_short,
+        });
+    }
+    levels
+}
 
 /// Подвал: подсказки слева, счётчик или статус справа.
 pub(crate) fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
@@ -29,7 +98,14 @@ pub(crate) fn footer(view: &mut MenuView<'_>, card: Rect, frame: &Frame) {
     // на счётчик.
     let hints_left = rect.x + PAD;
     let right_edge = rect.right() - PAD - right_zone;
-    let (hints, mut x) = layout_hints(view, hints_left, right_edge - spacing::XL, frame.lang);
+    let (hints, mut x) = layout_hints(
+        view,
+        hints_left,
+        right_edge - spacing::XL,
+        frame.lang,
+        hint_kind(frame),
+        frame.trail.len() <= 1,
+    );
     for hint in hints {
         let width = view.painter.text_width(hint, view.scale.caption);
         view.text_clipped(
@@ -195,27 +271,14 @@ pub fn layout_hints<'a>(
     left: f32,
     limit: f32,
     lang: Language,
+    kind: HintKind,
+    at_root: bool,
 ) -> (Vec<&'a str>, f32) {
-    let chrome = strings::chrome(lang);
-    let levels: [[&str; 4]; 3] = [
-        [chrome.select, chrome.open, chrome.back, chrome.close],
-        [
-            chrome.select_medium,
-            chrome.open_medium,
-            chrome.back_medium,
-            chrome.close_medium,
-        ],
-        [
-            chrome.select_short,
-            chrome.open_short,
-            chrome.back_short,
-            chrome.close_short,
-        ],
-    ];
-    for level in levels {
-        if left + hints_width(view, &level) <= limit {
-            return (level.to_vec(), left);
+    let levels = hint_levels(lang, kind, at_root);
+    for level in &levels {
+        if left + hints_width(view, level) <= limit {
+            return (level.clone(), left);
         }
     }
-    (levels[2].to_vec(), left)
+    (levels[2].clone(), left)
 }

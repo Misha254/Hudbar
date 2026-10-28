@@ -527,13 +527,14 @@ fn the_search_field_keeps_its_place_next_to_any_crumbs() {
         let mut icons = TextPainter::new(settings_icons::FONT);
         let view = measuring_view(&mut pixmap, &mut painter, &mut icons);
         let inner = search_rect(header).w - (spacing::SM + ICON + spacing::SM) - spacing::SM;
-        let width = view.painter.text_width(chrome.search, view.scale.caption);
-        assert!(
-            width <= inner,
-            "{lang:?}: заглушка «{}» шире поля на {}",
-            chrome.search,
-            width - inner
-        );
+        for hint in [chrome.search, chrome.search_scope] {
+            let width = view.painter.text_width(hint, view.scale.caption);
+            assert!(
+                width <= inner,
+                "{lang:?}: заглушка «{hint}» шире поля на {}",
+                width - inner
+            );
+        }
     }
 }
 
@@ -1397,22 +1398,7 @@ fn the_footer_reserve_does_not_depend_on_what_is_shown() {
 #[test]
 fn hints_step_down_through_three_levels() {
     for lang in [Language::Ru, Language::En] {
-        let chrome = strings::chrome(lang);
-        let levels: [[&str; 4]; 3] = [
-            [chrome.select, chrome.open, chrome.back, chrome.close],
-            [
-                chrome.select_medium,
-                chrome.open_medium,
-                chrome.back_medium,
-                chrome.close_medium,
-            ],
-            [
-                chrome.select_short,
-                chrome.open_short,
-                chrome.back_short,
-                chrome.close_short,
-            ],
-        ];
+        let levels = hint_levels(lang, HintKind::Open, false);
         let mut pixmap = blank_buffer();
         let mut painter = TextPainter::new(&font_name());
         let mut icons = TextPainter::new(settings_icons::FONT);
@@ -1422,15 +1408,15 @@ fn hints_step_down_through_three_levels() {
         let limit = CARD_W - PAD - reserve - spacing::XL;
 
         // Узкий предел берёт последний уровень, широкий — первый влезший.
-        let (wide, _) = layout_hints(&mut view, left, limit, lang);
-        let (narrow, _) = layout_hints(&mut view, left, 0.0, lang);
+        let (wide, _) = layout_hints(&mut view, left, limit, lang, HintKind::Open, false);
+        let (narrow, _) = layout_hints(&mut view, left, 0.0, lang, HintKind::Open, false);
         assert_eq!(
             narrow, levels[2],
             "{lang:?}: в тесном пределе остаются одни клавиши"
         );
         let index = levels
             .iter()
-            .position(|level| *level == wide.as_slice())
+            .position(|level| *level == wide)
             .expect("выбран один из трёх уровней");
         assert!(
             left + hints_width(&mut view, &levels[index]) <= limit,
@@ -1445,6 +1431,32 @@ fn hints_step_down_through_three_levels() {
     }
 }
 
+/// Подсказка «Enter» следует за строкой: у числа — шаг значения, у
+/// тумблера — переключение, у выбора — следующий вариант.
+#[test]
+fn the_enter_hint_follows_the_selected_row() {
+    let open = hint_levels(Language::Ru, HintKind::Open, false);
+    let adjust = hint_levels(Language::Ru, HintKind::Adjust, false);
+    let toggle = hint_levels(Language::Ru, HintKind::Toggle, false);
+    let choice = hint_levels(Language::Ru, HintKind::Choice, false);
+    assert_eq!(open[0][1], strings::HINT_OPEN);
+    assert_eq!(adjust[0][1], strings::HINT_ADJUST);
+    assert_eq!(toggle[0][1], strings::HINT_TOGGLE);
+    assert_eq!(choice[0][1], strings::HINT_CHOICE);
+    assert_ne!(open[0][1], adjust[0][1]);
+}
+
+/// На корне «назад» не показываем: возвращаться некуда, `Esc` закрывает
+/// меню. В подменю подсказка возвращается.
+#[test]
+fn the_back_hint_disappears_on_the_root() {
+    let root = hint_levels(Language::Ru, HintKind::Open, true);
+    let inner = hint_levels(Language::Ru, HintKind::Open, false);
+    assert!(!root[0].contains(&strings::HINT_BACK));
+    assert!(inner[0].contains(&strings::HINT_BACK));
+    assert!(root[0].len() < inner[0].len());
+}
+
 /// Ширина уровней обязана убывать: иначе лестница бессмысленна.
 #[test]
 fn hint_levels_get_narrower() {
@@ -1453,16 +1465,14 @@ fn hint_levels_get_narrower() {
         let mut painter = TextPainter::new(&font_name());
         let mut icons = TextPainter::new(settings_icons::FONT);
         let mut view = measuring_view(&mut pixmap, &mut painter, &mut icons);
-        let widths: Vec<f32> = (0..3)
-            .map(|level| {
-                let (_, width) =
-                    layout_hints(&mut view, 0.0, if level == 0 { 1000.0 } else { 0.0 }, lang);
-                width
-            })
+        let levels = hint_levels(lang, HintKind::Open, false);
+        let widths: Vec<f32> = levels
+            .iter()
+            .map(|level| hints_width(&mut view, level))
             .collect();
         assert!(
-            widths[0] >= widths[1],
-            "{lang:?}: средний уровень не уже полного"
+            widths[0] >= widths[1] && widths[1] >= widths[2],
+            "{lang:?}: уровни не убывают: {widths:?}"
         );
     }
 }

@@ -303,7 +303,14 @@ impl MenuApp {
             MenuInput::Move(delta) => self.menu.move_sel(delta),
             // `Nudge` в этом окне бессмысленно: порядок модулей панели не
             // входит в его дерево, поэтому нажатие не делает ничего.
-            MenuInput::Nudge(_) | MenuInput::Volume(_) => {}
+            MenuInput::Nudge(_) => {}
+            // Шаг значения: у числовой строки меняет число. Ползунка
+            // громкости в дереве VPN нет, так что больше нечего трогать.
+            MenuInput::Step(delta) => {
+                if self.menu.adjust_value(delta) == Outcome::Changed {
+                    self.rebuild_after_change();
+                }
+            }
             MenuInput::Page(lines) => self.menu.scroll(lines * PAGE),
             MenuInput::Jump(end) => {
                 if end {

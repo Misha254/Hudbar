@@ -282,8 +282,17 @@ fn search(view: &mut MenuView<'_>, header_rect: Rect, frame: &Frame) {
         view.scale.label * 2.0,
     );
     if frame.query.is_empty() {
+        // В подменю запрос фильтрует только этот уровень, а на корне ищет по
+        // всему дереву. Заглушка говорит, где ищем, иначе «почему не
+        // находится» приходится угадывать.
+        let chrome = strings::chrome(frame.lang);
+        let hint = if frame.trail.len() > 1 {
+            chrome.search_scope
+        } else {
+            chrome.search
+        };
         view.text_clipped(
-            strings::chrome(frame.lang).search,
+            hint,
             view.scale.caption,
             view.ui.text_disabled,
             text_rect,

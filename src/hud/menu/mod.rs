@@ -106,6 +106,16 @@ pub mod strings {
     pub const HINT_OPEN_MEDIUM: &str = "ENTER ОТКР.";
     pub const HINT_BACK_MEDIUM: &str = "← НАЗАД";
     pub const HINT_CLOSE_MEDIUM: &str = "ESC ЗАКР.";
+    /// Подсказка «Enter» по виду строки: у тумблера он переключает, у выбора
+    /// меняет вариант, у числа — ничего, там шаг на `Shift+←/→`. Общая
+    /// «ENTER ОТКРЫТЬ» на таких строках врала о поведении.
+    pub const HINT_TOGGLE: &str = "ENTER ВКЛ/ВЫКЛ";
+    pub const HINT_CHOICE: &str = "ENTER ВАРИАНТ";
+    pub const HINT_ADJUST: &str = "SHIFT+←→ ЗНАЧЕНИЕ";
+    pub const HINT_ADJUST_MEDIUM: &str = "SHIFT+←→ ЗНАЧ.";
+    pub const HINT_ADJUST_SHORT: &str = "⇧←→";
+    pub const HINT_TOGGLE_SHORT: &str = "ENTER";
+    pub const HINT_CHOICE_SHORT: &str = "ENTER";
     /// Статус после действия.
     pub const STATUS_APPLIED: &str = "ПРИМЕНЕНО";
     pub const STATUS_FAILED: &str = "ОШИБКА";
@@ -114,6 +124,9 @@ pub mod strings {
     /// не по константам выше.
     pub struct Chrome {
         pub search: &'static str,
+        /// Заглушка поля поиска внутри раздела: запрос фильтрует этот
+        /// уровень, а не всё дерево.
+        pub search_scope: &'static str,
         pub nothing: &'static str,
         pub select: &'static str,
         pub open: &'static str,
@@ -128,6 +141,14 @@ pub mod strings {
         pub open_medium: &'static str,
         pub back_medium: &'static str,
         pub close_medium: &'static str,
+        /// Подсказка действия по виду выбранной строки.
+        pub toggle: &'static str,
+        pub choice: &'static str,
+        pub adjust: &'static str,
+        pub adjust_medium: &'static str,
+        pub adjust_short: &'static str,
+        pub toggle_short: &'static str,
+        pub choice_short: &'static str,
         pub applied: &'static str,
         pub failed: &'static str,
         /// Подпись включённого тумблера: «вкл» или «on».
@@ -149,6 +170,7 @@ pub mod strings {
         match lang {
             Language::Ru => Chrome {
                 search: SEARCH_PLACEHOLDER,
+                search_scope: "В разделе…",
                 nothing: NOTHING_FOUND,
                 select: HINT_SELECT,
                 open: HINT_OPEN,
@@ -162,6 +184,13 @@ pub mod strings {
                 open_medium: HINT_OPEN_MEDIUM,
                 back_medium: HINT_BACK_MEDIUM,
                 close_medium: HINT_CLOSE_MEDIUM,
+                toggle: HINT_TOGGLE,
+                choice: HINT_CHOICE,
+                adjust: HINT_ADJUST,
+                adjust_medium: HINT_ADJUST_MEDIUM,
+                adjust_short: HINT_ADJUST_SHORT,
+                toggle_short: HINT_TOGGLE_SHORT,
+                choice_short: HINT_CHOICE_SHORT,
                 applied: STATUS_APPLIED,
                 failed: STATUS_FAILED,
                 on: "вкл",
@@ -173,6 +202,7 @@ pub mod strings {
             },
             Language::En => Chrome {
                 search: "Search…",
+                search_scope: "In section…",
                 nothing: "Nothing found",
                 select: "↑↓ SELECT",
                 open: "ENTER OPEN",
@@ -186,6 +216,13 @@ pub mod strings {
                 open_medium: "ENTER OPEN",
                 back_medium: "← BACK",
                 close_medium: "ESC CLOSE",
+                toggle: "ENTER ON/OFF",
+                choice: "ENTER NEXT",
+                adjust: "SHIFT+←→ VALUE",
+                adjust_medium: "SHIFT+←→",
+                adjust_short: "⇧←→",
+                toggle_short: "ENTER",
+                choice_short: "ENTER",
                 applied: "APPLIED",
                 failed: "FAILED",
                 on: "on",
@@ -284,9 +321,9 @@ pub mod fake {
     }
 }
 
-/// Тестовое дерево меню: восемь разделов на корне, как в макете. Значения
-/// фиктивные, поэтому снимки меню воспроизводимы, а смена темы меняет только
-/// цвета и шрифт.
+/// Тестовое дерево меню: девять разделов на корне, как в настоящем меню без
+/// «Питания». Значения фиктивные, поэтому снимки меню воспроизводимы, а смена
+/// темы меняет только цвета и шрифт.
 pub fn demo_tree() -> Vec<Node> {
     vec![
         Node::submenu(
@@ -340,13 +377,6 @@ pub fn demo_tree() -> Vec<Node> {
             settings_icons::STYLE,
             "Стиль",
             vec![
-                Node::choice(
-                    settings_icons::LANGUAGE,
-                    "Язык",
-                    &fake::LANGUAGE_NAMES,
-                    fake::language,
-                    fake::set_language,
-                ),
                 Node::picker(settings_icons::PICTURE, "Обои", "wallpaper"),
                 Node::choice(
                     settings_icons::SCHEME,
@@ -379,6 +409,23 @@ pub fn demo_tree() -> Vec<Node> {
                 ),
             ],
         ),
+        Node::choice(
+            settings_icons::LANGUAGE,
+            "Язык",
+            &fake::LANGUAGE_NAMES,
+            fake::language,
+            fake::set_language,
+        )
+        .with_id("language"),
+        Node::submenu(
+            settings_icons::SYSTEM,
+            "Система",
+            vec![Node::action(
+                settings_icons::NETWORK,
+                "Wi-Fi",
+                Action::Live(Live::WifiRadio(true)),
+            )],
+        ),
         Node::submenu(
             settings_icons::CAPTURE,
             "Захват",
@@ -398,20 +445,8 @@ pub fn demo_tree() -> Vec<Node> {
             )],
         ),
         Node::submenu(
-            settings_icons::SYSTEM,
-            "Система",
-            vec![
-                Node::toggle(settings_icons::SYSTEM, "Переключить DND", || false, |_| {}),
-                Node::action(
-                    settings_icons::NETWORK,
-                    "Wi-Fi",
-                    Action::Live(Live::WifiRadio(true)),
-                ),
-            ],
-        ),
-        Node::submenu(
             settings_icons::ABOUT,
-            "О программе",
+            "Hudbar",
             vec![Node::action(
                 settings_icons::ABOUT,
                 "Версия",
@@ -429,16 +464,17 @@ pub fn demo_menu() -> Menu {
 /// Разделы корня и их идентификаторы для прямого входа: `hud-menu style`.
 /// Идентификатор английский, чтобы набирать его было не только в русской
 /// раскладке.
-pub const SECTIONS: [(&str, &str); 9] = [
+pub const SECTIONS: [(&str, &str); 10] = [
     ("apps", "Приложения"),
     ("panel", "Панель"),
     ("style", "Стиль"),
     ("notifications", "Уведомления"),
-    ("capture", "Захват"),
-    ("keybinds", "Бинды"),
+    ("language", "Язык"),
     ("system", "Система"),
     ("power", "Питание"),
-    ("about", "О программе"),
+    ("capture", "Захват"),
+    ("keybinds", "Бинды"),
+    ("about", "Hudbar"),
 ];
 
 /// Заголовок раздела по идентификатору. Вложенный путь `system/control`
@@ -487,7 +523,12 @@ pub fn open_section(menu: &mut Menu, id: &str) -> bool {
     let Some(index) = SECTIONS.iter().position(|(key, _)| *key == id) else {
         return false;
     };
-    if index >= menu.current().list.len() {
+    let Some(item) = menu.current().list.items().get(index) else {
+        return false;
+    };
+    // В корне есть строки-значения (язык): «открыть» им нечего, а `Enter`
+    // на выборе переключил бы значение прямо из командной строки.
+    if !matches!(item.kind, item::ItemKind::Submenu) {
         return false;
     }
     menu.current_mut().list.select(index);
@@ -563,13 +604,24 @@ mod tests {
         assert_eq!(menu.depth(), 1, "остались на разделе, а не провалились");
     }
 
+    /// «Язык» — строка-значение, а не раздел: прямой вход не должен
+    /// переключить язык как побочный эффект запуска.
+    #[test]
+    fn a_value_row_cannot_be_opened_as_a_section() {
+        let mut menu = super::real::menu();
+        let before = menu.frame().items.len();
+        assert!(!super::open_section(&mut menu, "language"));
+        assert_eq!(menu.depth(), 0, "остались на корне");
+        assert_eq!(menu.frame().items.len(), before);
+    }
+
     #[test]
     fn demo_tree_is_valid() {
         assert!(state::validate(&demo_tree()).is_ok());
     }
 
     #[test]
-    fn demo_root_has_eight_sections() {
+    fn demo_root_has_nine_sections() {
         let menu = demo_menu();
         assert_eq!(menu.depth(), 0);
         assert_eq!(
@@ -583,49 +635,49 @@ mod tests {
                 "Панель",
                 "Стиль",
                 "Уведомления",
+                "Язык",
+                "Система",
                 "Захват",
                 "Бинды",
-                "Система",
-                "О программе"
+                "Hudbar"
             ]
         );
     }
 
     #[test]
-    fn style_section_shows_three_rows_with_values() {
+    fn style_section_shows_two_rows_with_values() {
         let mut menu = demo_menu();
         menu.move_sel(2);
         assert_eq!(menu.enter(), Outcome::Pushed);
         let frame = menu.frame();
-        assert_eq!(frame.items.len(), 3);
+        assert_eq!(frame.items.len(), 2);
         assert_eq!(
             frame
                 .items
                 .iter()
                 .map(|item| item.title.as_str())
                 .collect::<Vec<_>>(),
-            ["Язык", "Обои", "Схема matugen"]
+            ["Обои", "Схема matugen"]
         );
-        assert_eq!(frame.items[0].value, "Русский");
         assert_eq!(
-            frame.items[1].value, "",
+            frame.items[0].value, "",
             "у обоев вместо значения миниатюра"
         );
+        assert!(!frame.items[1].value.is_empty(), "схема показывает имя");
     }
 
     #[test]
-    fn searching_dnd_on_the_root_finds_three_rows() {
+    fn searching_dnd_on_the_root_finds_two_rows() {
         let mut menu = demo_menu();
         for ch in "dnd".chars() {
             menu.type_char(ch);
         }
         let frame = menu.frame();
         assert_eq!(frame.query, "dnd");
-        assert_eq!(frame.items.len(), 3, "три строки на запрос dnd");
+        assert_eq!(frame.items.len(), 2, "две строки на запрос dnd");
         assert_eq!(frame.items[0].title, "Режим DND");
         assert_eq!(frame.items[0].caption.as_deref(), Some("Панель ›"));
         assert_eq!(frame.items[1].caption.as_deref(), Some("Уведомления ›"));
-        assert_eq!(frame.items[2].caption.as_deref(), Some("Система ›"));
     }
 
     #[test]
@@ -669,11 +721,13 @@ mod tests {
     fn chrome_follows_the_window_language() {
         let ru = strings::chrome(super::settings::Language::Ru);
         assert_eq!(ru.search, strings::SEARCH_PLACEHOLDER);
+        assert_eq!(ru.search_scope, "В разделе…");
         assert_eq!(ru.nothing, strings::NOTHING_FOUND);
         assert_eq!(ru.on, "вкл");
         assert_eq!(ru.off, "выкл");
         let en = strings::chrome(super::settings::Language::En);
         assert_eq!(en.search, "Search…");
+        assert_eq!(en.search_scope, "In section…");
         assert_eq!(en.on, "on");
         assert_eq!(en.off, "off");
         assert_ne!(en.select, ru.select);

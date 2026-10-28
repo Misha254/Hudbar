@@ -8,7 +8,7 @@
 # строку нужно заменить, а файл положить в /usr/share/licenses/hudbar/.
 
 pkgname=hudbar
-pkgver=0.16.0
+pkgver=0.16.1
 pkgrel=1
 pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев и VPN'
 arch=('x86_64')

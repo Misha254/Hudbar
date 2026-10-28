@@ -597,31 +597,31 @@ mod tests {
     }
 
     #[test]
-    fn root_state_shows_eight_sections() {
+    fn root_state_shows_nine_sections() {
         let frame = subject_menu(Subject::Root).frame();
-        assert_eq!(frame.total, 8);
+        assert_eq!(frame.total, 9);
         assert_eq!(frame.trail, vec!["HUD".to_string()]);
         assert_eq!(frame.query, "");
         assert_eq!(frame.selected, Some(2), "выбран «Стиль»");
     }
 
     #[test]
-    fn style_state_shows_three_rows_with_values() {
+    fn style_state_shows_two_rows_with_values() {
         let frame = subject_menu(Subject::Style).frame();
-        assert_eq!(frame.total, 3);
+        assert_eq!(frame.total, 2);
         assert_eq!(frame.trail, vec!["HUD".to_string(), "Стиль".to_string()]);
-        assert_eq!(frame.items[0].value, "Русский");
-        assert_eq!(frame.items[1].value, "", "у обоев вместо значения круг");
+        assert_eq!(frame.items[0].value, "", "у обоев вместо значения круг");
+        assert!(!frame.items[1].value.is_empty(), "схема показывает имя");
         let (values, toggles) = counts(&frame);
-        assert_eq!(values, 2, "язык и схема со значением");
+        assert_eq!(values, 1, "значение есть только у схемы");
         assert_eq!(toggles, 0, "в «Стиле» нет тумблеров");
     }
 
     #[test]
-    fn search_state_shows_three_rows_with_paths() {
+    fn search_state_shows_two_rows_with_paths() {
         let frame = subject_menu(Subject::Search).frame();
         assert_eq!(frame.query, "dnd");
-        assert_eq!(frame.total, 3);
+        assert_eq!(frame.total, 2);
         assert!(frame.items.iter().all(|item| item.caption.is_some()));
         assert_eq!(frame.items[0].caption.as_deref(), Some("Панель ›"));
     }
@@ -680,7 +680,7 @@ mod tests {
     fn card_height_grows_with_the_state() {
         let root = subject_menu(Subject::Root).frame();
         let empty = subject_menu(Subject::Empty).frame();
-        assert_eq!(view::rows_shown(root.total), 8);
+        assert_eq!(view::rows_shown(root.total), 9);
         assert_eq!(view::rows_shown(empty.total), view::MIN_ROWS);
     }
 
