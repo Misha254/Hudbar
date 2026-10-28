@@ -1,9 +1,10 @@
 //! Окно громкости, микрофона и яркости.
 //!
-//! Поверхность тянется по всей ширине вывода, а карточка центрируется при
-//! отрисовке: так ширина не зависит от того, сколько места занял текст, и
-//! окно не прыгает при смене подписи. Слой `Overlay` — OSD обязан быть поверх
-//! полноэкранных окон, иначе его не видно там, где он нужен.
+//! Это одна узкая полоска без текста: поверхность тянется по всей ширине
+//! вывода, а сама полоска центрируется при отрисовке, поэтому её ширина не
+//! зависит от содержимого и окно не прыгает при смене значения. Слой `Overlay` —
+//! OSD обязан быть поверх полноэкранных окон, иначе его не видно там, где он
+//! нужен.
 //!
 //! Решение «показать или скрыть» принимает `osd::OsdDetector`: здесь только
 //! поверхность и рисунок.
@@ -38,14 +39,14 @@ pub fn needs_surface(current: Option<&OsdSnapshot>, next: Option<&OsdSnapshot>) 
     current.is_none() && next.is_some()
 }
 
-/// Куда идёт проявление карточки: 1 — открыта, 0 — закрыта.
+/// Куда идёт проявление полоски: 1 — открыта, 0 — закрыта.
 pub fn openness_target(visible: bool) -> f32 {
     if visible { 1.0 } else { 0.0 }
 }
 
 /// Надо ли запускать закрытие заново. Пока цель не ноль, закрытие уже идёт:
 /// `sync_osd` зовётся каждый тик, и повторный retarget сдвинул бы отсчёт с
-/// нуля — карточка ползла бы к нулю бесконечно медленно и `done()` не наступило
+/// нуля — полоска ползла бы к нулю бесконечно медленно и `done()` не наступило
 /// бы никогда.
 pub fn close_needs_start(current_target: f32) -> bool {
     current_target != 0.0
@@ -56,7 +57,7 @@ pub fn close_needs_start(current_target: f32) -> bool {
 pub enum OsdAction {
     /// Ничего: окна нет и показывать нечего.
     Idle,
-    /// Создать слой и показать карточку.
+    /// Создать слой и показать полоску.
     Open,
     /// Обновить содержимое живого окна.
     Update,
@@ -96,15 +97,15 @@ pub fn decide(
     }
 }
 
-/// Смещение карточки вверх от её места в открытом состоянии. При `openness` 1
-/// карточка на месте, при 0 уехала на весь `OSD_SLIDE_PX`.
-pub fn card_offset(openness: f32) -> f32 {
+/// Смещение полоски вверх от её места в открытом состоянии. При `openness` 1
+/// полоска на месте, при 0 уехала на весь `OSD_SLIDE_PX`.
+pub fn bar_offset(openness: f32) -> f32 {
     -OSD_SLIDE_PX * (1.0 - openness.clamp(0.0, 1.0))
 }
 
-/// Положение карточки от верхнего края поверхности.
-pub fn card_y(openness: f32) -> f32 {
-    OSD_CARD_TOP + card_offset(openness)
+/// Положение полоски от верхнего края поверхности.
+pub fn bar_y(openness: f32) -> f32 {
+    OSD_BAR_TOP + bar_offset(openness)
 }
 
 /// Доля заполнения полосы уровня.
@@ -113,9 +114,9 @@ pub fn fill_fraction(value: u8) -> f32 {
 }
 
 /// Верхний край поверхности OSD. Высоту панели вычитаем, а экранную позицию
-/// карточки держим прежней: margin считается от неё, а не наоборот.
+/// полоски держим отступом снизу: margin считается от неё, а не наоборот.
 pub fn osd_margin_top(bar_height: u32) -> i32 {
-    bar_height as i32 + OSD_CARD_SCREEN_OFFSET - OSD_CARD_TOP as i32
+    bar_height as i32 + OSD_MARGIN_GAP - OSD_BAR_TOP as i32
 }
 
 impl App {
@@ -166,7 +167,7 @@ impl App {
                 if let Some(osd) = self.osd.as_mut() {
                     osd.snapshot = next;
                 }
-                // Звук мог сработать, пока карточка ещё уходила: разворачиваем
+                // Звук мог сработать, пока полоска ещё уходила: разворачиваем
                 // её от текущего положения, слой остаётся прежним.
                 if !self.osd_anim.done(self.now) && self.osd_anim.to == 0.0 {
                     self.start_osd_open();
@@ -189,7 +190,7 @@ impl App {
         self.osd.is_some()
     }
 
-    /// Проявление карточки.
+    /// Проявление полоски.
     pub fn osd_openness(&self) -> f32 {
         self.osd_anim.value(self.now)
     }
@@ -305,66 +306,32 @@ impl App {
         let Some(mut pixmap) = tiny_skia::Pixmap::new(pw, ph) else {
             return;
         };
-        let bw = 1.0 * SCALE;
-        let card_x = ((size.0 as f32 - OSD_CARD_W) / 2.0).max(0.0);
-        let cx = card_x * SCALE;
-        let cy = card_y(openness) * SCALE;
-        let cw = OSD_CARD_W * SCALE;
-        let ch = OSD_CARD_H * SCALE;
+        let track_w = OSD_TRACK_W * SCALE;
+        let track_h = OSD_TRACK_H * SCALE;
+        let x = ((size.0 as f32 * SCALE - track_w) / 2.0).max(0.0);
+        let y = bar_y(openness) * SCALE;
+        let radius = track_h / 2.0;
 
-        let border = p.primary.with_a(0.35 * openness);
-        fill_rect(&mut pixmap, cx, cy, cw, ch, p.base.with_a(0.98 * openness));
-        fill_rect(&mut pixmap, cx, cy, cw, bw, border);
-        fill_rect(&mut pixmap, cx, cy + ch - bw, cw, bw, border);
-        fill_rect(&mut pixmap, cx, cy, bw, ch, border);
-        fill_rect(&mut pixmap, cx + cw - bw, cy, bw, ch, border);
-
-        let label = snapshot.kind.label(self.settings.language);
-        let percent = format!("{}%", snapshot.value);
-        let text_y = cy + OSD_PAD * SCALE;
-        self.draw_text(
+        // Подложка полоски — единственное, что отделяет её от обоев: без неё
+        // светлая заливка на светлых обоях сливалась бы с фоном.
+        fill_round_rect(
             &mut pixmap,
-            label,
-            SIZE,
-            p.secondary.with_a(openness),
-            cx + OSD_PAD * SCALE,
-            text_y,
-            OSD_TEXT_LINE_H,
-        );
-        // Процент прижат к правому краю карточки: при mute он остаётся на месте,
-        // а полоса ниже показывает, что уровень есть, но звука нет.
-        let percent_w = self.text_width(&percent, SIZE);
-        self.draw_text(
-            &mut pixmap,
-            &percent,
-            SIZE,
-            p.text.with_a(openness),
-            cx + cw - OSD_PAD * SCALE - percent_w,
-            text_y,
-            OSD_TEXT_LINE_H,
+            x,
+            y,
+            track_w,
+            track_h,
+            radius,
+            p.base.with_a(0.65 * openness),
         );
 
-        // Полоса уровня.
-        let bar_x = cx + OSD_PAD * SCALE;
-        let bar_w = cw - OSD_PAD * SCALE * 2.0;
-        let bar_h = OSD_BAR_H * SCALE;
-        let bar_y = cy + ch - OSD_PAD * SCALE - bar_h;
-        fill_rect(
-            &mut pixmap,
-            bar_x,
-            bar_y,
-            bar_w,
-            bar_h,
-            p.base.with_a(0.6 * openness),
-        );
-        let fill_w = bar_w * filled;
+        let fill_w = track_w * filled;
         let fill = if snapshot.muted {
             p.secondary.with_a(0.5 * openness)
         } else {
             p.primary.with_a(openness)
         };
         if fill_w > 0.0 {
-            fill_rect(&mut pixmap, bar_x, bar_y, fill_w, bar_h, fill);
+            fill_round_rect(&mut pixmap, x, y, fill_w, track_h, radius, fill);
         }
 
         let stride = (pw * 4) as i32;
@@ -475,44 +442,42 @@ mod tests {
     }
 
     #[test]
-    fn the_card_stands_still_when_fully_open() {
-        assert!((card_offset(1.0) - 0.0).abs() < 1e-6);
-        assert!((card_y(1.0) - OSD_CARD_TOP).abs() < 1e-6);
+    fn the_bar_stands_still_when_fully_open() {
+        assert!((bar_offset(1.0) - 0.0).abs() < 1e-6);
+        assert!((bar_y(1.0) - OSD_BAR_TOP).abs() < 1e-6);
     }
 
     #[test]
-    fn the_card_travels_exactly_the_slide_distance() {
-        assert!((card_offset(0.0) + OSD_SLIDE_PX).abs() < 1e-6);
+    fn the_bar_travels_exactly_the_slide_distance() {
+        assert!((bar_offset(0.0) + OSD_SLIDE_PX).abs() < 1e-6);
         assert!(
-            (card_y(0.0) - (OSD_CARD_TOP - OSD_SLIDE_PX)).abs() < 1e-6,
-            "закрытая карточка должна уехать на весь ход"
+            (bar_y(0.0) - (OSD_BAR_TOP - OSD_SLIDE_PX)).abs() < 1e-6,
+            "закрытая полоска должна уехать на весь ход"
         );
         assert!(
-            card_y(0.0) > 0.0,
-            "закрытая карточка не должна уйти за верхний край поверхности"
+            bar_y(0.0) > 0.0,
+            "закрытая полоска не должна уйти за верхний край поверхности"
         );
         assert!(
-            OSD_H >= card_y(0.0) + OSD_CARD_H,
-            "поверхности не хватит высоты на уехавшую карточку"
+            OSD_H >= bar_y(0.0) + OSD_TRACK_H,
+            "поверхности не хватит высоты на уехавшую полоску"
         );
     }
 
     #[test]
-    fn card_offset_clamps_the_progress() {
-        assert!((card_offset(1.4) - 0.0).abs() < 1e-6);
-        assert!((card_offset(-0.3) + OSD_SLIDE_PX).abs() < 1e-6);
+    fn bar_offset_clamps_the_progress() {
+        assert!((bar_offset(1.4) - 0.0).abs() < 1e-6);
+        assert!((bar_offset(-0.3) + OSD_SLIDE_PX).abs() < 1e-6);
     }
 
     #[test]
-    fn the_open_card_stays_on_the_same_screen_pixel() {
-        // Прежний расклад: margin `height + 8`, карточка на 6 пикселей ниже.
-        // После добавления запаса под выезд оба числа должны сложиться в то же.
+    fn the_open_bar_hangs_the_same_gap_below_the_panel() {
         for height in [24u32, 27, 32, 48] {
-            let old_screen_top = height as i32 + 8 + 6;
-            let new_screen_top = osd_margin_top(height) + OSD_CARD_TOP as i32;
+            let screen_top = osd_margin_top(height) + OSD_BAR_TOP as i32;
             assert_eq!(
-                new_screen_top, old_screen_top,
-                "высота панели {height}: карточка съехала"
+                screen_top,
+                height as i32 + OSD_MARGIN_GAP,
+                "высота панели {height}: полоска съехала"
             );
         }
     }
@@ -526,7 +491,7 @@ mod tests {
 
     #[test]
     fn a_repeat_during_closing_turns_back_without_a_jump() {
-        // Звук сменился, пока карточка ещё уходила: она разворачивается от
+        // Звук сменился, пока полоска ещё уходила: она разворачивается от
         // текущего положения, а не начинает проявление с нуля.
         let mut closing = Tween::new(0.0, 1.0, base(), OSD_OPEN, anim::ease_out_cubic);
         closing.retarget(ms(140), openness_target(false));

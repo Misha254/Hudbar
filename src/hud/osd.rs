@@ -15,27 +15,13 @@
 
 use std::time::{Duration, Instant};
 
-use super::settings::Language;
-
-/// Что показывает оверлей.
+/// Что показывает оверлей. Вид важен для решения «показать или скрыть» и для
+/// полосы при mute: подписи у полоски нет, и текст на экран не выводится.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OsdKind {
     Volume,
     Mic,
     Brightness,
-}
-
-impl OsdKind {
-    pub fn label(self, language: Language) -> &'static str {
-        match (language, self) {
-            (Language::Ru, Self::Volume) => "Громкость",
-            (Language::Ru, Self::Mic) => "Микрофон",
-            (Language::Ru, Self::Brightness) => "Яркость",
-            (Language::En, Self::Volume) => "Volume",
-            (Language::En, Self::Mic) => "Microphone",
-            (Language::En, Self::Brightness) => "Brightness",
-        }
-    }
 }
 
 /// Значения, которые умеет показывать оверлей, в один момент времени: ровно те,
@@ -461,12 +447,9 @@ mod tests {
     }
 
     #[test]
-    fn labels_follow_the_panel_language() {
-        assert_eq!(OsdKind::Volume.label(Language::Ru), "Громкость");
-        assert_eq!(OsdKind::Mic.label(Language::Ru), "Микрофон");
-        assert_eq!(OsdKind::Brightness.label(Language::Ru), "Яркость");
-        assert_eq!(OsdKind::Volume.label(Language::En), "Volume");
-        assert_eq!(OsdKind::Mic.label(Language::En), "Microphone");
-        assert_eq!(OsdKind::Brightness.label(Language::En), "Brightness");
+    fn every_kind_is_distinct() {
+        assert_ne!(OsdKind::Volume, OsdKind::Mic);
+        assert_ne!(OsdKind::Mic, OsdKind::Brightness);
+        assert_ne!(OsdKind::Volume, OsdKind::Brightness);
     }
 }

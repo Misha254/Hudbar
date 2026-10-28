@@ -68,7 +68,7 @@ pub const HOVER_DURATION: std::time::Duration = std::time::Duration::from_millis
 pub const POPUP_OPEN: std::time::Duration = std::time::Duration::from_millis(180);
 /// Закрытие короче открытия: уходящую панель человек не ждёт.
 pub const POPUP_CLOSE: std::time::Duration = std::time::Duration::from_millis(120);
-/// Появление карточки OSD и её возврат.
+/// Появление полоски OSD и её возврат.
 pub const OSD_OPEN: std::time::Duration = std::time::Duration::from_millis(140);
 pub const OSD_CLOSE: std::time::Duration = std::time::Duration::from_millis(110);
 /// Догоняющая анимация полосы уровня: она короче появления, чтобы полоса
@@ -325,8 +325,8 @@ pub struct Tooltip {
     pub text: String,
 }
 
-/// Окно громкости/микрофона. Поверхность растянута по ширине вывода, поэтому
-/// карточка внутри неё центрируется уже при отрисовке.
+/// Окно громкости/микрофона/яркости: узкая полоска. Поверхность растянута по
+/// ширине вывода, поэтому полоска внутри неё центрируется уже при отрисовке.
 pub struct Osd {
     pub layer: smithay_client_toolkit::shell::wlr_layer::LayerSurface,
     pub configured: bool,
@@ -334,27 +334,20 @@ pub struct Osd {
     pub snapshot: crate::hud::osd::OsdSnapshot,
 }
 
-/// На сколько карточка уезжает при появлении и возвращается при закрытии.
-pub const OSD_SLIDE_PX: f32 = 10.0;
-/// Отступ окна от низа панели. Не менялся.
-pub const OSD_MARGIN_GAP: i32 = 8;
-/// Положение карточки от верхнего края экрана: прежний margin плюс прежняя
-/// половина запаса поверхности `(76 - 64) / 2`. Запас под выезд добавлен вниз,
-/// поэтому число осталось прежним и карточка в открытом состоянии стоит
-/// пиксель в пиксель.
-pub const OSD_CARD_SCREEN_OFFSET: i32 = OSD_MARGIN_GAP + 6;
-/// Положение карточки от верхнего края поверхности в открытом состоянии:
-/// прежние 6 плюс ход выезда, иначе уезжающая карточка обрезалась бы краем.
-pub const OSD_CARD_TOP: f32 = 6.0 + OSD_SLIDE_PX;
-pub const OSD_CARD_W: f32 = 300.0;
-pub const OSD_CARD_H: f32 = 64.0;
-/// Высота поверхности: карточка у открытого края, а сверху запас на выезд.
-pub const OSD_H: f32 = OSD_CARD_TOP + OSD_CARD_H;
-pub const OSD_PAD: f32 = 12.0;
-pub const OSD_BAR_H: f32 = 8.0;
-/// Высота строки текста в карточке: нулевая в cosmic-text означает падение,
-/// поэтому она задаётся явно и больше кегля.
-pub const OSD_TEXT_LINE_H: f32 = 18.0;
+/// На сколько полоска уезжает при появлении и возвращается при закрытии.
+pub const OSD_SLIDE_PX: f32 = 6.0;
+/// Отступ полоски от низа панели.
+pub const OSD_MARGIN_GAP: i32 = 10;
+/// Положение полоски от верхнего края поверхности в открытом состоянии.
+/// Сверху остаётся запас на выезд и пара пикселей под скругление, иначе
+/// полоску обрезало бы краем слоя.
+pub const OSD_BAR_TOP: f32 = OSD_SLIDE_PX + 2.0;
+/// Ширина полоски: узкая полоса по центру вместо карточки с текстом.
+pub const OSD_TRACK_W: f32 = 280.0;
+/// Высота полоски. Скругление равно половине высоты — концы круглые.
+pub const OSD_TRACK_H: f32 = 6.0;
+/// Высота поверхности: полоска у открытого края и запас на выезд снизу.
+pub const OSD_H: f32 = OSD_BAR_TOP + OSD_TRACK_H + 2.0;
 
 pub const TOOLTIP_H: f32 = 22.0;
 pub const TOOLTIP_PAD_X: f32 = 8.0;
