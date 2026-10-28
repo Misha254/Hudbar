@@ -14,7 +14,7 @@
 
 </div>
 
-[![HUDbar: панель и меню на рабочем столе](assets/screens/hero.webp)](assets/screens/hero.webp)
+[![HUDbar: панель на рабочем столе](assets/screens/overview.webp)](assets/screens/overview.webp)
 
 ## Возможности
 
@@ -35,31 +35,31 @@
 <table>
   <tr>
     <td width="50%" align="center">
-      <a href="assets/screens/menu.webp"><img src="assets/screens/menu.webp" width="100%" alt="Меню HUD"></a><br>
+      <a href="assets/screens/menu-panel.webp"><img src="assets/screens/menu-panel.webp" width="100%" alt="Меню HUD"></a><br>
       <sub><b>Меню</b> — разделы, поиск, подсказки</sub>
     </td>
     <td width="50%" align="center">
-      <a href="assets/screens/apps.webp"><img src="assets/screens/apps.webp" width="100%" alt="Лаунчер приложений"></a><br>
+      <a href="assets/screens/launcher.webp"><img src="assets/screens/launcher.webp" width="100%" alt="Лаунчер приложений"></a><br>
       <sub><b>Лаунчер</b> — закреплённые, поиск, Enter</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <a href="assets/screens/wallpaper.webp"><img src="assets/screens/wallpaper.webp" width="100%" alt="Выбор обоев"></a><br>
+      <a href="assets/screens/wallpapers.webp"><img src="assets/screens/wallpapers.webp" width="100%" alt="Выбор обоев"></a><br>
       <sub><b>Обои</b> — папки, сетка превью, применение</sub>
     </td>
     <td width="50%" align="center">
-      <a href="assets/screens/keybinds.webp"><img src="assets/screens/keybinds.webp" width="100%" alt="Бинды niri"></a><br>
+      <a href="assets/screens/binds-niri.webp"><img src="assets/screens/binds-niri.webp" width="100%" alt="Бинды niri"></a><br>
       <sub><b>Бинды niri</b> — группы и поиск</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <a href="assets/screens/yazibinds.webp"><img src="assets/screens/yazibinds.webp" width="100%" alt="Бинды yazi"></a><br>
+      <a href="assets/screens/binds-yazi.webp"><img src="assets/screens/binds-yazi.webp" width="100%" alt="Бинды yazi"></a><br>
       <sub><b>Бинды yazi</b> — те же клавиши, что в редакторе</sub>
     </td>
     <td width="50%" align="center">
-      <a href="assets/screens/vpn.webp"><img src="assets/screens/vpn.webp" width="100%" alt="Окно VPN"></a><br>
+      <a href="assets/screens/vpn-menu.webp"><img src="assets/screens/vpn-menu.webp" width="100%" alt="Окно VPN"></a><br>
       <sub><b>VPN</b> — режим, серверы, обновление</sub>
     </td>
   </tr>
