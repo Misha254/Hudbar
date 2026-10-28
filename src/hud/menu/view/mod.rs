@@ -45,7 +45,8 @@ pub use geometry::{
     METER_H, METER_W, MIN_ROWS, PAD, ROW_H, ROW_H_SEARCH, SCRIM, SCROLLBAR_INSET, SCROLLBAR_W,
     SEARCH_H, SEARCH_W, STATUS_DOT, THUMB_D, TOGGLE_D, VALUE_W, VOLUME_VALUE_W, apply_card_alpha,
     blend, card_height, card_height_for, card_rect, center_band, highlight_rect, layer_size,
-    luminance, row_at, row_band, row_height, rows_for, rows_shown, search_mode, selectable_row_at,
+    luminance, row_at, row_band, row_height, rows_for, rows_in_height, rows_shown, search_mode,
+    selectable_row_at,
 };
 #[allow(unused_imports)]
 pub use header::{crumbs_rect, search_rect};
@@ -199,9 +200,11 @@ impl RowsHighlight {
 }
 
 pub fn render_window(view: &mut MenuView<'_>, frame: &Frame, highlight: RowsHighlight) -> Rect {
-    let search = search_mode(frame);
-    let rows = rows_for(frame);
-    let card = Rect::new(0.0, 0.0, CARD_W, card_height_for(rows, search));
+    // Карточка занимает весь буфер: в живом окне буфер равен слою, а слой во
+    // время анимации уже не совпадает с конечной высотой модели. Высоту берём
+    // из кадра, а не из `card_height_for`, иначе на промежуточных кадрах
+    // карточка была бы обрезана или оставила прозрачную полосу.
+    let card = Rect::new(0.0, 0.0, CARD_W, frame_h(view));
     view.card(card);
     paint(view, card, frame, highlight);
     card
@@ -215,7 +218,9 @@ fn paint(view: &mut MenuView<'_>, card: Rect, frame: &Frame, highlight: RowsHigh
         return;
     }
     let search = search_mode(frame);
-    let rows = rows_shown(frame.items.len());
+    // Строки — по фактической высоте карточки: при анимации влезают не все,
+    // и рисовать под подвалом нечего.
+    let rows = rows_in_height(card.h, frame.items.len(), search);
     let row_h = row_height(search);
     header(view, card, frame);
     rows_view(view, card, frame, rows, row_h, highlight);

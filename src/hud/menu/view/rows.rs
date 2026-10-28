@@ -34,7 +34,15 @@ pub(crate) fn window_rows(frame: &Frame, rows: usize) -> Vec<(usize, &Item)> {
 /// высоту минимума. Здесь высота берётся от `MIN_ROWS`: подпись стоит там же,
 /// где стояли бы строки.
 pub fn empty_notice_rect(list: Rect, row_h: f32) -> Rect {
-    Rect::new(list.x, list.y, list.w, rows_shown(0) as f32 * row_h)
+    // В живом окне `list.h` уже равен доступной области списка. Снимки и
+    // тесты могут передать нулевую высоту: тогда подпись стоит на месте
+    // минимального числа строк.
+    let height = if list.h > 0.0 {
+        list.h
+    } else {
+        rows_shown(0) as f32 * row_h
+    };
+    Rect::new(list.x, list.y, list.w, height)
 }
 
 /// Полоса прокрутки у правого края списка.
@@ -87,7 +95,15 @@ pub(crate) fn rows_view(
 ) {
     let start = window_rows(frame, rows);
     let shown = start.len();
-    let list = Rect::new(card.x, card.y + HEADER_H, card.w, shown as f32 * row_h);
+    // У пустого списка нарисованных строк нет, но место под подпись «пусто»
+    // всё равно занимает всю доступную область: иначе при анимации высоты
+    // подпись прыгала бы к шапке.
+    let list_h = if frame.items.is_empty() {
+        rows as f32 * row_h
+    } else {
+        shown as f32 * row_h
+    };
+    let list = Rect::new(card.x, card.y + HEADER_H, card.w, list_h);
     // Колонки считаются по всему уровню, иначе прокрутка сдвигала бы value.
     let info_title_w = frame
         .items

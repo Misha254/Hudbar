@@ -110,6 +110,23 @@ pub fn rows_shown(count: usize) -> usize {
     count.clamp(MIN_ROWS, MAX_ROWS)
 }
 
+/// Сколько строк помещается в карточку высотой `height`.
+///
+/// Пока окно едет между старой и новой высотой, рисовать и попадать кликом
+/// можно только по строкам, которые реально влезли: остальные оказались бы
+/// под подвалом или за краем буфера. Пустой список — особый случай: строк нет,
+/// но подпись «пусто» центрируется по всей доступной области, поэтому для
+/// него возвращается всё, что помещается, а не минимум в пять строк.
+pub fn rows_in_height(height: f32, count: usize, search: bool) -> usize {
+    let available = (height - HEADER_H - FOOTER_H).max(0.0);
+    let fits = (available / row_height(search)).floor() as usize;
+    if count == 0 {
+        fits.min(MAX_ROWS)
+    } else {
+        rows_shown(count).min(fits)
+    }
+}
+
 /// Высота карточки: строки считаются по высоте своего режима, иначе поиск
 /// либо обрезался, либо оставлял пустое поле.
 pub fn card_height_for(rows: usize, search: bool) -> f32 {
@@ -155,13 +172,13 @@ pub fn center_band(rect: Rect, height: f32) -> Rect {
 /// Какая строка под указателем. Возвращает индекс в `Frame::items`, а не
 /// номер видимой строки: с прокруткой они разойдутся, и клик уедет.
 pub fn row_at(frame: &Frame, card: Rect, x: f32, y: f32) -> Option<usize> {
-    let row_h = row_height(search_mode(frame));
-    let list = Rect::new(
-        card.x,
-        card.y + HEADER_H,
-        card.w,
-        rows_shown(frame.items.len()) as f32 * row_h,
-    );
+    let search = search_mode(frame);
+    let row_h = row_height(search);
+    // Строки считаются по фактической высоте карточки, а не по целевой:
+    // во время анимации окно ниже, и нижние строки ещё не видны — клик по
+    // ним не должен попадать в невидимый пункт.
+    let rows = rows_in_height(card.h, frame.items.len(), search);
+    let list = Rect::new(card.x, card.y + HEADER_H, card.w, rows as f32 * row_h);
     if x < card.x || x > card.right() || y < list.y || y >= list.bottom() {
         return None;
     }

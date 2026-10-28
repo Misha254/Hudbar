@@ -121,7 +121,7 @@ mod wallpaper;
 use geom::Rect;
 use menu::input::MenuInput;
 use menu::state::Menu;
-use menu::state::{Frame, Outcome};
+use menu::state::Outcome;
 use menu::system::{CommandRunner, ProviderKey, spawn_fetch};
 use menu::view::{self, MenuView};
 use repeat::Repeat;
@@ -260,11 +260,11 @@ fn safe_failure(stderr: &str, has_secrets: bool, lang: settings::Language) -> St
 
 impl MenuApp {
     /// Прямоугольник карточки в окне: окно и есть карточка, поэтому она
-    /// начинается в нуле. Размер — тот же расчёт, что у снимков.
-    fn card(&self, frame: &Frame) -> Rect {
-        let search = view::search_mode(frame);
-        let height = view::card_height_for(frame.items.len(), search);
-        Rect::new(0.0, 0.0, WIDTH as f32, height)
+    /// начинается в нуле. Высота — текущая высота слоя, а не конечная высота
+    /// модели: во время анимации клик и hover должны попадать в то, что
+    /// реально нарисовано сейчас.
+    fn card(&self) -> Rect {
+        Rect::new(0.0, 0.0, WIDTH as f32, self.ctx.height as f32)
     }
 
     /// Размер, который просит модель. Считается из карточки, поэтому поиск и
@@ -274,24 +274,22 @@ impl MenuApp {
         view::layer_size(frame.items.len(), view::search_mode(&frame))
     }
 
-    /// Обновляет размер слоя, если карточка изменила высоту: вход в подменю,
-    /// фильтрация, пустой результат поиска. Слой без якорей не имеет права
-    /// получить ноль ни по одной оси — за это композитор рвёт протокол, — а
-    /// нули возвращает только расчёт, а не композитор.
-    fn sync_size(&mut self) {
+    /// Передаёт размер слою. Если высота изменилась, слой поедет к ней
+    /// анимацией; повторный вызов с той же целью ничего не перезапускает.
+    /// Слой без якорей не имеет права получить ноль ни по одной оси — за это
+    /// композитор рвёт протокол, — а нули возвращает только расчёт, а не
+    /// композитор.
+    fn sync_size(&mut self, now: std::time::Instant) {
         let (width, height) = self.wanted_size();
         debug_assert!(width > 0 && height > 0, "размер слоя не может быть нулевым");
-        // Размер уже отправлен — второй раз посылать незачем: повторный
-        // `set_size` с той же величиной лишь добавляет лишний commit.
-        if height == self.ctx.height && width == self.ctx.width {
-            return;
+        if height != self.ctx.target_height() {
+            debug_log(&format!(
+                "высота {height} (строк: {}, поиск: {})",
+                self.menu.frame().total,
+                !self.menu.query().is_empty(),
+            ));
         }
-        debug_log(&format!(
-            "set_size {width}x{height} (строк: {}, поиск: {})",
-            self.menu.frame().total,
-            !self.menu.query().is_empty(),
-        ));
-        self.ctx.request_size(width, height);
+        self.ctx.request_height(width, height, now);
     }
 
     /// Применяет команду ввода к модели. Модель не знает про окно, поэтому
@@ -415,7 +413,7 @@ impl MenuApp {
     /// Клик по строке: выбрать и сразу активировать, как в списках файлов.
     fn click(&mut self, x: f32, y: f32) {
         let frame = self.menu.frame();
-        let card = self.card(&frame);
+        let card = self.card();
         if let Some(index) = view::selectable_row_at(&frame, card, x, y) {
             self.menu.current_mut().list.select(index);
             self.activate();
@@ -426,7 +424,7 @@ impl MenuApp {
     /// клика, но ничего не выбирает.
     fn row_under_pointer(&self, x: f32, y: f32) -> Option<usize> {
         let frame = self.menu.frame();
-        view::selectable_row_at(&frame, self.card(&frame), x, y)
+        view::selectable_row_at(&frame, self.card(), x, y)
     }
 
     /// Разбирает клавишу и применяет команду. Вынесено, чтобы нажатие и
@@ -783,35 +781,22 @@ impl smithay_client_toolkit::shell::wlr_layer::LayerShellHandler for MenuApp {
             return;
         }
         // Нули от композитора игнорируются: слой без якорей не должен
-        // получать нулевой размер. Если композитор предлагает свой —
-        // берём его, но только если он положительный.
-        if configure.new_size.0 > 0 {
-            self.ctx.width = configure.new_size.0;
-        }
-        if configure.new_size.1 > 0 {
-            self.ctx.height = configure.new_size.1;
-        }
+        // получать нулевой размер. Пока идёт анимация высоты или не
+        // подтверждён последний `set_size`, размер из configure — ответ на наш
+        // же запрос, и высоту он не откатывает. Первый configure запускает
+        // проявление.
+        let fallback = self.wanted_size();
+        self.ctx.apply_configure_animated(
+            (configure.new_size.0, configure.new_size.1),
+            fallback,
+            std::time::Instant::now(),
+        );
         debug_log(&format!(
             "configure {:?} → свои {}x{}",
             (configure.new_size.0, configure.new_size.1),
             self.ctx.width,
             self.ctx.height
         ));
-        // Первый кадр рисуется по нашим размерам, а не по нулям из configure.
-        let (width, height) = self.wanted_size();
-        if self.ctx.width == 0 || self.ctx.height == 0 {
-            self.ctx.width = width;
-            self.ctx.height = height;
-        }
-        let was_configured = self.ctx.configured;
-        self.ctx.configured = true;
-        self.ctx.dirty = true;
-        // Проявление начинается на первом configure: раньше поверхность ещё не
-        // нарисована, и двигать нечего. Повторные configure не перезапускают
-        // его, иначе окно мерцало бы на каждом resize.
-        if !was_configured {
-            self.ctx.start_open(std::time::Instant::now());
-        }
     }
 }
 
@@ -1062,7 +1047,7 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
     };
     // Размер уже задан до первого commit; sync_size только досылает его, если
     // карточка успела измениться.
-    app.sync_size();
+    app.sync_size(std::time::Instant::now());
     let _ = pid_file;
 
     unsafe {
@@ -1073,14 +1058,18 @@ fn event_loop(section: &str, pid_file: &std::path::Path) -> Result<(), String> {
     }
 
     while !app.exit.load(Ordering::Relaxed) && !SIGNAL_EXIT.load(Ordering::Relaxed) {
-        app.sync_size();
         if event_queue.flush().is_err() {
             break;
         }
         let _ = event_queue.dispatch_pending(&mut app);
-        // Один момент на итерацию: проявление считается по нему, иначе разные
-        // значения читались бы в разные instants и кадр дёргался бы.
+        // Один момент на итерацию: проявление и высота считаются по нему,
+        // иначе разные значения читались бы в разные instants и кадр дёргался.
         let now = std::time::Instant::now();
+        // Модель могла сменить уровень или запрос во время dispatch: цель
+        // высоты сверяется после ввода, а тик отправляет текущий кадр
+        // анимации. Повтор с той же целью твин не перезапускает.
+        app.sync_size(now);
+        app.ctx.tick_resize(now);
         // Команды и дозапросы providers из модели уезжают в worker-ы, готовые
         // результаты возвращаются в слоты. UI-поток ничего не ждёт.
         for job in app.menu.take_pending_commands() {

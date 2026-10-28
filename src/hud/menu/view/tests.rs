@@ -1615,6 +1615,67 @@ fn card_stops_growing_at_the_row_cap() {
     );
 }
 
+/// Во время анимации высота карточки промежуточная, и строки считаются по
+/// ней, а не по конечной цели.
+#[test]
+fn intermediate_height_shows_only_the_rows_that_fit() {
+    let base = HEADER_H + FOOTER_H;
+    assert_eq!(rows_in_height(base + 5.0 * ROW_H, 10, false), 5);
+    assert_eq!(rows_in_height(base + 7.0 * ROW_H, 10, false), 7);
+    assert_eq!(
+        rows_in_height(base + 7.9 * ROW_H, 10, false),
+        7,
+        "неполная строка не считается"
+    );
+    assert_eq!(rows_in_height(base + 20.0 * ROW_H, 10, false), 10);
+    assert_eq!(
+        rows_in_height(base + 3.0 * ROW_H, 10, false),
+        3,
+        "на пути к минимуму видно меньше пяти строк"
+    );
+}
+
+/// Пустой список центрирует подпись по всей доступной области, поэтому на
+/// промежуточной высоте ему нужны все влезшие слоты, а не минимум в пять.
+#[test]
+fn an_empty_list_uses_every_slot_that_fits() {
+    let base = HEADER_H + FOOTER_H;
+    assert_eq!(rows_in_height(base + 9.0 * ROW_H, 0, false), 9);
+    assert_eq!(rows_in_height(base + 30.0 * ROW_H, 0, false), MAX_ROWS);
+    assert_eq!(rows_in_height(base, 0, false), 0);
+}
+
+/// Шапка и подвал остаются целыми на любой промежуточной высоте: строкам
+/// достаётся ровно то, что осталось между ними.
+#[test]
+fn intermediate_height_keeps_header_and_footer_whole() {
+    for extra in [0.0f32, 0.4, 3.0, 7.6, 13.0] {
+        let height = HEADER_H + FOOTER_H + extra * ROW_H;
+        let rows = rows_in_height(height, 14, false);
+        assert!(
+            HEADER_H + rows as f32 * ROW_H + FOOTER_H <= height + 1e-3,
+            "extra={extra}: строки налезли на подвал"
+        );
+    }
+}
+
+/// Клик по строке, которая ещё не влезла в анимированную карточку, не
+/// должен попадать в невидимый пункт.
+#[test]
+fn rows_below_the_animated_height_are_not_clickable() {
+    let frame = frame_with(10, 0);
+    let height = HEADER_H + FOOTER_H + 6.0 * ROW_H;
+    let card = Rect::new(0.0, 0.0, CARD_W, height);
+    let y = |slot: f32| HEADER_H + (slot + 0.5) * ROW_H;
+
+    assert_eq!(row_at(&frame, card, PAD, y(5.0)), Some(5));
+    assert_eq!(
+        row_at(&frame, card, PAD, y(6.0)),
+        None,
+        "седьмая строка ещё за пределами окна"
+    );
+}
+
 #[test]
 fn search_rows_are_taller_than_plain_ones() {
     assert_eq!(row_height(true), ROW_H_SEARCH);
