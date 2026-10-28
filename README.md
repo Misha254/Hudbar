@@ -32,13 +32,38 @@
 
 ## Скриншоты
 
-| <img src="assets/screens/menu.webp" width="100%" alt="Меню HUD"> | <img src="assets/screens/apps.webp" width="100%" alt="Лаунчер приложений"> |
-| :--: | :--: |
-| <sub><b>Меню</b> — разделы, поиск, подсказки</sub> | <sub><b>Лаунчер</b> — закреплённые, поиск, Enter</sub> |
-| <img src="assets/screens/wallpaper.webp" width="100%" alt="Выбор обоев"> | <img src="assets/screens/keybinds.webp" width="100%" alt="Бинды niri"> |
-| <sub><b>Обои</b> — папки, сетка превью, применение</sub> | <sub><b>Бинды niri</b> — группы и поиск</sub> |
-| <img src="assets/screens/yazibinds.webp" width="100%" alt="Бинды yazi"> | <img src="assets/screens/vpn.webp" width="100%" alt="Окно VPN"> |
-| <sub><b>Бинды yazi</b> — те же клавиши, что в редакторе</sub> | <sub><b>VPN</b> — режим, серверы, обновление</sub> |
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="assets/screens/menu.webp"><img src="assets/screens/menu.webp" width="100%" alt="Меню HUD"></a><br>
+      <sub><b>Меню</b> — разделы, поиск, подсказки</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="assets/screens/apps.webp"><img src="assets/screens/apps.webp" width="100%" alt="Лаунчер приложений"></a><br>
+      <sub><b>Лаунчер</b> — закреплённые, поиск, Enter</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="assets/screens/wallpaper.webp"><img src="assets/screens/wallpaper.webp" width="100%" alt="Выбор обоев"></a><br>
+      <sub><b>Обои</b> — папки, сетка превью, применение</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="assets/screens/keybinds.webp"><img src="assets/screens/keybinds.webp" width="100%" alt="Бинды niri"></a><br>
+      <sub><b>Бинды niri</b> — группы и поиск</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="assets/screens/yazibinds.webp"><img src="assets/screens/yazibinds.webp" width="100%" alt="Бинды yazi"></a><br>
+      <sub><b>Бинды yazi</b> — те же клавиши, что в редакторе</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="assets/screens/vpn.webp"><img src="assets/screens/vpn.webp" width="100%" alt="Окно VPN"></a><br>
+      <sub><b>VPN</b> — режим, серверы, обновление</sub>
+    </td>
+  </tr>
+</table>
 
 ## Установка
 
