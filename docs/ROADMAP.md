@@ -4,11 +4,11 @@
 
 W5.1 (звук), W5.2a/b (Wi-Fi), W5.3a/b (Bluetooth), W5.4a/b/c (дисплеи),
 W5.5 (хранилища), W5.6 (OSD громкости, микрофона и яркости), E (единая
-тема) — готовы, проверки зелёные.
+тема), F (доводка) — готовы, проверки зелёные.
 Крышка (logind `ignore` + `niri/lid.kdl`) и переживание панелью отключения
 выхода — сделаны. Тема Zen Browser — шаблон и запись в matugen есть.
 
-Осталось: D (Zen — по решению отложен), F, G.
+Осталось: D (Zen — по решению отложен) и G.
 
 ## Анимации — сделано (A1–A6)
 
@@ -93,7 +93,7 @@ nvim (lualine), zathura, spicetify, hudbar, swaylock, cal, clipse, chromium.
   `file-roller` (GTK4) и `ark` (Qt6) — цвета совпали с палитрой. Уже
   запущенные приложения нужно перезапустить: GTK и Qt читают тему при старте.
 
-## F. Доводка
+## F. Доводка — сделано (2026-10-28)
 
 - OSD: сделано (W5.6) — своя полоска на layer-shell вместо уведомления dunst.
   Ключевое решение: события звука приходят из `pactl subscribe`, а не из
@@ -113,9 +113,12 @@ nvim (lualine), zathura, spicetify, hudbar, swaylock, cal, clipse, chromium.
   Center. Пока значение ни разу не прочиталось, нули не считаются состоянием:
   первый успешный опрос не показывает оверлей.
 - Уведомления opencode: сделано — плагин в `contrib/opencode/hudbar-notify.js`
-  слушает `session.idle`, `permission.updated`, `question.asked` и `session.error`
-  и дёргает `notify-send` в dunst. Пункт меню «запустить opencode» остался
-  отдельной мелочью, плагин ставится руками.
+  слушает `session.execution.*`, `permission.asked`, `form.created` с
+  `kind = "question"` и `session.error`, а дёргает `notify-send` в dunst.
+  Пункт меню «OpenCode» давно в дереве: `real.rs` показывает его, когда в
+  `PATH` есть `kitty` и `opencode`. Плагин ставится вручную симлинком в
+  `~/.config/opencode/plugins/`; на этой машине поставлен, opencode 2.2.0
+  загружает его как `hudbar-notify`.
 - Мост Telegram: удалён 12 октября 2026 по решению владельца — код,
   `hud-telegram-rs`, systemd-юниты `hud-telegram` и `opencode-serve` и Mini App
   вынесены из сборки. Ветка `telegram-bridge-backup` сохраняет прежнее
@@ -153,7 +156,24 @@ nvim (lualine), zathura, spicetify, hudbar, swaylock, cal, clipse, chromium.
   `hud-migrate-settings`, который для переезда и существует, предупреждает так
   же. После 01.01.2027: запасные пути, подмешивание отсутствующих секций в
   `hud-setting`, сам `hud-migrate-settings` и каталог `~/.config/hud-settings/`.
-- Мелочи: анимации, курсор после обновления, звук, шрифты.
+- Мелочи — проверены 2026-10-28, отдельного кода не потребовали: анимации
+  (`A1–A6`, тесты `anim::*`) и живой выезд OSD; курсор после пересканирования
+  (`busy_row_and_cursor_survive_a_rescan`,
+  `cursor_and_path_survive_the_password_flow`,
+  `bluetooth_cursor_follows_the_mac_across_a_refresh`); звук — OSD громкости,
+  микрофона и яркости; шрифты — меню рендерится JetBrains Mono, `dunstrc`
+  держит те же 13/15.
+
+### Проверка F (2026-10-28)
+
+- OSD: снят на экране для громкости 35 %, mute микрофона и яркости 90 %;
+  полоска `#b8cacb`, слой `hudbar-osd` живёт в `Overlay`.
+- Плагин opencode: `opencode api get /api/plugin` показывает `hudbar-notify`
+  со статусом `active`; ручной `deliver()` дал уведомление в dunst. Тесты
+  плагина — 107.
+- Пункт «OpenCode» есть в живом дереве (`hud-menu --real`).
+- Легаси-настройки: `hud-migrate-settings` на временном `--config-home`
+  слил старую секцию, сохранил канонические ключи и сделал backup.
 
 ## G. Система как законченная ОС
 

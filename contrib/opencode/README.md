@@ -6,9 +6,9 @@
 
 ## API: opencode v2
 
-Плагин написан под v2 (проверено на 2.0.28). Модуль экспортирует по умолчанию
-определение с `id` и `setup(ctx)`; хелперы наружу не экспортируются, иначе
-загрузчик примет их за отдельные плагины.
+Плагин написан под v2 (проверено на 2.0.28 и 2.2.0). Модуль экспортирует
+по умолчанию определение с `id` и `setup(ctx)`; хелперы наружу не
+экспортируются, иначе загрузчик примет их за отдельные плагины.
 
 ```js
 export default {
@@ -124,14 +124,22 @@ contrib/opencode/
 mkdir -p ~/.config/opencode/plugins
 mv ~/.config/opencode/plugins/notify-idle.js ~/.config/opencode/plugins/notify-idle.js.bak
 ln -s /home/mihail/code/hudbar/contrib/opencode/hudbar-notify.js ~/.config/opencode/plugins/hudbar-notify.js
-opencode service restart
 ```
 
-Проверка, что плагин жив (в выводе должен быть id, а не прочерк):
+В 2.2.0 сервер сам следит за каталогом и загружает новый файл без
+перезапуска; `opencode service restart` нужен, только если этого не
+произошло.
+
+Проверка, что плагин жив:
 
 ```fish
-opencode plugin list
+opencode api get /api/plugin | grep -o '"id":"hudbar-notify"[^}]*'
 ```
+
+В ответе должно быть `"state":{"status":"active"}`. `opencode plugin list`
+для этого не годится: он показывает только плагины-пакеты из `plugins`
+конфига, а локальный файл в `~/.config/opencode/plugins/` в нём не
+появляется — даже когда загружен.
 
 Ручная отправка уведомления мимо opencode:
 
@@ -144,8 +152,10 @@ node -e "import('/home/mihail/code/hudbar/contrib/opencode/lib/deliver.js').then
 ```fish
 rm ~/.config/opencode/plugins/hudbar-notify.js
 mv ~/.config/opencode/plugins/notify-idle.js.bak ~/.config/opencode/plugins/notify-idle.js
-opencode service restart
 ```
+
+Сервер снимет плагин сам; `opencode service restart` — если каталог не
+отследился.
 
 Репозиторий при этом не трогается.
 
