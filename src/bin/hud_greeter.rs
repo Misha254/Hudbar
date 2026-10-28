@@ -413,7 +413,7 @@ impl GreeterApp {
         if self.power {
             return;
         }
-        if self.focus == Field::User {
+        if self.focus == Field::User && self.login.password_chars() == 0 {
             if !self.username.trim().is_empty() {
                 self.focus = Field::Password;
             }
