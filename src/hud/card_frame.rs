@@ -415,6 +415,13 @@ pub fn footer(
     let counter_w = counter
         .map(|c| text.text_width(c, scale.caption))
         .unwrap_or(0.0);
+    // Место под счётчик резервируется только когда он есть: у экрана входа
+    // счётчика нет, и лишние 24 px обрезали английские подсказки.
+    let reserve = if counter.is_some() {
+        counter_w + spacing::XL
+    } else {
+        0.0
+    };
     text.paint_boxed(
         pixmap,
         hints,
@@ -423,7 +430,7 @@ pub fn footer(
         Rect::new(
             rect.x + spacing::LG,
             band.y,
-            (rect.w - spacing::LG * 2.0 - counter_w - spacing::XL).max(0.0),
+            (rect.w - spacing::LG * 2.0 - reserve).max(0.0),
             band.h,
         ),
         Align::Start,
