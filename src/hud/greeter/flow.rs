@@ -523,6 +523,29 @@ mod tests {
         assert_eq!(login.client.calls(), ["create", "post", "post", "start"]);
     }
 
+    /// Баннер `info` не ждёт текста, но требует пустой ответ, иначе сеанс
+    /// замирает. После подтверждения вход идёт обычным порядком.
+    #[test]
+    fn an_info_banner_is_answered_before_the_password() {
+        let mock = Mock::new(vec![
+            Ok(Reply::AuthMessage {
+                kind: PromptKind::Info,
+                message: "Welcome".into(),
+            }),
+            prompt(PromptKind::Secret),
+            Ok(Reply::Success),
+            Ok(Reply::Success),
+        ]);
+        let mut login = Login::new(mock, Language::Ru, "mihail".into());
+        login.type_char('p');
+        assert_eq!(login.submit(&cmd(), &[]), Submit::Done);
+        assert_eq!(
+            login.client.calls(),
+            ["create", "post", "post", "start"],
+            "баннер подтверждён пустым ответом, затем ушёл пароль"
+        );
+    }
+
     /// Ошибка `error` от greetd (не пароль): показать, снять сеанс, не падать.
     #[test]
     fn a_greetd_error_is_shown_and_the_session_cancelled() {
