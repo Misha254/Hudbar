@@ -1,12 +1,14 @@
-//! OSD громкости и микрофона: своё окно поверх всего вместо уведомления.
+//! OSD громкости, микрофона и яркости: своё окно поверх всего вместо
+//! уведомления dunst.
 //!
 //! Источник изменений один — состояние панели: громкость меняется из панели,
-//! из меню, клавишами или вообще сторонним `wpctl` из терминала, и в панель всё
-//! это приходит одним и тем же опросом. Поэтому OSD не подписывается на
-//! действия и не требует IPC между процессами: детектор сравнивает снимок
-//! значений между кадрами и показывает окно, когда значение отличается от
-//! предыдущего. Такой источник честнее подписки на кнопки — окно появляется и
-//! при внешнем изменении, а не только при нажатии в панели.
+//! из меню, клавишами или вообще сторонним `wpctl` из терминала, яркость —
+//! клавишами, ползунком или записью в sysfs, и в панель всё это приходит одним
+//! и тем же опросом. Поэтому OSD не подписывается на действия и не требует IPC
+//! между процессами: детектор сравнивает снимок значений между кадрами и
+//! показывает окно, когда значение отличается от предыдущего. Такой источник
+//! честнее подписки на кнопки — окно появляется и при внешнем изменении, а не
+//! только при нажатии в панели.
 //!
 //! Первое наблюдение — базовая линия, а не событие: иначе оверлей мигал бы при
 //! каждом старте панели.
@@ -20,6 +22,7 @@ use super::settings::Language;
 pub enum OsdKind {
     Volume,
     Mic,
+    Brightness,
 }
 
 impl OsdKind {
@@ -27,42 +30,73 @@ impl OsdKind {
         match (language, self) {
             (Language::Ru, Self::Volume) => "Громкость",
             (Language::Ru, Self::Mic) => "Микрофон",
+            (Language::Ru, Self::Brightness) => "Яркость",
             (Language::En, Self::Volume) => "Volume",
             (Language::En, Self::Mic) => "Microphone",
+            (Language::En, Self::Brightness) => "Brightness",
         }
     }
 }
 
-/// Значения звука в один момент времени: ровно те, что видит панель.
+/// Значения, которые умеет показывать оверлей, в один момент времени: ровно те,
+/// что видит панель.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AudioStamp {
+pub struct OsdStamp {
     pub vol: u8,
     pub vol_muted: bool,
     pub mic: u8,
     pub mic_muted: bool,
+    /// Значения прочитались хотя бы раз. Пока флаг снят, число — заглушка, а
+    /// не состояние: первый успешный опрос не должен выглядеть как нажатие.
+    pub vol_known: bool,
+    pub mic_known: bool,
+    /// `None` — подсветки нет или значение ещё не прочитано.
+    pub brightness: Option<u8>,
 }
 
-impl AudioStamp {
-    fn audio(self, kind: OsdKind) -> (u8, bool) {
+impl OsdStamp {
+    /// Уровень и признак «заглушено» для конкретного вида. Яркость не глушат,
+    /// поэтому её полоса всегда рисуется акцентом.
+    fn level(self, kind: OsdKind) -> (u8, bool) {
         match kind {
             OsdKind::Volume => (self.vol, self.vol_muted),
             OsdKind::Mic => (self.mic, self.mic_muted),
+            OsdKind::Brightness => (self.brightness.unwrap_or(0), false),
         }
     }
 
-    /// Какой вид звука изменился относительно `other`.
+    /// Какой вид изменился относительно `other`.
     ///
-    /// Одновременная смена обоих — редкое состояние гонки двух опросов; при
-    /// нём показывается громкость, чтобы не терять порядок вызовов.
+    /// Сравниваются только два прочитанных значения: первый успешный опрос —
+    /// не нажатие клавиши. Одновременная смена нескольких — редкое состояние
+    /// гонки двух опросов; при нём показывается громкость, чтобы не терять
+    /// порядок вызовов, затем микрофон и только потом яркость.
     pub fn changed_from(self, other: Self) -> Option<OsdKind> {
-        if self.vol != other.vol || self.vol_muted != other.vol_muted {
+        if self.vol_known
+            && other.vol_known
+            && (self.vol != other.vol || self.vol_muted != other.vol_muted)
+        {
             Some(OsdKind::Volume)
-        } else if self.mic != other.mic || self.mic_muted != other.mic_muted {
+        } else if self.mic_known
+            && other.mic_known
+            && (self.mic != other.mic || self.mic_muted != other.mic_muted)
+        {
             Some(OsdKind::Mic)
+        } else if brightness_changed(self.brightness, other.brightness) {
+            Some(OsdKind::Brightness)
         } else {
             None
         }
     }
+}
+
+/// Сравниваются только два известных значения.
+///
+/// Появление устройства (`None` → `Some`) и его пропажа — не нажатие клавиши:
+/// иначе оверлей всплывал бы при каждом старте панели, пока поток яркости ещё
+/// не прочитал sysfs.
+fn brightness_changed(current: Option<u8>, other: Option<u8>) -> bool {
+    matches!((current, other), (Some(current), Some(other)) if current != other)
 }
 
 /// Состояние оверлея для отрисовки.
@@ -86,7 +120,7 @@ impl OsdSnapshot {
 /// постоянно, поэтому состояние сравнивается здесь, а не запоминается в
 /// вызывающем коде.
 pub struct OsdDetector {
-    base: Option<AudioStamp>,
+    base: Option<OsdStamp>,
     shown: Option<OsdSnapshot>,
 }
 
@@ -102,7 +136,7 @@ impl OsdDetector {
     /// `None`, когда оверлей скрыт.
     pub fn poll(
         &mut self,
-        stamp: AudioStamp,
+        stamp: OsdStamp,
         now: Instant,
         duration: Duration,
     ) -> Option<OsdSnapshot> {
@@ -114,7 +148,7 @@ impl OsdDetector {
             Some(base) => {
                 if let Some(kind) = stamp.changed_from(base) {
                     self.base = Some(stamp);
-                    let (value, muted) = stamp.audio(kind);
+                    let (value, muted) = stamp.level(kind);
                     self.shown = Some(OsdSnapshot {
                         kind,
                         value,
@@ -142,12 +176,23 @@ mod tests {
     use super::*;
     use crate::hud::settings::Settings;
 
-    fn stamp(vol: u8, vol_muted: bool, mic: u8, mic_muted: bool) -> AudioStamp {
-        AudioStamp {
+    fn stamp(vol: u8, vol_muted: bool, mic: u8, mic_muted: bool) -> OsdStamp {
+        OsdStamp {
             vol,
             vol_muted,
             mic,
             mic_muted,
+            vol_known: true,
+            mic_known: true,
+            brightness: Some(60),
+        }
+    }
+
+    /// Тот же снимок, но с другой яркостью: остальные значения на месте.
+    fn bright(value: u8) -> OsdStamp {
+        OsdStamp {
+            brightness: Some(value),
+            ..quiet()
         }
     }
 
@@ -155,7 +200,7 @@ mod tests {
         base + Duration::from_millis(ms)
     }
 
-    fn quiet() -> AudioStamp {
+    fn quiet() -> OsdStamp {
         stamp(40, false, 70, false)
     }
 
@@ -323,10 +368,105 @@ mod tests {
     }
 
     #[test]
+    fn brightness_change_shows_the_brightness_overlay() {
+        let mut detector = OsdDetector::new();
+        let now = Instant::now();
+        detector.poll(quiet(), now, default_duration());
+
+        let shown = detector
+            .poll(bright(85), at(now, 100), default_duration())
+            .expect("изменение яркости должно показать оверлей");
+
+        assert_eq!(shown.kind, OsdKind::Brightness);
+        assert_eq!(shown.value, 85);
+        assert!(!shown.muted, "яркость не глушат");
+    }
+
+    #[test]
+    fn the_first_successful_read_is_not_a_key_press() {
+        let mut detector = OsdDetector::new();
+        let now = Instant::now();
+        let unknown = OsdStamp {
+            vol: 0,
+            vol_muted: false,
+            mic: 0,
+            mic_muted: false,
+            vol_known: false,
+            mic_known: false,
+            brightness: Some(60),
+        };
+        detector.poll(unknown, now, default_duration());
+
+        assert_eq!(
+            detector.poll(quiet(), at(now, 100), default_duration()),
+            None,
+            "нули до первого опроса — не состояние, а отсутствие данных"
+        );
+    }
+
+    #[test]
+    fn the_device_appearing_is_not_a_key_press() {
+        let mut detector = OsdDetector::new();
+        let now = Instant::now();
+        let unknown = OsdStamp {
+            brightness: None,
+            ..quiet()
+        };
+        detector.poll(unknown, now, default_duration());
+
+        for step in 0..3 {
+            assert_eq!(
+                detector.poll(bright(60), at(now, step * 100), default_duration()),
+                None,
+                "первое прочтение яркости — не событие"
+            );
+        }
+    }
+
+    #[test]
+    fn losing_the_device_is_not_a_key_press() {
+        let mut detector = OsdDetector::new();
+        let now = Instant::now();
+        detector.poll(quiet(), now, default_duration());
+
+        let gone = OsdStamp {
+            brightness: None,
+            ..quiet()
+        };
+
+        assert_eq!(
+            detector.poll(gone, at(now, 100), default_duration()),
+            None,
+            "пропажа подсветки не должна показывать яркость"
+        );
+    }
+
+    #[test]
+    fn a_volume_change_wins_over_brightness() {
+        let mut detector = OsdDetector::new();
+        let now = Instant::now();
+        detector.poll(quiet(), now, default_duration());
+
+        let both = OsdStamp {
+            vol: 90,
+            brightness: Some(90),
+            ..quiet()
+        };
+
+        let shown = detector
+            .poll(both, at(now, 100), default_duration())
+            .expect("смена обоих значений всё равно что-то показывает");
+
+        assert_eq!(shown.kind, OsdKind::Volume);
+    }
+
+    #[test]
     fn labels_follow_the_panel_language() {
         assert_eq!(OsdKind::Volume.label(Language::Ru), "Громкость");
         assert_eq!(OsdKind::Mic.label(Language::Ru), "Микрофон");
+        assert_eq!(OsdKind::Brightness.label(Language::Ru), "Яркость");
         assert_eq!(OsdKind::Volume.label(Language::En), "Volume");
         assert_eq!(OsdKind::Mic.label(Language::En), "Microphone");
+        assert_eq!(OsdKind::Brightness.label(Language::En), "Brightness");
     }
 }

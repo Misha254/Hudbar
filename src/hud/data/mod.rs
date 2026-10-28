@@ -7,6 +7,7 @@ use nix::fcntl::OFlag;
 
 mod audio;
 mod audio_watch;
+mod backlight;
 mod network;
 pub mod oneshot;
 mod system;
@@ -111,6 +112,13 @@ pub struct Sys {
     pub vol_muted: bool,
     pub mic: u8,
     pub mic_muted: bool,
+    /// Громкость и микрофон хотя бы раз прочитались. До этого нули — не
+    /// состояние, а отсутствие данных: OSD не должен принимать их за базовую
+    /// линию и всплывать при каждом запуске панели.
+    pub vol_known: bool,
+    pub mic_known: bool,
+    /// Яркость в процентах; `None` — подсветки нет или значение не прочиталось.
+    pub brightness: Option<u8>,
     pub wifi_up: bool,
     pub wifi_signal: u8,
     pub wifi_iface: Option<String>,
@@ -165,6 +173,7 @@ pub fn spawn(shared: Arc<Shared>) {
     let s = shared.clone();
     std::thread::spawn(move || sys_loop(s));
     audio_watch::spawn(shared.clone());
+    backlight::spawn(shared.clone());
     let s = shared.clone();
     std::thread::spawn(move || niri_loop(s));
     let s = shared.clone();

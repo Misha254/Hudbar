@@ -1,4 +1,4 @@
-//! Окно громкости и микрофона.
+//! Окно громкости, микрофона и яркости.
 //!
 //! Поверхность тянется по всей ширине вывода, а карточка центрируется при
 //! отрисовке: так ширина не зависит от того, сколько места занял текст, и
@@ -21,7 +21,7 @@ use smithay_client_toolkit::{
     },
 };
 
-use crate::hud::osd::{AudioStamp, OsdSnapshot};
+use crate::hud::osd::{OsdSnapshot, OsdStamp};
 
 use super::*;
 
@@ -124,11 +124,14 @@ impl App {
     pub fn sync_osd(&mut self, qh: &QueueHandle<Self>) {
         let stamp = {
             let g = crate::hud::lock::mutex(&self.shared.sys);
-            AudioStamp {
+            OsdStamp {
                 vol: g.vol,
                 vol_muted: g.vol_muted,
                 mic: g.mic,
                 mic_muted: g.mic_muted,
+                vol_known: g.vol_known,
+                mic_known: g.mic_known,
+                brightness: g.brightness,
             }
         };
         // Детектор кормится даже при выключенном OSD: иначе после включения

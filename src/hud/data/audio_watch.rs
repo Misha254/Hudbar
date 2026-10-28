@@ -35,19 +35,21 @@ fn is_audio_event(line: &str) -> bool {
 /// Возвращает `true`, если состояние изменилось и пора перерисовать панель.
 pub(super) fn apply(sys: &mut Sys, sink: Option<(u8, bool)>, source: Option<(u8, bool)>) -> bool {
     let mut changed = false;
-    if let Some((value, muted)) = sink
-        && (sys.vol != value || sys.vol_muted != muted)
-    {
-        sys.vol = value;
-        sys.vol_muted = muted;
-        changed = true;
+    if let Some((value, muted)) = sink {
+        sys.vol_known = true;
+        if sys.vol != value || sys.vol_muted != muted {
+            sys.vol = value;
+            sys.vol_muted = muted;
+            changed = true;
+        }
     }
-    if let Some((value, muted)) = source
-        && (sys.mic != value || sys.mic_muted != muted)
-    {
-        sys.mic = value;
-        sys.mic_muted = muted;
-        changed = true;
+    if let Some((value, muted)) = source {
+        sys.mic_known = true;
+        if sys.mic != value || sys.mic_muted != muted {
+            sys.mic = value;
+            sys.mic_muted = muted;
+            changed = true;
+        }
     }
     changed
 }

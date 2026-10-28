@@ -46,6 +46,7 @@ src/hud/data/mod.rs    состояние Sys, Shared и координация 
 src/hud/data/system.rs батарея, cpu, память, камера, рекордер, DND
 src/hud/data/network.rs wifi, bluetooth и сетевые действия
 src/hud/data/audio.rs  PipeWire/PulseAudio, громкость и EasyEffects
+src/hud/data/backlight.rs яркость из sysfs: опрос вместо процесса
 src/hud/data/weather.rs погода и её обновление
 src/hud/data/workspaces.rs воркспейсы и EventStream niri
 src/hud/actions.rs     действия пользователя: фокус, звук, микрофон, bluetooth
@@ -82,6 +83,8 @@ DND, воркспейсы, элементы трея.
 - `sys_loop` — опрос системы. Батарея раз в 30 тиков, cpu/память раз в 12, громкость раз в 6,
   wifi каждый тик. Пишет в `Sys` только то, что реально изменилось, и только тогда будит отрисовку.
 - `audio_watch` — подписка на `pactl subscribe`, перечитывает громкость и микрофон по событиям звука.
+- `backlight` — яркость из `/sys/class/backlight`: события в sysfs нет, поэтому значение
+  сверяется чтением файла раз в 100 мс, без запуска `brightnessctl`.
 - `niri_loop` — подписка на `EventStream` сокета niri, обновляет воркспейсы.
 - `weather_loop` — погода, повтор каждые 5400 с при успехе и 60 с при ошибке.
 
