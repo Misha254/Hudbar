@@ -33,7 +33,7 @@ fn is_audio_event(line: &str) -> bool {
 /// громкость на панели и в оверлее.
 ///
 /// Возвращает `true`, если состояние изменилось и пора перерисовать панель.
-fn apply(sys: &mut Sys, sink: Option<(u8, bool)>, source: Option<(u8, bool)>) -> bool {
+pub(super) fn apply(sys: &mut Sys, sink: Option<(u8, bool)>, source: Option<(u8, bool)>) -> bool {
     let mut changed = false;
     if let Some((value, muted)) = sink
         && (sys.vol != value || sys.vol_muted != muted)

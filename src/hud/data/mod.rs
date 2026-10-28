@@ -22,6 +22,7 @@ pub use network::{
 pub(crate) use oneshot::{power_state, wpctl_volume};
 pub use weather::refresh_weather;
 
+use audio_watch::apply as apply_audio;
 use network::{wifi, wifi_radio_on};
 use system::{
     bat_time_now, battery, bt_on, cpu_pct, cpu_temp, dnd_paused, mem_pct, mem_used_gib,
@@ -35,6 +36,7 @@ pub struct Ws {
     pub id: u64,
     pub idx: i64,
     pub name: Option<String>,
+    pub output: Option<String>,
     pub active: bool,
     pub focused: bool,
     pub urgent: bool,
@@ -206,12 +208,20 @@ pub fn send_tray_menu_click(shared: &Arc<Shared>, entry_id: i32) {
 }
 
 const BATTERY_EVENT_DEBOUNCE_TICKS: u64 = 3;
+/// Громкость опрашивается реже остальных датчиков: `wpctl` — внешний процесс,
+/// а его отказ не должен ни обнулять значение, ни тормозить секундный тик, на
+/// котором читаются wifi и bluetooth.
+const AUDIO_POLL_TICKS: u64 = 6;
 
 fn battery_refresh_due(tick: u64, pending_since: Option<u64>) -> bool {
     match pending_since {
         Some(started) => tick >= started + BATTERY_EVENT_DEBOUNCE_TICKS,
         None => tick % 30 == 1,
     }
+}
+
+fn audio_poll_due(tick: u64) -> bool {
+    tick % AUDIO_POLL_TICKS == 1
 }
 
 fn sys_loop(shared: Arc<Shared>) {
@@ -252,8 +262,12 @@ fn sys_loop(shared: Arc<Shared>) {
         } else {
             None
         };
-        let (vol, vol_muted) = wpctl_volume("@DEFAULT_AUDIO_SINK@").unwrap_or((0, false));
-        let (mic, mic_muted) = wpctl_volume("@DEFAULT_AUDIO_SOURCE@").unwrap_or((0, false));
+        let audio = audio_poll_due(tick).then(|| {
+            (
+                wpctl_volume("@DEFAULT_AUDIO_SINK@"),
+                wpctl_volume("@DEFAULT_AUDIO_SOURCE@"),
+            )
+        });
         let (wifi_up, wifi_signal, wifi_iface) = wifi();
         let wifi_en = wifi_radio_on(&wifi_iface);
         let bt = bt_on(bt_conn.as_ref());
@@ -288,10 +302,11 @@ fn sys_loop(shared: Arc<Shared>) {
                 upd!(mem_used_gib, mem);
                 upd!(mem_pct, mem_pct);
             }
-            upd!(vol, vol);
-            upd!(vol_muted, vol_muted);
-            upd!(mic, mic);
-            upd!(mic_muted, mic_muted);
+            // `None` от `wpctl` значит «не прочиталось»: поля остаются
+            // прежними, иначе сбой команды обнулил бы громкость.
+            if let Some((sink, source)) = audio {
+                changed |= apply_audio(&mut g, sink, source);
+            }
             upd!(wifi_up, wifi_up);
             upd!(wifi_signal, wifi_signal);
             upd!(wifi_iface, wifi_iface);
@@ -315,7 +330,10 @@ mod tests {
     use super::oneshot::parse_wpctl_volume;
     use super::weather::parse_weather;
     use super::workspaces::parse_ws;
-    use super::{BATTERY_EVENT_DEBOUNCE_TICKS, BtDev, WifiNet, battery_refresh_due};
+    use super::{
+        AUDIO_POLL_TICKS, BATTERY_EVENT_DEBOUNCE_TICKS, BtDev, WifiNet, audio_poll_due,
+        battery_refresh_due,
+    };
 
     #[test]
     fn waits_after_a_power_event_before_refreshing_battery_time() {
@@ -332,6 +350,15 @@ mod tests {
         assert!(battery_refresh_due(1, None));
         assert!(battery_refresh_due(31, None));
         assert!(!battery_refresh_due(8, None));
+    }
+
+    #[test]
+    fn audio_is_polled_every_few_seconds_not_on_every_tick() {
+        assert!((5..=10).contains(&AUDIO_POLL_TICKS), "раз в 5–10 секунд");
+        assert!(audio_poll_due(1), "первый опрос — сразу");
+        assert!(!audio_poll_due(2));
+        assert!(!audio_poll_due(AUDIO_POLL_TICKS));
+        assert!(audio_poll_due(AUDIO_POLL_TICKS + 1), "следующий опрос");
     }
 
     #[test]

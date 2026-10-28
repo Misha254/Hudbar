@@ -114,9 +114,15 @@ impl App {
                                 .map(str::to_string),
                         );
                     }
-                    if !crate::hud::actions::focus_tray_window(&keys) {
-                        tray::activate_item(item.service.clone(), item.path.clone());
-                    }
+                    // Поиск окна и фокус — внешние процессы с таймаутом:
+                    // главный поток не ждёт niri, как и при клике по столу.
+                    let service = item.service.clone();
+                    let path = item.path.clone();
+                    std::thread::spawn(move || {
+                        if !crate::hud::actions::focus_tray_window(&keys) {
+                            tray::activate_item(service, path);
+                        }
+                    });
                 }
             }
             _ => {
