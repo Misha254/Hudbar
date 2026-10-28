@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.15.5] - 2026-10-28
 
 ### Added
 - OSD: яркость экрана. Netlink-сокет `KOBJECT_UEVENT` с подпиской на группу 1:
