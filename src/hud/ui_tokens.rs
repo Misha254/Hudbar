@@ -71,6 +71,9 @@ pub struct TypeScale {
     pub caption: f32,
     /// Крупное число: высота панели, шаг, версия.
     pub value: f32,
+    /// Крупная цифровая строка: часы на экране входа. Заметно больше
+    /// `page_title`, поэтому отдельная роль, а не «заголовок × 2» на месте.
+    pub display: f32,
 }
 
 /// Размеры шрифта.
@@ -81,6 +84,7 @@ pub fn type_scale() -> TypeScale {
         label: 14.0,
         caption: 12.0,
         value: 15.0,
+        display: 40.0,
     }
 }
 
@@ -618,6 +622,10 @@ mod tests {
         assert!(scale.page_title > scale.section_title);
         assert!(scale.section_title > scale.label);
         assert!(scale.value > scale.caption);
+        assert!(
+            scale.display > scale.page_title,
+            "часы на входе крупнее любого заголовка окна"
+        );
     }
 
     /// Производные цвета считаются из базовых и остаются непрозрачными там,

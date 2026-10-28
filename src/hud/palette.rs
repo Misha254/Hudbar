@@ -51,7 +51,15 @@ fn path() -> PathBuf {
 }
 
 pub fn load() -> Palette {
-    let Ok(content) = std::fs::read_to_string(path()) else {
+    load_from(&path())
+}
+
+/// Палитра из явного файла. Нужна гритеру: он работает от пользователя
+/// `greeter`, у которого нет нашего `$HOME`, и читает `colors.css` из своего
+/// каталога данных. Поведение [`load`] не меняется — она зовёт эту же функцию
+/// со своим путём.
+pub fn load_from(path: &std::path::Path) -> Palette {
+    let Ok(content) = std::fs::read_to_string(path) else {
         return Palette::default();
     };
 
@@ -112,7 +120,7 @@ fn parse(content: &str) -> Palette {
 
 #[cfg(test)]
 mod tests {
-    use super::{Palette, Rgba, parse};
+    use super::{Palette, Rgba, load_from, parse};
 
     #[test]
     fn parses_known_colors_and_keeps_defaults_for_missing_colors() {
@@ -178,5 +186,25 @@ mod tests {
         let palette = parse("@define-color base #xyz;\n@define-color text #12345;\n");
 
         assert_eq!(palette, Palette::default());
+    }
+
+    /// `load_from` читает явный файл: этим путём гритер берёт палитру из
+    /// своего каталога, не заглядывая в `$HOME`.
+    #[test]
+    fn load_from_reads_an_explicit_file() {
+        let dir =
+            std::env::temp_dir().join(format!("hudbar-palette-load-from-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("каталог");
+        let path = dir.join("colors.css");
+        std::fs::write(&path, "@define-color base #010203;\n").expect("файл");
+
+        assert_eq!(load_from(&path).base, Rgba(1, 2, 3, 255));
+        assert_eq!(
+            load_from(&dir.join("missing.css")),
+            Palette::default(),
+            "нет файла — палитра по умолчанию"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
