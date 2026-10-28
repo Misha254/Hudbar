@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.17.0] - 2026-10-28
+
+### Added
+- Экран входа `hud-greeter-rs`: свой гритер для greetd на примитивах Hudbar —
+  полноэкранный слой, карточка меню, палитра matugen. Протокол greetd
+  (`$GREETD_SOCK`, длина `u32` + JSON) реализован без крейта `greetd_ipc`:
+  `create_session`, `post_auth_message_response`, `start_session`,
+  `cancel_session`, многошаговый PAM и обязательная отмена при сбое.
+- `hud-greeter-rs --sync`: переносит `colors.css`, текущие обои (≤1920 по
+  ширине, PNG) и язык из `settings.json` в `/var/lib/hudbar-greeter`.
+  Атомарная запись, без sudo; хук в смену обоев не встроен — только
+  документация.
+- `hud-greeter-rs --preview` (вход без greetd, пароль `test`) и
+  `--screenshot <png>` (`known`, `unknown`, `error`, `caps`, `power`,
+  `--lang ru|en`) — кадр рисует тот же код, что окно.
+- Ввод: `Tab`, `Enter`, `Backspace`, `Ctrl+U`, `F2` — сеанс по кругу,
+  `F12` — питание (`1` выключить, `2` перезагрузка, `3` сон, `Esc` отмена);
+  Caps Lock виден и в полосе, и у поля пароля.
+- `contrib/greeter/`: минимальный конфиг niri для гритера, пример
+  `/etc/greetd/config.toml` и идемпотентный установщик только для root.
+  `docs/greeter.md` — устройство, протокол, файлы, режимы и откат.
+- Пакет ставит `hud-greeter-rs` и файлы `contrib/greeter/`; `greetd` и
+  `niri` — в `optdepends`, не в `depends`.
+
+### Changed
+- Экран входа следует за обоями: палитра и фон берутся из каталога гритера,
+  а не из статической темы в `/etc`. `tuigreet` и
+  `contrib/theme/tuigreet.toml` остаются запасным вариантом; откат описан в
+  `docs/greeter.md`.
+- `palette::load_from` читает `colors.css` по явному пути; `palette::load`
+  зовёт его со своим — поведение прежнее.
+- `TypeScale` получил роль `display` для крупных часов; `layer` —
+  `open_fullscreen` с якорями на все стороны. `layer::open` не изменился.
+
 ## [0.16.1] - 2026-10-28
 
 ### Fixed

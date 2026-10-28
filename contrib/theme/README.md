@@ -35,16 +35,21 @@ matugen пишет `colors.css`, но GTK читает `gtk.css`. Положит
 
 ## Экран входа
 
-`tuigreet.toml` — статическая тема для `tuigreet`. Динамической она быть не
-может: `/etc/tuigreet/config.toml` принадлежит root, а matugen работает от
-пользователя. Установка (нужен root):
+Основной экран входа — `hud-greeter-rs`, свой гритер на примитивах Hudbar:
+палитра и обои переносятся в его каталог командой `hud-greeter-rs --sync`.
+Устройство, установка и откат — `docs/greeter.md`; конфиги niri и greetd —
+`contrib/greeter/`.
+
+`tuigreet.toml` остаётся запасным вариантом: статическая тема для `tuigreet`.
+Динамической она быть не может — `/etc/tuigreet/config.toml` принадлежит
+root, а matugen работает от пользователя. Установка (нужен root):
 
 ```fish
 sudo install -Dm644 tuigreet.toml /etc/tuigreet/config.toml
 ```
 
-После этого цвета входа не следуют за обоями, но совпадают с базовой
-тёмной палитрой HUDbar. Подробнее — `docs/theme.md`.
+После этого цвета запасного входа не следуют за обоями, но совпадают с
+базовой тёмной палитрой HUDbar. Подробнее — `docs/theme.md`.
 
 ## Qt
 

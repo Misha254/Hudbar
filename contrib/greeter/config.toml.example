@@ -1,0 +1,21 @@
+# Пример /etc/greetd/config.toml для hud-greeter-rs.
+#
+# Установщик contrib/greeter/install-greeter.sh кладёт этот файл на место
+# /etc/greetd/config.toml, предварительно сохранив старый в
+# /etc/greetd/config.toml.hudbar-backup. Если правите вручную — сначала
+# сделайте копию сами.
+#
+# user — пользователь, от которого работает гритер. На большинстве систем
+# это `greeter` (так же в исходном конфиге с tuigreet). Если у вас другой —
+# проверьте свой user: он должен существовать и иметь доступ к /dev/dri и
+# /dev/input, иначе niri не поднимется.
+#
+# От этого же пользователя гритер читает /var/lib/hudbar-greeter и пишет
+# /var/cache/hudbar-greeter; владельцев выставляет установщик.
+
+[terminal]
+vt = 1
+
+[default_session]
+command = "niri -c /etc/hudbar/greeter-niri.kdl"
+user = "greeter"

@@ -83,10 +83,14 @@ nvim (lualine), zathura, spicetify, hudbar, swaylock, cal, clipse, chromium.
   `QT_QPA_PLATFORMTHEME=gtk3`, и Qt берёт палитру из GTK3. До этого `ark` и
   `qbittorrent` открывались светлой Fusion-темой. Стиль GTK-подобный, не
   Breeze — это принято.
-- **Экран входа.** Ставится `tuigreet`, а не GTK-грейтер, и файл темы у него
-  в `/etc`: динамическая тема потребовала бы root из пользовательской сессии.
-  Решение: статическая тёмная тема `contrib/theme/tuigreet.toml`, установка
-  один раз под root. Записано в `docs/theme.md`.
+- **Экран входа.** Решение «tuigreet» заменено собственным гритером
+  `hud-greeter-rs`: полноэкранный слой на примитивах Hudbar, палитра и обои из
+  `/var/lib/hudbar-greeter` через `--sync`. Причина замены — tuigreet не
+  следует за matugen: его тема лежит в `/etc` и статична. Композитор гритера —
+  niri с минимальным конфигом (layer-shell; `cage` даёт только xdg-shell),
+  после входа гритер завершает его argv-вызовом. `tuigreet` и
+  `contrib/theme/tuigreet.toml` остаются запасным вариантом; откат описан в
+  `docs/greeter.md`.
 - **light/dark.** Режим зафиксирован `theme = "dark"`; светлая схема
   получается и проходит WCAG AA, но меняет характер тёмного стекла, поэтому
   `--mode smart` не включён.
