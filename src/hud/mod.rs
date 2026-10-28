@@ -22,6 +22,7 @@ pub mod geom;
 // берёт отсюда и подсветку чипов, и выезд попапа.
 pub mod anim;
 pub mod data;
+pub mod i18n;
 pub mod lock;
 pub mod log;
 // OSD громкости и микрофона: детектор изменений, окно рисует App.

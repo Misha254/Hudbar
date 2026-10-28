@@ -82,6 +82,9 @@ mod canvas;
 #[path = "../hud/geom.rs"]
 mod geom;
 #[allow(dead_code)]
+#[path = "../hud/i18n.rs"]
+mod i18n;
+#[allow(dead_code)]
 #[path = "../hud/layer.rs"]
 mod layer;
 #[allow(dead_code)]

@@ -103,7 +103,9 @@ pub struct Sys {
     pub battery_wh: Option<f32>,
     pub charging: bool,
     pub ac_online: bool,
-    pub bat_time: Option<String>,
+    /// Остаток времени батареи: часы и минуты. Формат выбирает отрисовка,
+    /// потому что «2ч15м» и «2h15m» зависят от языка окна.
+    pub bat_time: Option<(u64, u64)>,
     pub cpu_pct: u8,
     pub temp_c: Option<i32>,
     pub mem_used_gib: f32,

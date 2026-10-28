@@ -11,6 +11,7 @@
 
 use std::process::{Command, Stdio};
 
+use super::super::settings::Language;
 use super::scan::{App, has_program};
 
 /// Терминал для `Terminal=true`. kitty: он же терминал по умолчанию в панели,
@@ -90,34 +91,40 @@ fn is_field(word: &str) -> bool {
 /// Запускает приложение. `Err` — только когда запускать нечем: у строки `Exec`
 /// нет программы или нет самого терминала. Ошибки самого процесса сюда не
 /// приходят: процесс уже отсоединён, и ждать его завершения нельзя.
-pub fn launch(app: &App) -> Result<(), String> {
+pub fn launch(app: &App, lang: Language) -> Result<(), String> {
     if app.dbus_activatable && has_program("gtk-launch") {
         // D-Bus-приложения запускаются через desktop-id: их `Exec` зачастую
         // ведёт на заглушку (`/usr/bin/true`) или отсутствует вовсе.
-        return spawn("gtk-launch", &[app.id.as_str()]);
+        return spawn("gtk-launch", &[app.id.as_str()], lang);
     }
     let mut words = argv(&app.exec, &app.icon);
     if words.is_empty() {
-        return Err(format!("у «{}» нет команды запуска", app.name));
+        return Err(match lang {
+            Language::Ru => format!("у «{}» нет команды запуска", app.name),
+            Language::En => format!("“{}” has no launch command", app.name),
+        });
     }
     let program = words.remove(0);
     if app.terminal {
         if !has_program(TERMINAL) {
-            return Err(format!("нет терминала {TERMINAL}"));
+            return Err(match lang {
+                Language::Ru => format!("нет терминала {TERMINAL}"),
+                Language::En => format!("terminal {TERMINAL} not found"),
+            });
         }
         let mut args = vec!["-e".to_string(), program];
         args.extend(words);
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
-        return spawn(TERMINAL, &borrowed);
+        return spawn(TERMINAL, &borrowed, lang);
     }
     let borrowed: Vec<&str> = words.iter().map(String::as_str).collect();
-    spawn(&program, &borrowed)
+    spawn(&program, &borrowed, lang)
 }
 
 /// Запуск в новой сессии. `setsid -f` форкается и сразу возвращает управление,
 /// поэтому его собственный процесс живёт доли секунды: без `wait` он остался бы
 /// зомби до конца жизни окна. Поток-пожиратель снимает его через `wait`.
-fn spawn(program: &str, args: &[&str]) -> Result<(), String> {
+fn spawn(program: &str, args: &[&str], lang: Language) -> Result<(), String> {
     let child = Command::new("setsid")
         .arg("-f")
         .arg(program)
@@ -133,7 +140,10 @@ fn spawn(program: &str, args: &[&str]) -> Result<(), String> {
             });
             Ok(())
         }
-        Err(error) => Err(format!("не запустить {program}: {error}")),
+        Err(error) => Err(match lang {
+            Language::Ru => format!("не запустить {program}: {error}"),
+            Language::En => format!("failed to launch {program}: {error}"),
+        }),
     }
 }
 
@@ -254,7 +264,7 @@ mod tests {
             dbus_activatable: false,
             path: PathBuf::from("broken.desktop"),
         };
-        assert!(launch(&app).is_err());
+        assert!(launch(&app, Language::Ru).is_err());
     }
 
     /// Реальный запуск на машине тестов: команда безобидная, и она доказывает,
@@ -269,7 +279,7 @@ mod tests {
         let marker = std::env::temp_dir().join(format!("hudbar-launch-{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
         let script = format!("printf ok > {}", marker.display());
-        spawn("sh", &["-c", &script]).expect("запуск");
+        spawn("sh", &["-c", &script], Language::Ru).expect("запуск");
 
         // Процесс отсоединён, поэтому ждать можно только по файлу и с потолком.
         let mut done = false;

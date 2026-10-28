@@ -22,7 +22,7 @@ use super::settings::Language;
 use super::settings_icons;
 use super::system::{
     CommandError, CommandRunner, CommandSpec, ProviderError, ProviderKey, SystemCommandRunner,
-    SystemProvider,
+    SystemProvider, provider_text,
 };
 use super::tree::Node;
 
@@ -163,7 +163,7 @@ pub fn fetch_nodes(lang: Language) -> Result<Vec<Node>, String> {
     let provider = AudioProvider;
     let snapshot = provider
         .fetch(&SystemCommandRunner::default())
-        .map_err(|error| error.message())?;
+        .map_err(|error| error.message_in(lang))?;
     Ok(provider.nodes(&snapshot, lang))
 }
 
@@ -372,7 +372,10 @@ fn endpoint_rows(
             return vec![Node::info(icon, &format!("{label}: {}", missing(lang)))];
         }
         Block::Failed(reason) => {
-            return vec![Node::info(icon, &format!("{label}: {}", short(reason)))];
+            return vec![Node::info(
+                icon,
+                &format!("{label}: {}", short(&provider_text(lang, reason))),
+            )];
         }
     };
     // Одна строка на устройство: имя, полоса, процент и mute по Enter.
@@ -484,8 +487,11 @@ fn device_block(
         }
         Block::Failed(reason) => {
             return vec![
-                Node::info(icon, &format!("pactl: {}", short(reason)))
-                    .with_id(&format!("audio/devices/{kind}")),
+                Node::info(
+                    icon,
+                    &format!("pactl: {}", short(&provider_text(lang, reason))),
+                )
+                .with_id(&format!("audio/devices/{kind}")),
             ];
         }
     };

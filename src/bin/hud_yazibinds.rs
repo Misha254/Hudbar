@@ -55,12 +55,18 @@ mod card_frame;
 #[path = "../hud/geom.rs"]
 mod geom;
 
+#[allow(dead_code)]
+#[path = "../hud/i18n.rs"]
+mod i18n;
 #[path = "../hud/key_display.rs"]
 mod key_display;
 #[path = "../hud/palette.rs"]
 mod palette;
 #[path = "../hud/repeat.rs"]
 mod repeat;
+#[allow(dead_code)]
+#[path = "../hud/settings.rs"]
+mod settings;
 #[allow(dead_code)]
 #[path = "../hud/settings_icons.rs"]
 mod settings_icons;
@@ -77,8 +83,32 @@ use repeat::Repeat;
 
 use bind_data::Entry;
 
-const TITLE: &str = "Yazi";
-const PLACEHOLDER: &str = "Поиск…";
+fn placeholder(lang: settings::Language) -> &'static str {
+    i18n::pick(lang, "Поиск…", "Search…")
+}
+
+fn hints(lang: settings::Language) -> &'static str {
+    i18n::pick(
+        lang,
+        "↑↓ PgUp PgDn ЛИСТАТЬ   ESC ЗАКРЫТЬ",
+        "↑↓ PgUp PgDn SCROLL   ESC CLOSE",
+    )
+}
+
+fn nothing_found(lang: settings::Language) -> &'static str {
+    i18n::pick(lang, "Ничего не найдено", "Nothing found")
+}
+
+/// Служебные группы `bind_data` подписываются на языке окна; заголовки из
+/// пользовательского keymap остаются как есть.
+fn group_label(lang: settings::Language, name: &str) -> &str {
+    match name {
+        "Общее" => i18n::pick(lang, "Общее", "General"),
+        "Частые" => i18n::pick(lang, "Частые", "Frequent"),
+        "Прочее" => i18n::pick(lang, "Прочее", "Other"),
+        _ => name,
+    }
+}
 
 /// Размеры окна — как у окна биндов niri: 440×452 =
 /// `card_frame::card_height(9)` — 52 шапка + 9×40 строк + 40 подвал.
@@ -86,8 +116,6 @@ const PLACEHOLDER: &str = "Поиск…";
 /// `set_min_size`/`set_max_size` и отката конфигурации.
 const WIDTH: u32 = 440;
 const HEIGHT: u32 = 452;
-/// Подвал: подсказки слева, счётчик справа.
-const HINTS: &str = "↑↓ PgUp PgDn ЛИСТАТЬ   ESC ЗАКРЫТЬ";
 
 // Поток строк одной колонкой: заголовок группы занимает всю ширину,
 // бинд занимает ячейку. Без рамок — только заливка у выбранной строки.
@@ -129,6 +157,8 @@ struct YaziApp {
     /// Клиентский автоповтор удержанной стрелки: композитор повторы не шлёт.
     repeat: Repeat,
     mods: Modifiers,
+    /// Язык подписей окна из `settings.json` на момент запуска.
+    lang: settings::Language,
     /// Painter общего текстового модуля: один на окно, кэш шейпов внутри.
     text: text::TextPainter,
     /// Отдельный painter с Nerd Font — только для глифов.
@@ -267,6 +297,7 @@ fn content_h(rows: &[ListRow], width: f32) -> f32 {
 /// одинаковым кодом.
 struct Render<'a> {
     palette: palette::Palette,
+    lang: settings::Language,
     rows: &'a [ListRow],
     items: &'a [Entry],
     selected: usize,
@@ -297,9 +328,9 @@ fn render(
         icons,
         card,
         &ui,
-        TITLE,
+        "Yazi",
         r.query,
-        PLACEHOLDER,
+        placeholder(r.lang),
     );
 
     let list_y = card.y + LIST_Y0;
@@ -308,7 +339,7 @@ fn render(
     if r.items.is_empty() {
         painter.paint(
             pixmap,
-            "Ничего не найдено",
+            nothing_found(r.lang),
             scale.label,
             ui.muted,
             card_frame::center_band(
@@ -351,7 +382,7 @@ fn render(
         if let ListRow::Header(label) = &r.rows[slot.row] {
             // Заголовок секции: общий в card_frame (тёмная полоса-фон,
             // акцентная метка слева, подпись акцентом).
-            card_frame::section_header(pixmap, painter, rect, &ui, label);
+            card_frame::section_header(pixmap, painter, rect, &ui, group_label(r.lang, label));
             continue;
         }
         let Some(item) = slot.item else { continue };
@@ -423,7 +454,7 @@ fn render(
     } else {
         format!("{items_total} / {}", r.groups_total)
     };
-    card_frame::footer(pixmap, painter, card, &ui, HINTS, Some(&count));
+    card_frame::footer(pixmap, painter, card, &ui, hints(r.lang), Some(&count));
 }
 
 impl YaziApp {
@@ -689,6 +720,7 @@ impl YaziApp {
             .sum();
         let r = Render {
             palette: self.palette,
+            lang: self.lang,
             rows: &self.rows,
             items: &self.items,
             selected: self.selected,
@@ -1061,6 +1093,7 @@ fn scene_pixmap(_config_palette: &palette::Palette) -> tiny_skia::Pixmap {
     }
     let r = Render {
         palette: palette::Palette::default(),
+        lang: settings::Language::Ru,
         rows: &rows,
         items: &items,
         selected: 5,
@@ -1150,7 +1183,7 @@ fn main() {
     let shm = Shm::bind(&globals, &qh).expect("wl_shm");
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
-    window.set_title(TITLE);
+    window.set_title("Yazi");
     window.set_app_id("com.mihail.hud-yazibinds");
     window.set_min_size(Some((WIDTH, HEIGHT)));
     window.set_max_size(Some((WIDTH, HEIGHT)));
@@ -1162,6 +1195,7 @@ fn main() {
     let pool = SlotPool::new(40_000_000, &shm).expect("shm pool");
     let groups = load_groups();
     let paths = watch_paths();
+    let lang = settings::load().language;
     let stamps = paths.iter().map(|p| (p.clone(), stamp(p))).collect();
     let mut app = YaziApp {
         registry_state: RegistryState::new(&globals),
@@ -1173,6 +1207,7 @@ fn main() {
         pointer: None,
         keyboard: None,
         mods: Modifiers::default(),
+        lang,
         repeat: Repeat::default(),
         text: text::TextPainter::new(&ui_tokens::font_name()),
         icons: text::TextPainter::new(settings_icons::FONT),

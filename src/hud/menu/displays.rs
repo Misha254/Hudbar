@@ -23,7 +23,7 @@ use super::settings::Language;
 use super::settings_icons;
 use super::system::{
     CommandError, CommandRunner, CommandSpec, ProviderError, ProviderKey, SystemCommandRunner,
-    SystemProvider,
+    SystemProvider, provider_text,
 };
 use super::tree::Node;
 use std::time::Duration;
@@ -426,7 +426,7 @@ pub fn fetch_nodes(lang: Language) -> Result<Vec<Node>, String> {
     let provider = DisplaysProvider;
     let snapshot = provider
         .fetch(&SystemCommandRunner::default())
-        .map_err(|error| error.message())?;
+        .map_err(|error| error.message_in(lang))?;
     Ok(provider.nodes(&snapshot, lang))
 }
 
@@ -585,6 +585,7 @@ fn status_row(lang: Language, snapshot: &DisplaysSnapshot) -> Node {
             .with_id(id);
         }
         Block::Failed(reason) => {
+            let reason = provider_text(lang, reason);
             return Node::info(
                 settings_icons::PANEL_MONITOR,
                 &if ru(lang) {

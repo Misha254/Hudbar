@@ -330,7 +330,7 @@ pub fn fetch_nodes(lang: Language) -> Result<Vec<Node>, String> {
     let provider = BluetoothProvider;
     let snapshot = provider
         .fetch(&SystemCommandRunner::default())
-        .map_err(|error| error.message())?;
+        .map_err(|error| error.message_in(lang))?;
     Ok(provider.nodes(&snapshot, lang))
 }
 

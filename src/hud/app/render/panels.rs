@@ -1,8 +1,10 @@
 use super::*;
 
-fn level_label(level: u8, muted: bool) -> String {
+use crate::hud::i18n;
+
+fn level_label(lang: settings::Language, level: u8, muted: bool) -> String {
     if muted {
-        "выкл".to_string()
+        off(lang).to_string()
     } else {
         format!("{level}%")
     }
@@ -10,28 +12,33 @@ fn level_label(level: u8, muted: bool) -> String {
 
 impl App {
     pub fn control_rows(&self) -> Vec<(String, String, bool)> {
+        let lang = self.settings.language;
         let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
         vec![
             (
                 "Wi-Fi".to_string(),
-                toggle_label(sys.wifi_enabled),
+                toggle_label(lang, sys.wifi_enabled),
                 sys.wifi_enabled,
             ),
-            ("Bluetooth".to_string(), toggle_label(sys.bt_on), sys.bt_on),
-            ("DND".to_string(), toggle_label(sys.dnd), sys.dnd),
             (
-                "Звук".to_string(),
-                level_label(sys.vol, sys.vol_muted),
+                "Bluetooth".to_string(),
+                toggle_label(lang, sys.bt_on),
+                sys.bt_on,
+            ),
+            ("DND".to_string(), toggle_label(lang, sys.dnd), sys.dnd),
+            (
+                sound(lang).to_string(),
+                level_label(lang, sys.vol, sys.vol_muted),
                 !sys.vol_muted,
             ),
             (
-                "Микрофон".to_string(),
-                level_label(sys.mic, sys.mic_muted),
+                microphone(lang).to_string(),
+                level_label(lang, sys.mic, sys.mic_muted),
                 !sys.mic_muted,
             ),
-            ("Обои".to_string(), "выбрать".to_string(), false),
-            ("Питание".to_string(), "меню".to_string(), false),
-            ("Блокировка".to_string(), "запустить".to_string(), false),
+            (wallpaper(lang).to_string(), choose(lang).to_string(), false),
+            (power(lang).to_string(), menu(lang).to_string(), false),
+            (lock(lang).to_string(), run(lang).to_string(), false),
         ]
     }
 
@@ -52,18 +59,23 @@ impl App {
     }
 
     fn panel_rows_for_system(&self, sys: data::Sys) -> Vec<(String, String, bool)> {
+        let lang = self.settings.language;
         match self.panel.as_ref().map(|p| p.kind) {
             Some(PanelKind::Wifi) => {
                 if !sys.wifi_enabled {
-                    vec![("Выключено".to_string(), String::new(), false)]
+                    vec![(off_state(lang).to_string(), String::new(), false)]
                 } else if let Some(error) = sys.wifi_error {
-                    vec![("Ошибка Wi-Fi".to_string(), error, false)]
+                    vec![(
+                        wifi_error(lang).to_string(),
+                        system_error(lang, &error),
+                        false,
+                    )]
                 } else if sys.wifi_list.is_empty() {
                     vec![(
                         if sys.wifi_loading {
-                            "Поиск…"
+                            search(lang)
                         } else {
-                            "Нет сетей"
+                            no_networks(lang)
                         }
                         .to_string(),
                         String::new(),
@@ -85,15 +97,19 @@ impl App {
             }
             Some(PanelKind::Bt) => {
                 if !sys.bt_on {
-                    vec![("Выключено".to_string(), String::new(), false)]
+                    vec![(off_state(lang).to_string(), String::new(), false)]
                 } else if let Some(error) = sys.bt_error {
-                    vec![("Ошибка Bluetooth".to_string(), error, false)]
+                    vec![(
+                        bt_error(lang).to_string(),
+                        system_error(lang, &error),
+                        false,
+                    )]
                 } else if sys.bt_list.is_empty() {
                     vec![(
                         if sys.bt_loading {
-                            "Поиск…"
+                            search(lang)
                         } else {
-                            "Нет устройств"
+                            no_devices(lang)
                         }
                         .to_string(),
                         String::new(),
@@ -104,7 +120,7 @@ impl App {
                         .iter()
                         .map(|d| {
                             let info = if d.connected {
-                                format!("{I_CHECK}{}подключено", self.icon_gap())
+                                format!("{I_CHECK}{}{}", self.icon_gap(), connected(lang))
                             } else {
                                 String::new()
                             };
@@ -117,9 +133,9 @@ impl App {
                 if sys.tray_menu.is_empty() {
                     vec![(
                         if sys.tray_menu_loading {
-                            "Поиск…"
+                            search(lang)
                         } else {
-                            "Нет меню"
+                            no_menu(lang)
                         }
                         .to_string(),
                         String::new(),
@@ -137,6 +153,7 @@ impl App {
     }
 
     pub fn av_devices(&self) -> Vec<(String, String, bool, String)> {
+        let lang = self.settings.language;
         let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
         let is_mic = self
             .panel
@@ -147,22 +164,27 @@ impl App {
                 sys.sources.clone(),
                 sys.ee_follow_in,
                 sys.ee_in_target.clone(),
-                "Нет входов",
+                no_inputs(lang),
             )
         } else {
             (
                 sys.sinks.clone(),
                 sys.ee_follow_out,
                 sys.ee_out_target.clone(),
-                "Нет выходов",
+                no_outputs(lang),
             )
         };
         if let Some(error) = sys.audio_error {
-            return vec![("Ошибка аудио".to_string(), error, false, String::new())];
+            return vec![(
+                audio_error(lang).to_string(),
+                system_error(lang, &error),
+                false,
+                String::new(),
+            )];
         }
         if list.is_empty() {
             let hint = if sys.audio_loading {
-                "Поиск…"
+                search(lang)
             } else {
                 empty_hint
             }
@@ -262,6 +284,7 @@ impl App {
                 self.render_clock(pixmap, &panel, dy);
             }
             PanelView::List => {
+                let lang = self.settings.language;
                 let hover = panel.hover;
                 let rows = self.panel_rows();
                 let is_tray_menu = matches!(panel.kind, PanelKind::TrayMenu { .. });
@@ -278,7 +301,7 @@ impl App {
                 let title: String = match panel.kind {
                     PanelKind::Wifi => "Wi-Fi".to_string(),
                     PanelKind::Bt => "Bluetooth".to_string(),
-                    PanelKind::Control => "Control center".to_string(),
+                    PanelKind::Control => control_center(lang).to_string(),
                     PanelKind::TrayMenu { idx } => self
                         .shared
                         .sys
@@ -306,7 +329,7 @@ impl App {
                         .as_ref()
                         .map(|v| v.get(i).copied().unwrap_or(true))
                         .unwrap_or(true);
-                    if hover == Some(i) && !is_hint(label) && enabled {
+                    if hover == Some(i) && !is_hint(label, lang) && enabled {
                         fill_rect(pixmap, bw, y, w - 2.0 * bw, row_h, p.primary.with_a(0.18));
                     }
                     let color = if !enabled {
@@ -338,7 +361,7 @@ impl App {
                             PANEL_ROW,
                         );
                     }
-                    if self.popup_target() > 0.5 && !is_hint(label) {
+                    if self.popup_target() > 0.5 && !is_hint(label, lang) {
                         self.regions.push((
                             Hit::PanelRow(i),
                             Rect {
@@ -392,7 +415,7 @@ impl App {
                 let masked = "\u{2022}".repeat(input.chars().count());
                 let shown = format!("{masked}\u{258f}");
                 self.draw_text(pixmap, &shown, SIZE, p.text, pad + 6.0 * k, field_y, 26.0);
-                let hint = "Enter — подключить · Esc — назад";
+                let hint = password_hint(self.settings.language);
                 self.draw_text(
                     pixmap,
                     hint,
@@ -489,15 +512,16 @@ impl App {
 
     pub fn render_av(&mut self, pixmap: &mut tiny_skia::Pixmap, panel: &Panel, dy: f32) {
         let p = self.palette;
+        let lang = self.settings.language;
         let k = SCALE;
         let w = pixmap.width() as f32;
         let is_mic = panel.kind == PanelKind::Mic;
-        let (title, pct, muted) = {
+        let (title, pct, muted_now) = {
             let sys = crate::hud::lock::mutex(&self.shared.sys);
             if is_mic {
-                ("Микрофон", sys.mic, sys.mic_muted)
+                (microphone(lang), sys.mic, sys.mic_muted)
             } else {
-                ("Звук", sys.vol, sys.vol_muted)
+                (sound(lang), sys.vol, sys.vol_muted)
             }
         };
         self.draw_text(
@@ -509,11 +533,11 @@ impl App {
             dy,
             PANEL_HEADER,
         );
-        self.draw_switch(pixmap, w, dy, !muted, panel.hover_toggle);
+        self.draw_switch(pixmap, w, dy, !muted_now, panel.hover_toggle);
 
         let pct_y = dy + PANEL_HEADER * k;
-        if muted {
-            let s = "Заглушено";
+        if muted_now {
+            let s = muted(lang);
             let tw = self.text_width(s, 14.0);
             self.draw_text(
                 pixmap,
@@ -535,7 +559,7 @@ impl App {
         let sx = (PANEL_PAD + 6.0) * k;
         let sw = w - 2.0 * sx;
         let sy = dy + row_y * k + (AV_SLIDER_H * k - sh) / 2.0;
-        let frac = if muted { 0.0 } else { pct as f32 / 100.0 };
+        let frac = if muted_now { 0.0 } else { pct as f32 / 100.0 };
         fill_round_rect(pixmap, sx, sy, sw, sh, sh / 2.0, p.secondary.with_a(0.15));
         if frac > 0.01 {
             let fw = (sw * frac).max(sh);
@@ -543,7 +567,11 @@ impl App {
         }
         let kr = 7.0 * k;
         let kx = sx + sw * frac;
-        let knob = if muted { p.text.with_a(0.5) } else { p.text };
+        let knob = if muted_now {
+            p.text.with_a(0.5)
+        } else {
+            p.text
+        };
         fill_round_rect(
             pixmap,
             kx - kr,
@@ -567,7 +595,11 @@ impl App {
         }
 
         let section_y = dy + (PANEL_HEADER + AV_PCT_H + AV_SLIDER_H) * k;
-        let section_label = if is_mic { "Вход" } else { "Выход" };
+        let section_label = if is_mic {
+            input_section(lang)
+        } else {
+            output_section(lang)
+        };
         self.draw_text(
             pixmap,
             section_label,
@@ -584,7 +616,7 @@ impl App {
         let mut y = section_y + AV_SECTION_H * k;
         let row_h = PANEL_ROW * k;
         for (i, (label, info, current, _)) in rows.iter().enumerate() {
-            if hover == Some(i) && !is_hint(label) {
+            if hover == Some(i) && !is_hint(label, lang) {
                 fill_rect(pixmap, bw, y, w - 2.0 * bw, row_h, p.primary.with_a(0.18));
             }
             let color = if *current { p.primary } else { p.text };
@@ -610,7 +642,7 @@ impl App {
                     PANEL_ROW,
                 );
             }
-            if self.popup_target() > 0.5 && !is_hint(label) {
+            if self.popup_target() > 0.5 && !is_hint(label, lang) {
                 self.regions.push((
                     Hit::PanelRow(i),
                     Rect {
@@ -631,6 +663,7 @@ impl App {
 
     pub fn render_weather(&mut self, pixmap: &mut tiny_skia::Pixmap, _panel: &Panel, dy: f32) {
         let p = self.palette;
+        let lang = self.settings.language;
         let k = SCALE;
         let w = pixmap.width() as f32;
         let pad = PANEL_PAD * k;
@@ -638,11 +671,11 @@ impl App {
 
         let Some(wx) = &sys.weather_data else {
             let msg = if sys.weather_loading {
-                "Обновление…"
+                updating_title(lang)
             } else if sys.weather_error.is_some() {
-                "Ошибка погоды"
+                weather_error(lang)
             } else {
-                "Нет данных"
+                no_data(lang)
             };
             self.draw_text_boxed(
                 pixmap,
@@ -655,9 +688,10 @@ impl App {
                 20.0,
             );
             if let Some(error) = sys.weather_error.as_deref() {
+                let error = system_error(lang, error);
                 self.draw_text_boxed(
                     pixmap,
-                    error,
+                    &error,
                     10.0,
                     p.text.with_a(0.5),
                     w - pad * 2.0,
@@ -686,9 +720,9 @@ impl App {
         );
 
         let texts = [
-            format!("ощущается {}°", wx.feels),
-            format!("влажность {}%", wx.humidity),
-            format!("ветер {:.1} м/с", wx.wind),
+            feels(lang, wx.feels),
+            humidity(lang, wx.humidity),
+            wind(lang, wx.wind),
         ];
         let widths: Vec<f32> = texts.iter().map(|t| self.text_width(t, SIZE)).collect();
         let sep = self.text_width("·", SIZE);
@@ -731,7 +765,7 @@ impl App {
 
         self.draw_text(
             pixmap,
-            "По часам",
+            hourly(lang),
             11.0,
             p.text.with_a(0.5),
             pad,
@@ -756,7 +790,7 @@ impl App {
 
         self.draw_text(
             pixmap,
-            "Прогноз",
+            forecast(lang),
             11.0,
             p.text.with_a(0.5),
             pad,
@@ -769,8 +803,8 @@ impl App {
                 .map(|dt| {
                     format!(
                         "{} {}",
-                        WEEKDAYS_SHORT[dt.weekday().num_days_from_monday() as usize],
-                        dt.format("%d.%m")
+                        i18n::weekday_short(lang, dt.weekday().num_days_from_monday() as usize),
+                        i18n::short_date(lang, dt)
                     )
                 })
                 .unwrap_or_else(|_| d.date.clone());
@@ -799,11 +833,11 @@ impl App {
         }
 
         let foot = if sys.weather_loading {
-            "обновление…".to_string()
+            updating_footer(lang).to_string()
         } else if wx.stale {
-            format!("офлайн · кэш {}", wx.updated)
+            offline_cache(lang, &wx.updated)
         } else {
-            format!("обновлено {}", wx.updated)
+            updated(lang, &wx.updated)
         };
         self.draw_text(
             pixmap,
@@ -819,19 +853,23 @@ impl App {
     // ---------- frames ----------
 }
 
-fn toggle_label(on: bool) -> String {
-    if on { "вкл" } else { "выкл" }.to_string()
+fn toggle_label(lang: settings::Language, enabled: bool) -> String {
+    if enabled { on(lang) } else { off(lang) }.to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{level_label, toggle_label};
+    use crate::hud::settings::Language;
 
     #[test]
     fn control_labels_show_state_and_level() {
-        assert_eq!(toggle_label(true), "вкл");
-        assert_eq!(toggle_label(false), "выкл");
-        assert_eq!(level_label(42, false), "42%");
-        assert_eq!(level_label(42, true), "выкл");
+        assert_eq!(toggle_label(Language::Ru, true), "вкл");
+        assert_eq!(toggle_label(Language::Ru, false), "выкл");
+        assert_eq!(toggle_label(Language::En, true), "on");
+        assert_eq!(toggle_label(Language::En, false), "off");
+        assert_eq!(level_label(Language::Ru, 42, false), "42%");
+        assert_eq!(level_label(Language::Ru, 42, true), "выкл");
+        assert_eq!(level_label(Language::En, 42, true), "off");
     }
 }

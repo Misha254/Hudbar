@@ -1250,7 +1250,7 @@ fn secret_input_action_is_a_no_op_for_the_runner() {
     );
     assert!(!action.closes_menu(), "меню остаётся открытым");
     assert!(action.command().is_none());
-    assert_eq!(action.describe(), "Дом");
+    assert_eq!(action.describe(Language::Ru), "Дом");
 }
 
 /// Глобальный поиск находит «Wi-Fi» и по `Enter` открывает раздел, а не

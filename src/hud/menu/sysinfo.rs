@@ -8,6 +8,7 @@
 //! показать универсально, та строка и не появляется — раздел честно
 //! короче, а не рисует заглушки «Неизвестно».
 
+use super::i18n;
 use super::settings::Language;
 use super::settings_icons;
 use super::tree::Node;
@@ -56,16 +57,16 @@ fn rows(lang: Language) -> Vec<Node> {
     if let Some(text) = gpu_text() {
         nodes.push(info(lang, "Видеокарта", "GPU", &text, "system/gpu"));
     }
-    if let Some(text) = ram_text() {
+    if let Some(text) = ram_text(lang) {
         nodes.push(info(lang, "ОЗУ", "RAM", &text, "system/ram"));
     }
     let uptime = std::fs::read_to_string("/proc/uptime")
         .ok()
         .and_then(|content| content.split_whitespace().next()?.parse().ok());
-    if let Some(text) = uptime_text(uptime, matches!(lang, Language::Ru)) {
+    if let Some(text) = i18n::uptime(lang, uptime) {
         nodes.push(info(lang, "Аптайм", "Uptime", &text, "system/uptime"));
     }
-    if let Some(text) = battery_text() {
+    if let Some(text) = battery_text(lang) {
         nodes.push(info(
             lang,
             "Батарея",
@@ -229,10 +230,10 @@ fn nvidia_model(content: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn ram_text() -> Option<String> {
+fn ram_text(lang: Language) -> Option<String> {
     let content = std::fs::read_to_string("/proc/meminfo").ok()?;
     let gib = mem_total_gib(&content)?;
-    Some(format!("{gib:.1} ГиБ"))
+    Some(i18n::gib(lang, gib))
 }
 
 /// `MemTotal` в meminfo даёт килобайты: 16384000 kB → 15.6 ГиБ.
@@ -246,46 +247,16 @@ fn mem_total_gib(content: &str) -> Option<f64> {
     Some(kilobytes / 1024.0 / 1024.0)
 }
 
-/// Аптайм без секунд: «10 д 11 ч» / «1 ч 30 м» / «1 м». Значение подставлено,
-/// а не прочитано внутри: тестам не нужно подделывать /proc.
-fn uptime_text(seconds: Option<f64>, ru: bool) -> Option<String> {
-    let seconds = seconds?;
-    let minutes = (seconds / 60.0).floor() as u64;
-    if minutes == 0 {
-        return None;
-    }
-    let hours = minutes / 60;
-    let days = hours / 24;
-    let (day, hour, minute) = if ru {
-        ("д", "ч", "м")
-    } else {
-        ("d", "h", "m")
-    };
-    let mut units: Vec<String> = Vec::new();
-    if days > 0 {
-        units.push(format!("{days} {day}"));
-    }
-    let hours = hours % 24;
-    if hours > 0 {
-        units.push(format!("{hours} {hour}"));
-    }
-    let minutes = minutes % 60;
-    if minutes > 0 || units.is_empty() {
-        units.push(format!("{minutes} {minute}"));
-    }
-    Some(units.join(" "))
-}
-
 /// Здоровье батареи: полный заряд против проектного из которого машина
 /// делает сам вывод; лимит заряда — если под вечером есть файл порога.
-fn battery_text() -> Option<String> {
+fn battery_text(lang: Language) -> Option<String> {
     let dir = first_battery_dir()?;
     let full = read_uint(join(&dir, "charge_full"))?;
     let design = read_uint(join(&dir, "charge_full_design")).filter(|design| *design > 0)?;
     let limit = std::fs::read_to_string(join(&dir, "charge_control_end_threshold"))
         .ok()
         .and_then(|content| parse_uint(&content));
-    Some(battery_health_text(full, design, limit))
+    Some(battery_health_text(lang, full, design, limit))
 }
 
 /// Первый `BAT*` в power_supply. Остальные источники — mains/usb — не
@@ -319,11 +290,13 @@ fn parse_uint(text: &str) -> Option<u64> {
 }
 
 /// Расчёт с любыми входными числами — для тестов: «104% от проектной · лимит 80%».
-fn battery_health_text(full: u64, design: u64, limit: Option<u64>) -> String {
+fn battery_health_text(lang: Language, full: u64, design: u64, limit: Option<u64>) -> String {
     let percent = ((full as f64 / design as f64) * 100.0).round() as u64;
-    match limit {
-        Some(limit) => format!("{percent}% от проектной · лимит {limit}%"),
-        None => format!("{percent}% от проектной"),
+    match (lang, limit) {
+        (Language::Ru, Some(limit)) => format!("{percent}% от проектной · лимит {limit}%"),
+        (Language::Ru, None) => format!("{percent}% от проектной"),
+        (Language::En, Some(limit)) => format!("{percent}% of design · limit {limit}%"),
+        (Language::En, None) => format!("{percent}% of design"),
     }
 }
 
@@ -414,22 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn uptime_prints_units_without_seconds() {
-        assert_eq!(uptime_text(Some(90.0), true).as_deref(), Some("1 м"));
-        assert_eq!(uptime_text(Some(5400.0), true).as_deref(), Some("1 ч 30 м"));
-        assert_eq!(
-            uptime_text(Some(903_600.0), true).as_deref(),
-            Some("10 д 11 ч")
-        );
-        assert_eq!(uptime_text(Some(30.0), true), None);
-        assert_eq!(uptime_text(None, true), None);
-        assert_eq!(
-            uptime_text(Some(5400.0), false).as_deref(),
-            Some("1 h 30 m")
-        );
-    }
-
-    #[test]
     fn video_vendor_knows_the_two_common_integrators() {
         assert_eq!(video_vendor(0x8086), Some("Intel"));
         assert_eq!(video_vendor(0x1002), Some("AMD"));
@@ -451,12 +408,16 @@ mod tests {
     #[test]
     fn battery_health_rounds_and_honours_the_limit() {
         assert_eq!(
-            battery_health_text(3_805_000, 3_650_000, Some(80)),
+            battery_health_text(Language::Ru, 3_805_000, 3_650_000, Some(80)),
             "104% от проектной · лимит 80%"
         );
         assert_eq!(
-            battery_health_text(3_650_000, 3_650_000, None),
+            battery_health_text(Language::Ru, 3_650_000, 3_650_000, None),
             "100% от проектной"
+        );
+        assert_eq!(
+            battery_health_text(Language::En, 3_650_000, 3_650_000, None),
+            "100% of design"
         );
     }
 

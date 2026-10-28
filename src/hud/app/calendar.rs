@@ -3,8 +3,11 @@ use std::sync::atomic::Ordering;
 use chrono::Datelike;
 
 use super::render::App;
+use super::strings::*;
 use super::text::TextRenderer;
 use super::ui::*;
+
+use crate::hud::i18n;
 
 pub trait CalendarView {
     fn render_clock(&mut self, pixmap: &mut tiny_skia::Pixmap, panel: &Panel, dy: f32);
@@ -21,13 +24,8 @@ impl CalendarView for App {
         let (year, month) = self.cal_month();
 
         let now = chrono::Local::now();
-        let date = format!(
-            "{}, {} {} {}",
-            WEEKDAYS_FULL[now.weekday().num_days_from_monday() as usize],
-            now.day(),
-            MONTHS_GEN[(now.month() - 1) as usize],
-            now.year()
-        );
+        let lang = self.settings.language;
+        let date = i18n::date_long(lang, now.date_naive());
         let dw = self.text_width(&date, 11.0);
         self.draw_text(
             pixmap,
@@ -50,7 +48,7 @@ impl CalendarView for App {
             dy,
             CLOCK_TITLE_H,
         );
-        let title_text = format!("{} {}", MONTHS_NOM[(month - 1) as usize], year);
+        let title_text = i18n::month_title(lang, year, month);
         self.draw_text(
             pixmap,
             &title_text,
@@ -78,17 +76,18 @@ impl CalendarView for App {
 
         let grid_x = ((w / k - (CAL_WEEK_W + 7.0 * CAL_COL_W)) / 2.0).max(PANEL_PAD);
         let wd_y = dy + (CLOCK_TITLE_H + CLOCK_DATE_H) * k;
-        let wn_w = self.text_width("№", 10.0);
+        let wn_w = self.text_width(week_number(lang), 10.0);
         self.draw_text(
             pixmap,
-            "№",
+            week_number(lang),
             10.0,
             p.text.with_a(0.45),
             grid_x * k + (CAL_WEEK_W * k - wn_w) / 2.0,
             wd_y,
             CAL_WD_H,
         );
-        for (i, name) in WEEKDAYS_SHORT.iter().enumerate() {
+        for i in 0..7 {
+            let name = i18n::weekday_short(lang, i);
             let tw = self.text_width(name, 10.0);
             let cell_x = (grid_x + CAL_WEEK_W + i as f32 * CAL_COL_W) * k;
             self.draw_text(
@@ -188,7 +187,8 @@ impl CalendarView for App {
         let pin_w = 20.0;
         let gap = 8.0;
         let (year, month) = self.cal_month();
-        let title = format!("{} {}", MONTHS_NOM[(month - 1) as usize], year);
+        let lang = self.settings.language;
+        let title = i18n::month_title(lang, year, month);
         let title_w = self.text_width(&title, SIZE + 1.0) / SCALE;
         let panel_w = self
             .popup

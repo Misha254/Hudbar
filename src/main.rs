@@ -167,7 +167,7 @@ fn main() {
         // в панели — одна и та же секунда, а раньше на каждый проход цикла
         // приходилось два чтения системных часов и два форматирования.
         let now_local = chrono::Local::now();
-        let now = now_local.format("%a, %d %b %H:%M").to_string();
+        let now = hud::i18n::clock_bar(app.settings.language, now_local);
         if now != app.clock {
             app.clock = now;
             app.shared.dirty.store(true, Ordering::Relaxed);

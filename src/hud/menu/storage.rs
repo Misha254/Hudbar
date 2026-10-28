@@ -27,7 +27,7 @@ use super::settings::Language;
 use super::settings_icons;
 use super::system::{
     CommandError, CommandRunner, CommandSpec, ProviderError, ProviderKey, SystemCommandRunner,
-    SystemProvider,
+    SystemProvider, provider_text,
 };
 use super::tree::Node;
 
@@ -104,13 +104,13 @@ pub struct Disk {
 
 impl Disk {
     /// Подпись в списке: модель, размер и транспорт.
-    pub fn title(&self) -> String {
+    pub fn title(&self, lang: Language) -> String {
         let mut parts = Vec::new();
         parts.push(match &self.model {
             Some(model) if !model.trim().is_empty() => model.trim().to_string(),
             _ => self.path.clone(),
         });
-        parts.push(human_size(self.size));
+        parts.push(human_size(self.size, lang));
         if let Some(transport) = self
             .transport
             .as_ref()
@@ -120,7 +120,14 @@ impl Disk {
             parts.push(transport.to_string());
         }
         if self.rotational {
-            parts.push("вращающийся".to_string());
+            parts.push(
+                if lang == Language::Ru {
+                    "вращающийся"
+                } else {
+                    "rotational"
+                }
+                .to_string(),
+            );
         }
         parts.join(" · ")
     }
@@ -173,7 +180,7 @@ pub fn fetch_nodes(lang: Language) -> Result<Vec<Node>, String> {
     let provider = StorageProvider;
     let snapshot = provider
         .fetch(&SystemCommandRunner::default())
-        .map_err(|error| error.message())?;
+        .map_err(|error| error.message_in(lang))?;
     Ok(provider.nodes(&snapshot, lang))
 }
 
@@ -303,15 +310,20 @@ fn number_field(entry: &serde_json::Value, path: &str) -> u64 {
         .unwrap_or_default()
 }
 
-/// Размер по-человечески: 447.1 ГиБ, а не 480103981056.
-pub fn human_size(bytes: u64) -> String {
-    const UNITS: [(&str, u64); 3] = [("ГиБ", 1 << 30), ("МиБ", 1 << 20), ("КиБ", 1 << 10)];
-    for (unit, step) in UNITS {
+/// Размер по-человечески: 447.1 ГиБ, а не 480103981056. Единицы зависят от
+/// языка окна: в английском это GiB/MiB/KiB.
+pub fn human_size(bytes: u64, lang: Language) -> String {
+    let (units, byte) = if lang == Language::Ru {
+        ([("ГиБ", 1 << 30), ("МиБ", 1 << 20), ("КиБ", 1 << 10)], "Б")
+    } else {
+        ([("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)], "B")
+    };
+    for (unit, step) in units {
         if bytes >= step {
             return format!("{:.1} {unit}", bytes as f64 / step as f64);
         }
     }
-    format!("{bytes} Б")
+    format!("{bytes} {byte}")
 }
 
 /// Команда отмонтирования: `udisksctl unmount -b /dev/sda1`.
@@ -357,6 +369,7 @@ fn status_row(lang: Language, snapshot: &StorageSnapshot) -> Node {
             .with_id(id);
         }
         Block::Failed(reason) => {
+            let reason = provider_text(lang, reason);
             return Node::info(
                 settings_icons::DOT,
                 &if ru(lang) {
@@ -394,7 +407,7 @@ fn disk_submenu(lang: Language, disk: &Disk) -> Node {
     ];
 
     for volume in &disk.volumes {
-        let mut title = format!("{} · {}", volume.path, human_size(volume.size));
+        let mut title = format!("{} · {}", volume.path, human_size(volume.size, lang));
         if let Some(fs) = &volume.fs {
             title.push_str(&format!(" · {fs}"));
         }
@@ -406,7 +419,10 @@ fn disk_submenu(lang: Language, disk: &Disk) -> Node {
             children.push(
                 Node::action(
                     settings_icons::MINUS,
-                    &format!("Размонтировать {}", volume.path),
+                    &match lang {
+                        Language::Ru => format!("Размонтировать {}", volume.path),
+                        Language::En => format!("Unmount {}", volume.path),
+                    },
                     unmount_action(&volume.path),
                 )
                 .with_id(&format!("{}/unmount", volume.row_id())),
@@ -429,7 +445,7 @@ fn disk_submenu(lang: Language, disk: &Disk) -> Node {
         );
     }
 
-    Node::submenu(settings_icons::HARD_DRIVE, &disk.title(), children).with_id(&disk.row_id())
+    Node::submenu(settings_icons::HARD_DRIVE, &disk.title(lang), children).with_id(&disk.row_id())
 }
 
 /// Строки раздела «Устройства» из готового снимка.
@@ -588,10 +604,12 @@ mod tests {
 
     #[test]
     fn sizes_are_human_readable() {
-        assert_eq!(human_size(480103981056), "447.1 ГиБ");
-        assert_eq!(human_size(536870912), "512.0 МиБ");
-        assert_eq!(human_size(1024), "1.0 КиБ");
-        assert_eq!(human_size(512), "512 Б");
+        assert_eq!(human_size(480103981056, Language::Ru), "447.1 ГиБ");
+        assert_eq!(human_size(536870912, Language::Ru), "512.0 МиБ");
+        assert_eq!(human_size(1024, Language::Ru), "1.0 КиБ");
+        assert_eq!(human_size(512, Language::Ru), "512 Б");
+        assert_eq!(human_size(480103981056, Language::En), "447.1 GiB");
+        assert_eq!(human_size(512, Language::En), "512 B");
     }
 
     #[test]
@@ -716,10 +734,7 @@ mod tests {
                 .any(|row| row.identity() == "storage/volume/dev/sdb1/unmount"),
             "и размонтировать смонтированный раздел"
         );
-        assert_eq!(
-            disk.title,
-            "DataTraveler 3.0 · 29.8 ГиБ · usb · вращающийся"
-        );
+        assert_eq!(disk.title, "DataTraveler 3.0 · 29.8 GiB · usb · rotational");
     }
 
     #[test]

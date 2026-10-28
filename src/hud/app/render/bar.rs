@@ -333,12 +333,13 @@ impl App {
                 c.bat = Some(pct);
             }
             let mut cells = vec![c];
-            if let Some(t) = &sys.bat_time {
+            if let Some((hours, minutes)) = sys.bat_time {
                 let mut dot = Cell::new("·".to_string(), p.text.with_a(0.3));
                 dot.pad_l = 3.0;
                 dot.pad_r = 3.0;
                 cells.push(dot);
-                let mut tc = Cell::new(t.clone(), p.text.with_a(0.9));
+                let time = crate::hud::i18n::duration_hm(self.settings.language, hours, minutes);
+                let mut tc = Cell::new(time, p.text.with_a(0.9));
                 tc.pad_l = 0.0;
                 tc.pad_r = 0.0;
                 cells.push(tc);

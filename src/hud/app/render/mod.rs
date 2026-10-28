@@ -28,6 +28,7 @@ use crate::hud::settings;
 use crate::hud::tray;
 
 use super::calendar::CalendarView;
+use super::strings::*;
 use super::text::TextRenderer;
 
 mod bar;

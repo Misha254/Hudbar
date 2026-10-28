@@ -55,7 +55,7 @@ fn battery_wh(p: &Path) -> Option<f32> {
     (wh > 0.0).then_some(wh as f32)
 }
 
-pub(super) fn bat_time_now() -> Option<String> {
+pub(super) fn bat_time_now() -> Option<(u64, u64)> {
     let rd = fs::read_dir("/sys/class/power_supply").ok()?;
     for e in rd.flatten() {
         let p = e.path();
@@ -78,7 +78,7 @@ fn charge_limit_pct(p: &Path) -> f64 {
         .unwrap_or(100.0)
 }
 
-fn bat_time(p: &Path, status: &str) -> Option<String> {
+fn bat_time(p: &Path, status: &str) -> Option<(u64, u64)> {
     if status != "Discharging" && status != "Charging" {
         return None;
     }
@@ -112,11 +112,7 @@ fn bat_time(p: &Path, status: &str) -> Option<String> {
     };
     let total_min = ((secs + 30.0) / 60.0) as u64;
     let (h, m) = (total_min / 60, total_min % 60);
-    Some(if h > 0 {
-        format!("{h}ч{m:02}м")
-    } else {
-        format!("{m}м")
-    })
+    Some((h, m))
 }
 
 fn proc_stat_cpu() -> Option<(u64, u64)> {

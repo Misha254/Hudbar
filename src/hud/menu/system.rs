@@ -465,14 +465,88 @@ pub enum ProviderError {
 impl ProviderError {
     /// Сообщение для строки меню: коротко и без жаргона.
     pub fn message(&self) -> String {
+        self.message_in(Language::Ru)
+    }
+
+    /// То же сообщение на языке окна. Причины недоступности и разбора
+    /// приходят из провайдеров строками, поэтому известные строки
+    /// переводятся здесь: у `fetch` нет языка, а показывать английскому
+    /// окну «нет nmcli» нельзя.
+    pub fn message_in(&self, lang: Language) -> String {
         match self {
-            ProviderError::Unavailable(reason) => reason.clone(),
-            ProviderError::Timeout { program, millis } => {
-                format!("{program} не ответил за {millis} мс")
+            ProviderError::Unavailable(reason) => unavailable_in(lang, reason),
+            ProviderError::Timeout { program, millis } => match lang {
+                Language::Ru => format!("{program} не ответил за {millis} мс"),
+                Language::En => format!("{program} did not respond in {millis} ms"),
+            },
+            ProviderError::Command { program, message } => {
+                format!("{program}: {message}")
             }
-            ProviderError::Command { program, message } => format!("{program}: {message}"),
-            ProviderError::Parse(message) => message.clone(),
+            ProviderError::Parse(message) => parse_in(lang, message),
         }
+    }
+}
+
+/// Причина недоступности на языке окна. Незнакомую строку оставляем как
+/// есть: она может прийти от системы или из теста, и терять её нельзя.
+fn unavailable_in(lang: Language, reason: &str) -> String {
+    if lang == Language::Ru {
+        return reason.to_string();
+    }
+    match reason {
+        "нет nmcli" => "nmcli not found",
+        "нет niri" => "niri not found",
+        "нет lsblk" => "lsblk not found",
+        "нет bluetoothctl" => "bluetoothctl not found",
+        "нет ни wpctl, ни pactl" => "neither wpctl nor pactl",
+        "нет демона" => "no daemon",
+        "нет адаптера" => "no adapter",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Ошибка разбора: известные сообщения провайдеров переводятся, остальные
+/// остаются как есть.
+fn parse_in(lang: Language, message: &str) -> String {
+    if lang == Language::Ru {
+        return message.to_string();
+    }
+    match message {
+        "не разобран вывод wpctl" => "could not parse wpctl output",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Текст технической ошибки блока (`Block::Failed`) на языке окна. Причины
+/// складываются в снимок до того, как окно узнаёт язык, поэтому известные
+/// обороты переводятся при отрисовке. Незнакомый текст (stderr программы)
+/// остаётся как есть: он и в русском окне был английским.
+pub fn provider_text(lang: Language, raw: &str) -> String {
+    if lang == Language::Ru {
+        return raw.to_string();
+    }
+    if let Some((program, rest)) = raw.split_once(" не ответил за ")
+        && let Some(millis) = rest.strip_suffix(" мс")
+    {
+        return format!("{program} did not respond in {millis} ms");
+    }
+    if let Some(rest) = raw.strip_prefix("не запустился: ") {
+        return format!("did not start: {rest}");
+    }
+    for (ru_suffix, en_suffix) in [
+        (": не разобрано", ": not parsed"),
+        (": непонятный ответ", ": unexpected response"),
+        (": команда не сработала", ": command failed"),
+    ] {
+        if let Some(head) = raw.strip_suffix(ru_suffix) {
+            return format!("{head}{en_suffix}");
+        }
+    }
+    match raw {
+        "не отвечает" => "not responding".to_string(),
+        _ => raw.to_string(),
     }
 }
 
@@ -1113,5 +1187,40 @@ mod tests {
         assert_eq!(loading_title(Language::En), "Loading…");
         assert_eq!(refresh_title(Language::En), "Refresh");
         assert!(!empty_title(Language::En).is_empty());
+    }
+
+    /// Ошибки провайдеров говорят на языке окна: причина недоступности,
+    /// timeout и известные обороты блока `Failed`.
+    #[test]
+    fn provider_errors_speak_the_window_language() {
+        let unavailable = ProviderError::Unavailable("нет nmcli".to_string());
+        assert_eq!(unavailable.message(), "нет nmcli");
+        assert_eq!(unavailable.message_in(Language::En), "nmcli not found");
+
+        let timeout = ProviderError::Timeout {
+            program: "niri".to_string(),
+            millis: 2000,
+        };
+        assert_eq!(
+            timeout.message_in(Language::Ru),
+            "niri не ответил за 2000 мс"
+        );
+        assert_eq!(
+            timeout.message_in(Language::En),
+            "niri did not respond in 2000 ms"
+        );
+
+        assert_eq!(
+            provider_text(Language::En, "pactl: команда не сработала"),
+            "pactl: command failed"
+        );
+        assert_eq!(
+            provider_text(Language::En, "wpctl: не разобрано"),
+            "wpctl: not parsed"
+        );
+        assert_eq!(
+            provider_text(Language::Ru, "pactl: команда не сработала"),
+            "pactl: команда не сработала"
+        );
     }
 }

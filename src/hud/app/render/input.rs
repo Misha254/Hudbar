@@ -251,7 +251,7 @@ impl App {
                     let idx = ((y - y0) / PANEL_ROW) as usize;
                     let rows = self.av_devices();
                     if let Some((label, _, _, node)) = rows.get(idx)
-                        && !is_hint(label)
+                        && !is_hint(label, self.settings.language)
                         && !node.is_empty()
                     {
                         let is_sink = matches!(kind, PanelKind::Volume);
@@ -279,32 +279,27 @@ impl App {
         let Some((label, _, _)) = rows.get(idx) else {
             return;
         };
-        if is_hint(label) {
+        if is_hint(label, self.settings.language) {
             return;
         }
         let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
         match kind {
             PanelKind::Control => {
-                let rows = self.control_rows();
-                let idx = ((y - PANEL_HEADER) / PANEL_ROW) as usize;
-                let Some((action, _, _)) = rows.get(idx) else {
-                    return;
-                };
-                let action = action.as_str();
-                match action {
-                    "Wi-Fi" => data::wifi_radio(&self.shared, !self.radio_state(PanelKind::Wifi)),
-                    "Bluetooth" => data::bt_power(&self.shared, !self.radio_state(PanelKind::Bt)),
-                    "DND" => crate::hud::actions::dnd_toggle(),
-                    "Звук" => crate::hud::actions::vol_mute_toggle(&self.shared),
-                    "Микрофон" => crate::hud::actions::mic_mute_toggle(&self.shared),
+                // Индекс строки, а не подпись: подписи зависят от языка, и
+                // сравнение по тексту ломалось бы в английском окне. Порядок
+                // совпадает с `control_rows`.
+                match idx {
+                    0 => data::wifi_radio(&self.shared, !self.radio_state(PanelKind::Wifi)),
+                    1 => data::bt_power(&self.shared, !self.radio_state(PanelKind::Bt)),
+                    2 => crate::hud::actions::dnd_toggle(),
+                    3 => crate::hud::actions::vol_mute_toggle(&self.shared),
+                    4 => crate::hud::actions::mic_mute_toggle(&self.shared),
                     // Раньше это открывало rofi-пикер из `wall.sh`. Теперь
                     // выбор обоев — своё окно HUDbar, а `wall.sh` остался
                     // только применением (awww + matugen).
-                    "Обои" => crate::hud::actions::spawn("hud-wallpaper"),
-                    "Питание" => {
-                        crate::hud::actions::spawn_with_args("hud-menu", &["power"])
-                    }
-                    "Блокировка" => crate::hud::actions::spawn("dynalock.sh"),
+                    5 => crate::hud::actions::spawn("hud-wallpaper"),
+                    6 => crate::hud::actions::spawn_with_args("hud-menu", &["power"]),
+                    7 => crate::hud::actions::spawn("dynalock.sh"),
                     _ => {}
                 }
                 self.close_panel();

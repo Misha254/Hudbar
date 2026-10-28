@@ -47,6 +47,66 @@ pub const REGIONS: [(&str, &str); 7] = [
     ("🇯🇵", "Япония"),
 ];
 
+/// Название страны на языке окна. В [`REGIONS`] оно хранится по-русски как
+/// ключ фильтра, но в списке узлов показывается на языке окна.
+fn region_label(lang: Language, country: &str) -> &str {
+    if lang == Language::Ru {
+        return country;
+    }
+    match country {
+        "Норвегия" => "Norway",
+        "Швеция" => "Sweden",
+        "Дания" => "Denmark",
+        "Финляндия" => "Finland",
+        "Исландия" => "Iceland",
+        "США" => "USA",
+        "Япония" => "Japan",
+        other => other,
+    }
+}
+
+/// Текст ошибки контроллера на языке окна. Ошибки складываются в снимок до
+/// того, как окно узнаёт язык, поэтому известные обороты переводятся здесь.
+fn error_text(lang: Language, raw: &str) -> String {
+    if lang == Language::Ru {
+        return raw.to_string();
+    }
+    match raw {
+        "таймаут" => return "timeout".to_string(),
+        "адрес не отвечает" => return "address does not respond".to_string(),
+        "адрес не разобран: нет адресов" => {
+            return "address not resolved: no addresses".to_string();
+        }
+        "адрес контроллера должен быть loopback" => {
+            return "controller address must be loopback".to_string();
+        }
+        "в ответе нет поля now" => return "response has no 'now' field".to_string(),
+        "в ответе нет поля all" => return "response has no 'all' field".to_string(),
+        _ => {}
+    }
+    for (ru_prefix, en_prefix) in [
+        ("контроллер не отвечает: ", "controller does not respond: "),
+        ("адрес не разобран: ", "address not resolved: "),
+        ("запись запроса: ", "writing request: "),
+        ("чтение ответа: ", "reading response: "),
+        ("список серверов: ", "server list: "),
+        ("серверы: ", "servers: "),
+    ] {
+        if let Some(rest) = raw.strip_prefix(ru_prefix) {
+            return format!("{en_prefix}{}", error_text(lang, rest));
+        }
+    }
+    if let Some(head) = raw.strip_suffix(": в ответе нет поля now") {
+        return format!("{head}: response has no 'now' field");
+    }
+    if let Some(rest) = raw.strip_prefix("ответ больше ")
+        && let Some(size) = rest.strip_suffix(" байт")
+    {
+        return format!("response exceeds {size} bytes");
+    }
+    raw.to_string()
+}
+
 /// Идентификатор строки узла. Само название и есть личность строки: после
 /// перечитывания списка выбранный узел должен остаться выбранным, а не съехать
 /// на другую строку.
@@ -388,17 +448,19 @@ pub fn fetch_nodes(lang: Language) -> Result<Vec<Node>, String> {
 /// а текущий сервер отмечен галочкой внутри папки серверов.
 pub fn nodes(snapshot: &VpnSnapshot, lang: Language) -> Vec<Node> {
     if !snapshot.reachable {
+        let error = error_text(lang, &snapshot.error);
         let title = match lang {
-            Language::Ru => format!("Mihomo не отвечает: {}", snapshot.error),
-            Language::En => format!("Mihomo unreachable: {}", snapshot.error),
+            Language::Ru => format!("Mihomo не отвечает: {error}"),
+            Language::En => format!("Mihomo unreachable: {error}"),
         };
         return vec![Node::info(settings_icons::NETWORK, &title)];
     }
     let mut rows = vec![status_row(snapshot, lang)];
     if !snapshot.error.is_empty() {
+        let error = error_text(lang, &snapshot.error);
         let title = match lang {
-            Language::Ru => format!("Ошибка: {}", snapshot.error),
-            Language::En => format!("Error: {}", snapshot.error),
+            Language::Ru => format!("Ошибка: {error}"),
+            Language::En => format!("Error: {error}"),
         };
         rows.push(Node::info(settings_icons::DOT, &title).with_id("vpn/error"));
     }
@@ -466,7 +528,7 @@ fn servers_section(snapshot: &VpnSnapshot, lang: Language) -> Node {
         .servers
         .iter()
         .map(|node| {
-            let label = format!("{} {}", node.country, node.name);
+            let label = format!("{} {}", region_label(lang, node.country), node.name);
             let icon = if node.name == snapshot.selected {
                 settings_icons::CHECK
             } else {
@@ -928,7 +990,7 @@ mod tests {
 
         assert_eq!(servers.len(), 5);
         assert!(
-            servers[0].title.starts_with("Норвегия"),
+            servers[0].title.starts_with("Norway"),
             "{}",
             servers[0].title
         );
@@ -957,5 +1019,36 @@ mod tests {
         assert!(!snapshot.reachable);
         assert_eq!(snapshot.mode(), None);
         assert_eq!(snapshot.error, "таймаут");
+    }
+
+    /// В английском окне страна и причина сбоя переводятся, а имя узла из
+    /// Mihomo остаётся как есть: это данные пользователя.
+    #[test]
+    fn english_rows_translate_countries_and_errors() {
+        let (_, servers) = members().expect("список");
+        let snapshot = snapshot(
+            Ok("v1.19.31".to_string()),
+            selectors(),
+            [None, None],
+            Ok(("[Q] 🇳🇴 Норвегия".to_string(), servers)),
+        );
+        let rows = nodes(&snapshot, Language::En);
+        let folder = rows.iter().find(|row| row.id == "vpn/servers").unwrap();
+        assert!(
+            folder.children().unwrap()[0].title.starts_with("Norway"),
+            "{}",
+            folder.children().unwrap()[0].title
+        );
+
+        let failed = nodes(&VpnSnapshot::failed("таймаут"), Language::En);
+        assert_eq!(failed[0].title, "Mihomo unreachable: timeout");
+        assert_eq!(
+            error_text(Language::En, "серверы: в ответе нет поля now"),
+            "servers: response has no 'now' field"
+        );
+        assert_eq!(
+            error_text(Language::En, "контроллер не отвечает: таймаут"),
+            "controller does not respond: timeout"
+        );
     }
 }

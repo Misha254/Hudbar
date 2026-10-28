@@ -176,22 +176,50 @@ pub enum Patch {
 impl Patch {
     /// Описание поля для строки статуса.
     pub fn label(&self) -> String {
+        self.label_in(Language::Ru)
+    }
+
+    /// То же описание на языке окна. Отдельный метод, потому что `label()`
+    /// остаётся для журнала и старых тестов: журнал пишется по-русски.
+    pub fn label_in(&self, lang: Language) -> String {
+        let on_off = |on: bool| {
+            if on {
+                if lang == Language::Ru { "вкл" } else { "on" }
+            } else if lang == Language::Ru {
+                "выкл"
+            } else {
+                "off"
+            }
+        };
         match self {
             Patch::ModuleVisible { module, on } => {
-                format!("{}: {}", module.key(), if *on { "вкл" } else { "выкл" })
+                format!("{}: {}", module.key(), on_off(*on))
             }
-            Patch::ModuleOrder(_) => "порядок модулей".to_string(),
-            Patch::ControlButton(on) => {
-                format!(
-                    "кнопка Control Center: {}",
-                    if *on { "вкл" } else { "выкл" }
-                )
-            }
-            Patch::Height(height) => format!("высота: {height} px"),
-            Patch::Language(language) => format!("язык: {}", language.key()),
-            Patch::Notifications { .. } => "уведомления".to_string(),
+            Patch::ModuleOrder(_) => match lang {
+                Language::Ru => "порядок модулей".to_string(),
+                Language::En => "module order".to_string(),
+            },
+            Patch::ControlButton(on) => match lang {
+                Language::Ru => format!("кнопка Control Center: {}", on_off(*on)),
+                Language::En => format!("Control Center button: {}", on_off(*on)),
+            },
+            Patch::Height(height) => match lang {
+                Language::Ru => format!("высота: {height} px"),
+                Language::En => format!("height: {height} px"),
+            },
+            Patch::Language(language) => match lang {
+                Language::Ru => format!("язык: {}", language.key()),
+                Language::En => format!("language: {}", language.key()),
+            },
+            Patch::Notifications { .. } => match lang {
+                Language::Ru => "уведомления".to_string(),
+                Language::En => "notifications".to_string(),
+            },
             Patch::Osd { .. } => "OSD".to_string(),
-            Patch::Animations { .. } => "Анимации".to_string(),
+            Patch::Animations { .. } => match lang {
+                Language::Ru => "Анимации".to_string(),
+                Language::En => "Animations".to_string(),
+            },
         }
     }
 

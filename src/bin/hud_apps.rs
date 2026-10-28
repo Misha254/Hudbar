@@ -81,6 +81,9 @@ mod canvas;
 #[path = "../hud/geom.rs"]
 mod geom;
 #[allow(dead_code)]
+#[path = "../hud/i18n.rs"]
+mod i18n;
+#[allow(dead_code)]
 #[path = "../hud/layer.rs"]
 mod layer;
 #[allow(dead_code)]
@@ -233,7 +236,7 @@ impl AppsApp {
         let Some(app) = self.model.selected_app().cloned() else {
             return;
         };
-        match launch::launch(&app) {
+        match launch::launch(&app, self.model.lang()) {
             Ok(()) => self.close(),
             Err(error) => self.model.set_status(error),
         }

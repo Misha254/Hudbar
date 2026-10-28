@@ -337,7 +337,9 @@ impl Menu {
                 // живут в меню. Статус — подтверждение, уровень покажет
                 // «Загрузка…» до ответа worker-потока.
                 self.refresh_dynamic(key);
-                self.status = Some(Status::Applied(Action::RefreshDynamic(key).describe()));
+                self.status = Some(Status::Applied(
+                    Action::RefreshDynamic(key).describe(self.lang),
+                ));
                 Outcome::Changed
             }
             ItemKind::Action(action @ (Action::VpnMode(_) | Action::VpnNode(_))) => {
@@ -348,7 +350,7 @@ impl Menu {
                 self.refresh_dynamic(ProviderKey::VPN);
                 match result {
                     Ok(()) => {
-                        self.status = Some(Status::Applied(action.describe()));
+                        self.status = Some(Status::Applied(action.describe(self.lang)));
                         Outcome::Changed
                     }
                     Err(error) => {
@@ -404,7 +406,7 @@ impl Menu {
             }
             ItemKind::Action(action) => match (self.action_runner)(&action) {
                 Ok(()) => {
-                    self.status = Some(Status::Applied(action.describe()));
+                    self.status = Some(Status::Applied(action.describe(self.lang)));
                     Outcome::Changed
                 }
                 Err(error) => {
@@ -445,7 +447,7 @@ impl Menu {
         };
         match (self.action_runner)(&Action::MoveModule { module, delta }) {
             Ok(()) => {
-                self.status = Some(Status::Applied(action.describe()));
+                self.status = Some(Status::Applied(action.describe(self.lang)));
                 self.after_change();
                 Outcome::Changed
             }

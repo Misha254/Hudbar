@@ -17,7 +17,7 @@
 
 use super::super::config_io::Patch;
 use super::super::log;
-use super::super::settings::Module;
+use super::super::settings::{Language, Module};
 use super::system::{CommandOutput, CommandRunner, CommandSpec, ProviderKey};
 
 /// Операции без внешней команды: их исполняет сам HUDbar.
@@ -37,14 +37,14 @@ impl Native {
                     } else {
                         format!("Power: failed ({error})")
                     };
-                    Self::notify(&text);
+                    Self::notify(&text, ru);
                     error
                 })?;
                 // Уведомление шлёт сама операция, а не вызывающий: профиль
                 // переключают и строкой меню, и биндом через `--action`, и во
                 // втором случае показывать статус некуда — человек узнал бы о
                 // смене только из уведомления.
-                Self::notify(&Self::status(profile, ru));
+                Self::notify(&Self::status(profile, ru), ru);
                 Ok(())
             }
         }
@@ -52,12 +52,13 @@ impl Native {
 
     /// Уведомление dunst о результате операции. Сбой тоже показываем: молча
     /// переключившийся профиль хуже, чем явная ошибка.
-    fn notify(text: &str) {
+    fn notify(text: &str, ru: bool) {
         let (summary, body) = match text.split_once(": ") {
             Some((summary, body)) => (summary, body),
-            None => ("Power", text),
+            None => (if ru { "Питание" } else { "Power" }, text),
         };
-        super::super::log::status("dunstify", &["-a", "Питание", summary, body]);
+        let app = if ru { "Питание" } else { "Power" };
+        super::super::log::status("dunstify", &["-a", app, summary, body]);
     }
 
     /// Что показать в статусе: новое значение операции, а не её имя.
@@ -86,13 +87,44 @@ pub enum Live {
 
 impl Live {
     /// Короткое имя операции: попадает в статус и в подсказку снапшота.
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self, lang: Language) -> &'static str {
+        let ru = lang == Language::Ru;
         match self {
-            Live::DndToggle => "Не беспокоить",
-            Live::VolMuteToggle => "Звук",
-            Live::MicMuteToggle => "Микрофон",
-            Live::WifiRadio(true) => "Wi-Fi вкл",
-            Live::WifiRadio(false) => "Wi-Fi выкл",
+            Live::DndToggle => {
+                if ru {
+                    "Не беспокоить"
+                } else {
+                    "Do not disturb"
+                }
+            }
+            Live::VolMuteToggle => {
+                if ru {
+                    "Звук"
+                } else {
+                    "Sound"
+                }
+            }
+            Live::MicMuteToggle => {
+                if ru {
+                    "Микрофон"
+                } else {
+                    "Microphone"
+                }
+            }
+            Live::WifiRadio(true) => {
+                if ru {
+                    "Wi-Fi вкл"
+                } else {
+                    "Wi-Fi on"
+                }
+            }
+            Live::WifiRadio(false) => {
+                if ru {
+                    "Wi-Fi выкл"
+                } else {
+                    "Wi-Fi off"
+                }
+            }
         }
     }
 
@@ -215,27 +247,39 @@ pub enum Action {
 impl Action {
     /// Короткое описание для подвала и статуса: не программистское, а то, что
     /// видит человек.
-    pub fn describe(&self) -> String {
+    pub fn describe(&self, lang: Language) -> String {
         match self {
-            Action::Patch(patch) => patch.label(),
-            Action::Live(live) => live.label().to_string(),
+            Action::Patch(patch) => patch.label_in(lang),
+            Action::Live(live) => live.label(lang).to_string(),
             Action::Native(Native::PowerProfileCycle) => {
-                crate::power_profile::current_label(true).to_string()
+                crate::power_profile::current_label(lang == Language::Ru).to_string()
             }
             Action::Run(program, _) | Action::Spawn(program, _) => (*program).to_string(),
             Action::Niri(args) => format!("niri {}", args.join(" ")),
-            Action::Back => "Отмена".to_string(),
-            Action::RestartHudbar => "Перезапуск панели".to_string(),
-            Action::MoveModule { .. } => "порядок модулей".to_string(),
+            Action::Back => match lang {
+                Language::Ru => "Отмена".to_string(),
+                Language::En => "Cancel".to_string(),
+            },
+            Action::RestartHudbar => match lang {
+                Language::Ru => "Перезапуск панели".to_string(),
+                Language::En => "Restart panel".to_string(),
+            },
+            Action::MoveModule { .. } => match lang {
+                Language::Ru => "порядок модулей".to_string(),
+                Language::En => "module order".to_string(),
+            },
             Action::RefreshAndRun { command, .. } => command.program().to_string(),
             Action::RefreshAndRunAll { commands, .. } => commands
                 .first()
                 .map(CommandSpec::program)
                 .unwrap_or_default()
                 .to_string(),
-            Action::RefreshDynamic(_) => "Обновить".to_string(),
+            Action::RefreshDynamic(_) => match lang {
+                Language::Ru => "Обновить".to_string(),
+                Language::En => "Refresh".to_string(),
+            },
             Action::SecretInput(target) => target.subject().to_string(),
-            Action::VpnMode(mode) => mode.label(super::super::settings::Language::Ru).to_string(),
+            Action::VpnMode(mode) => mode.label(lang).to_string(),
             Action::VpnNode(name) => name.clone(),
         }
     }
@@ -627,13 +671,24 @@ mod tests {
 
     #[test]
     fn descriptions_are_human_readable() {
-        assert_eq!(Action::Live(Live::DndToggle).describe(), "Не беспокоить");
-        assert_eq!(Action::Run("wall.sh", &["--random"]).describe(), "wall.sh");
         assert_eq!(
-            Action::Niri(&["msg", "action", "screenshot", "screen"]).describe(),
+            Action::Live(Live::DndToggle).describe(Language::Ru),
+            "Не беспокоить"
+        );
+        assert_eq!(
+            Action::Live(Live::DndToggle).describe(Language::En),
+            "Do not disturb"
+        );
+        assert_eq!(
+            Action::Run("wall.sh", &["--random"]).describe(Language::Ru),
+            "wall.sh"
+        );
+        assert_eq!(
+            Action::Niri(&["msg", "action", "screenshot", "screen"]).describe(Language::Ru),
             "niri msg action screenshot screen"
         );
-        assert_eq!(restart_hudbar().describe(), "Перезапуск панели");
+        assert_eq!(restart_hudbar().describe(Language::Ru), "Перезапуск панели");
+        assert_eq!(restart_hudbar().describe(Language::En), "Restart panel");
     }
 
     #[test]
@@ -675,9 +730,9 @@ mod tests {
             Action::RefreshDynamic(super::super::system::ProviderKey::AUDIO).command(),
             None
         );
-        assert_eq!(refresh_action().describe(), "wpctl");
+        assert_eq!(refresh_action().describe(Language::Ru), "wpctl");
         assert_eq!(
-            Action::RefreshDynamic(super::super::system::ProviderKey::AUDIO).describe(),
+            Action::RefreshDynamic(super::super::system::ProviderKey::AUDIO).describe(Language::Ru),
             "Обновить"
         );
     }
@@ -760,7 +815,11 @@ mod tests {
         );
 
         assert!(!action().closes_menu(), "меню остаётся открытым");
-        assert_eq!(action().describe(), "niri", "описание — по первой команде");
+        assert_eq!(
+            action().describe(Language::Ru),
+            "niri",
+            "описание — по первой команде"
+        );
         assert_eq!(action().command(), None, "имя команды статическое — нет");
 
         // Команда, которая не выполнилась, останавливает цепочку: следующая

@@ -30,7 +30,7 @@ use super::settings::Language;
 use super::settings_icons;
 use super::system::{
     CommandError, CommandRunner, CommandSpec, ProviderError, ProviderKey, SecretData,
-    SystemCommandRunner, SystemProvider,
+    SystemCommandRunner, SystemProvider, provider_text,
 };
 use super::tree::Node;
 use std::time::Duration;
@@ -198,7 +198,7 @@ pub fn fetch_nodes(lang: Language) -> Result<Vec<Node>, String> {
     let provider = WifiProvider;
     let snapshot = provider
         .fetch(&SystemCommandRunner::default())
-        .map_err(|error| error.message())?;
+        .map_err(|error| error.message_in(lang))?;
     Ok(provider.nodes(&snapshot, lang))
 }
 
@@ -796,7 +796,7 @@ pub fn build_nodes(snapshot: &WifiSnapshot, lang: Language) -> Vec<Node> {
 }
 
 /// Недоступный блок как строка: пустой раздел не молчит.
-fn error_row(_lang: Language, snapshot: &WifiSnapshot) -> Option<Node> {
+fn error_row(lang: Language, snapshot: &WifiSnapshot) -> Option<Node> {
     let reason = match (&snapshot.radio, &snapshot.device, &snapshot.networks) {
         (Block::Failed(reason), _, _) => ("nmcli radio", reason),
         (_, Block::Failed(reason), _) => ("nmcli device", reason),
@@ -806,7 +806,11 @@ fn error_row(_lang: Language, snapshot: &WifiSnapshot) -> Option<Node> {
     Some(
         Node::info(
             settings_icons::DOT,
-            &format!("{}: {}", reason.0, first_line(reason.1)),
+            &format!(
+                "{}: {}",
+                reason.0,
+                first_line(&provider_text(lang, reason.1))
+            ),
         )
         .with_id("wifi/error"),
     )

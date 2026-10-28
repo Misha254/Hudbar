@@ -1903,7 +1903,7 @@ mod tests {
                 panic!("пункт не действие: {:?}", node.kind);
             };
             assert!(action.closes_menu(), "окно обоев закрывает меню");
-            assert_eq!(action.describe(), expected, "окно={picker}");
+            assert_eq!(action.describe(Language::Ru), expected, "окно={picker}");
         }
     }
 
@@ -1933,5 +1933,54 @@ mod tests {
         let frame = menu.frame();
         let titles: Vec<&str> = frame.items.iter().map(|item| item.title.as_str()).collect();
         assert_eq!(titles, ["Язык", "Схема matugen"]);
+    }
+
+    /// В английском дереве не должно оставаться кириллицы: подписи приходят
+    /// из словаря, а не из русского текста по умолчанию. Исключение — название
+    /// языка в списке выбора: «Русский» пишется на самом языке.
+    #[test]
+    fn english_tree_has_no_russian_labels() {
+        use super::super::tree::{Node, NodeKind, ValueSource};
+
+        fn is_cyrillic(text: &str) -> bool {
+            text.chars().any(|c| matches!(c, 'А'..='я' | 'Ё' | 'ё'))
+        }
+
+        fn walk(nodes: &[Node], path: &str, bad: &mut Vec<String>) {
+            for node in nodes {
+                let here = format!("{path} › {}", node.title);
+                if is_cyrillic(&node.title) {
+                    bad.push(format!("title {here}"));
+                }
+                if let Some(crumb) = &node.crumb
+                    && is_cyrillic(crumb)
+                {
+                    bad.push(format!("crumb {here}: {crumb}"));
+                }
+                match &node.kind {
+                    NodeKind::Submenu(children) => walk(children, &here, bad),
+                    NodeKind::Choice { options, .. } => {
+                        for option in *options {
+                            if *option != "Русский" && is_cyrillic(option) {
+                                bad.push(format!("option {here}: {option}"));
+                            }
+                        }
+                    }
+                    NodeKind::Number { unit, .. } if is_cyrillic(unit) => {
+                        bad.push(format!("unit {here}: {unit}"));
+                    }
+                    _ => {}
+                }
+                if let Some(ValueSource::Text(text)) = &node.value
+                    && is_cyrillic(text)
+                {
+                    bad.push(format!("value {here}: {text}"));
+                }
+            }
+        }
+
+        let mut bad = Vec::new();
+        walk(&tree_in(Language::En), "HUD", &mut bad);
+        assert!(bad.is_empty(), "русские подписи в EN-дереве: {bad:#?}");
     }
 }

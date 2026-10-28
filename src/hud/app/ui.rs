@@ -97,52 +97,6 @@ pub const CAL_COL_W: f32 = 26.0;
 pub const CAL_WEEK_W: f32 = 22.0;
 pub const WX_H: u32 = 244;
 
-pub const MONTHS_NOM: [&str; 12] = [
-    "Январь",
-    "Февраль",
-    "Март",
-    "Апрель",
-    "Май",
-    "Июнь",
-    "Июль",
-    "Август",
-    "Сентябрь",
-    "Октябрь",
-    "Ноябрь",
-    "Декабрь",
-];
-pub const MONTHS_GEN: [&str; 12] = [
-    "января",
-    "февраля",
-    "марта",
-    "апреля",
-    "мая",
-    "июня",
-    "июля",
-    "августа",
-    "сентября",
-    "октября",
-    "ноября",
-    "декабря",
-];
-pub const WEEKDAYS_FULL: [&str; 7] = [
-    "Понедельник",
-    "Вторник",
-    "Среда",
-    "Четверг",
-    "Пятница",
-    "Суббота",
-    "Воскресенье",
-];
-pub const WEEKDAYS_SHORT: [&str; 7] = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
-
-pub fn is_hint(label: &str) -> bool {
-    label.starts_with("Поиск")
-        || label.starts_with("Нет")
-        || label.starts_with("Выключено")
-        || label.starts_with("Ошибка")
-}
-
 pub fn cal_next_month(year: i32, month: u32) -> Option<chrono::NaiveDate> {
     if month == 12 {
         chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1)
