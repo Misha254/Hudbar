@@ -806,6 +806,72 @@ fn has_devices_menu() -> bool {
 }
 
 /// Раздел системы: живые переключатели и быстрые скрипты.
+/// «Питание» в «Системе»: простой экрана, сон ноутбука и профиль питания
+/// одной строкой. Три отдельных пункта подряд занимали половину уровня и
+/// читались как разрозненные настройки, хотя все они про энергию. Значение
+/// справа — текущий профиль, если он вообще доступен на машине.
+fn power_group(lang: Language) -> Node {
+    let t = |ru: &'static str, en: &'static str| match lang {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    let mut group = Node::submenu(
+        settings_icons::BATTERY,
+        t("Питание", "Power"),
+        vec![
+            Node::number(
+                settings_icons::PANEL_MONITOR,
+                t("Экран гаснет", "Screen off"),
+                (IDLE_SCREEN_OFF_MIN_SECONDS / 60) as f32,
+                (IDLE_SCREEN_OFF_MAX_SECONDS / 60) as f32,
+                1.0,
+                t(" мин", " min"),
+                values::idle_screen_off,
+                values::set_idle_screen_off,
+            )
+            .with_id("system/idle-screen-off")
+            .search_as(&["screen", "idle", "экран", "гаснет", "простой"]),
+            Node::number(
+                settings_icons::SLEEP,
+                t("Сон ноутбука", "Suspend after"),
+                (IDLE_SUSPEND_MIN_SECONDS / 60) as f32,
+                (IDLE_SUSPEND_MAX_SECONDS / 60) as f32,
+                1.0,
+                t(" мин", " min"),
+                values::idle_suspend,
+                values::set_idle_suspend,
+            )
+            .with_id("system/idle-suspend")
+            .search_as(&["sleep", "suspend", "сон", "спать", "простой"]),
+            Node::action(
+                settings_icons::BATTERY,
+                t("Режим питания", "Power profile"),
+                Action::Native(super::action::Native::PowerProfileCycle),
+            )
+            .with_value(power_profile_value)
+            .with_id("system/power-profile")
+            .when(has_power_profile)
+            .search_as(&["power", "питание", "профиль", "battery"]),
+        ],
+    )
+    .with_id("system/power")
+    .search_as(&[
+        "power",
+        "питание",
+        "энергия",
+        "idle",
+        "простой",
+        "сон",
+        "экран",
+    ]);
+    // Без профиля питания строка справа показывала бы «Неизвестно»: значение
+    // есть только там, где сервис действительно отвечает.
+    if has_power_profile() {
+        group = group.with_value(power_profile_value);
+    }
+    group
+}
+
 fn system_section(lang: Language) -> Node {
     let (title, kw) = match lang {
         Language::Ru => ("Система", &["system", "система"]),
@@ -834,39 +900,7 @@ fn system_section(lang: Language) -> Node {
         )
         .with_id("system/coffee")
         .search_as(&["coffee", "кофе", "caffeine"]),
-        Node::number(
-            settings_icons::PANEL_MONITOR,
-            t("Экран гаснет, мин", "Screen off, min"),
-            (IDLE_SCREEN_OFF_MIN_SECONDS / 60) as f32,
-            (IDLE_SCREEN_OFF_MAX_SECONDS / 60) as f32,
-            1.0,
-            t(" мин", " min"),
-            values::idle_screen_off,
-            values::set_idle_screen_off,
-        )
-        .with_id("system/idle-screen-off")
-        .search_as(&["screen", "idle", "экран", "гаснет", "простой"]),
-        Node::number(
-            settings_icons::SLEEP,
-            t("Сон ноутбука, мин", "Suspend after, min"),
-            (IDLE_SUSPEND_MIN_SECONDS / 60) as f32,
-            (IDLE_SUSPEND_MAX_SECONDS / 60) as f32,
-            1.0,
-            t(" мин", " min"),
-            values::idle_suspend,
-            values::set_idle_suspend,
-        )
-        .with_id("system/idle-suspend")
-        .search_as(&["sleep", "suspend", "сон", "спать", "простой"]),
-        Node::action(
-            settings_icons::BATTERY,
-            t("Режим питания", "Power profile"),
-            Action::Native(super::action::Native::PowerProfileCycle),
-        )
-        .with_value(power_profile_value)
-        .with_id("system/power-profile")
-        .when(has_power_profile)
-        .search_as(&["power", "питание", "профиль", "battery"]),
+        power_group(lang),
         updates_group(lang),
     ];
     // «Конфиги» дописываются отдельно: целей может не оказаться вовсе, и
@@ -1428,6 +1462,71 @@ mod tests {
                 visible,
                 has_audio(),
                 "видимость входа обязана совпадать с наличием wpctl/pactl"
+            );
+        }
+    }
+
+    /// Три настройки энергии собраны в одно подменю «Питание»: простой
+    /// экрана, сон и профиль. В самом разделе «Система» их строк больше нет —
+    /// иначе группа дублировалась бы тремя пунктами подряд.
+    #[test]
+    fn power_group_keeps_idle_and_profile_rows_together() {
+        for lang in [Language::Ru, Language::En] {
+            let system = tree_in(lang)
+                .into_iter()
+                .find(|node| node.identity() == "Система" || node.identity() == "System")
+                .expect("раздел «Система»");
+            let children = system.children().expect("у раздела есть дети");
+            for id in ["system/idle-screen-off", "system/idle-suspend"] {
+                assert!(
+                    !children.iter().any(|node| node.identity() == id),
+                    "строка {id} должна жить в «Питании», а не в «Системе»"
+                );
+            }
+
+            let group = find_by_id(children, "system/power");
+            assert!(
+                matches!(group.kind, super::super::tree::NodeKind::Submenu(_)),
+                "питание — подменю"
+            );
+            assert_eq!(
+                group.title,
+                if lang == Language::Ru {
+                    "Питание"
+                } else {
+                    "Power"
+                }
+            );
+
+            let kids = group.children().expect("у подменю есть пункты");
+            let ids: Vec<&str> = kids.iter().map(Node::identity).collect();
+            assert_eq!(
+                ids,
+                [
+                    "system/idle-screen-off",
+                    "system/idle-suspend",
+                    "system/power-profile"
+                ]
+            );
+
+            let screen = find_by_id(kids, "system/idle-screen-off");
+            assert_eq!(
+                screen.title,
+                if lang == Language::Ru {
+                    "Экран гаснет"
+                } else {
+                    "Screen off"
+                },
+                "единица измерения остаётся в значении справа, а не в заголовке"
+            );
+            let suspend = find_by_id(kids, "system/idle-suspend");
+            assert_eq!(
+                suspend.title,
+                if lang == Language::Ru {
+                    "Сон ноутбука"
+                } else {
+                    "Suspend after"
+                }
             );
         }
     }
