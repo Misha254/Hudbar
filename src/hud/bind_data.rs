@@ -427,31 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn theme_reads_the_theme_field_only() {
-        fn parse_theme(settings: &str) -> Option<String> {
-            let value: serde_json::Value = serde_json::from_str(settings).ok()?;
-            value
-                .get("appearance")?
-                .get("theme")?
-                .as_str()
-                .filter(|theme| matches!(*theme, "pixel" | "normal"))
-                .map(str::to_string)
-        }
-
-        assert_eq!(
-            parse_theme(r#"{"appearance":{"theme":"normal"}}"#).as_deref(),
-            Some("normal")
-        );
-        assert_eq!(
-            parse_theme(r#"{"appearance":{"theme":"pixel"},"hudbar":{"font":"normal"}}"#)
-                .as_deref(),
-            Some("pixel")
-        );
-        assert_eq!(parse_theme("{}"), None);
-        assert_eq!(parse_theme(r#"{"appearance":{"theme":3}}"#), None);
-    }
-
-    #[test]
     fn translit_covers_layout() {
         assert_eq!(transliterate("щод"), "ojl");
         assert_eq!(transliterate("с+с"), "c+c");

@@ -151,7 +151,8 @@ nvim (lualine), zathura, spicetify, hudbar, swaylock, cal, clipse, chromium.
   `menu/view.rs`, убраны), список схем — в `hud/schemes.rs`, а запись PNG — в
   `canvas.rs`: копий было три (меню, приложения, обойный бинарник), осталась
   одна. Там же ушёл `dunst.rs` (650 строк): замена font/line_height/origin в
-  `dunstrc` осталась за `hud-setting`. Тест «токены совпадают с геометрией окна
+  `dunstrc` осталась только в легаси-`hud-setting` (`patch_dunst`), но ни один
+  бинарник её не зовёт — только ручной запуск. Тест «токены совпадают с геометрией окна
   настроек» удалён: сверять токены стало не с чем, источник правды теперь один.
 - Легаси-настройки: `~/.config/hud-settings/settings.json` читается до
   01.01.2027. Пока канонический `~/.config/hudbar/settings.json` на месте,
