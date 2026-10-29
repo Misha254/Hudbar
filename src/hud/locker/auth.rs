@@ -141,6 +141,24 @@ fn error_text(pamh: *mut c_void, code: c_int) -> String {
         .into_owned()
 }
 
+/// Есть ли в файле сервиса собственный стек `account`.
+///
+/// `include` переносит только строки того же типа, поэтому `auth include
+/// login` account-модулей не добавляет. У `/etc/pam.d/swaylock` их нет вовсе,
+/// а `pam_acct_mgmt` на пустом стеке возвращает `PAM_AUTH_ERR`. Если бы такой
+/// ответ считался ошибкой входа, верный пароль всегда выглядел бы неверным:
+/// проверка account шла бы после успешной аутентификации и затирала её.
+/// `swaylock` account-проверку не делает; здесь она включается только там,
+/// где в файле сервиса она действительно описана.
+fn has_account_stack(text: &str) -> bool {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_whitespace().next())
+        .map(|kind| kind.trim_start_matches('-'))
+        .any(|kind| kind == "account")
+}
+
 /// Проверяет пароль пользователя. `password` — сырые байты из `Secret`.
 ///
 /// Сервис `swaylock` выбран намеренно: у него уже есть PAM-правила на этой
@@ -166,12 +184,12 @@ pub fn authenticate(username: &str, password: &[u8]) -> Result<(), String> {
 
     // `swaylock` — привычный сервис на этой машине; если его файла нет (другой
     // дистрибутив), `pam_start` может вернуть успех, а ошибку даст уже
-    // `pam_authenticate`. Поэтому файл проверяется до запуска, а не по коду
-    // возврата.
-    let service = if std::path::Path::new("/etc/pam.d/swaylock").is_file() {
-        c"swaylock"
-    } else {
-        c"login"
+    // `pam_authenticate`. Поэтому файл читается до запуска: по нему же видно,
+    // есть ли что проверять в account.
+    let swaylock = std::fs::read_to_string("/etc/pam.d/swaylock");
+    let (service, check_account) = match &swaylock {
+        Ok(text) => (c"swaylock", has_account_stack(text)),
+        Err(_) => (c"login", true),
     };
 
     let result = {
@@ -185,7 +203,10 @@ pub fn authenticate(username: &str, password: &[u8]) -> Result<(), String> {
             Err(error)
         } else {
             let auth = unsafe { pam_authenticate(pamh, 0) };
-            let outcome = if auth == PAM_SUCCESS {
+            // Account проверяется только после успешной аутентификации и
+            // только если в файле сервиса для неё есть модули: иначе пустой
+            // стек отвечает `PAM_AUTH_ERR` и перечёркивает верный пароль.
+            let outcome = if auth == PAM_SUCCESS && check_account {
                 unsafe { pam_acct_mgmt(pamh, 0) }
             } else {
                 auth
@@ -213,5 +234,32 @@ mod tests {
     #[test]
     fn an_empty_user_is_refused_before_pam() {
         assert!(authenticate("", b"secret").is_err());
+    }
+
+    /// Файл `swaylock` на Arch: только `auth include login`. Account-модулей
+    /// в нём нет — значит, `pam_acct_mgmt` вызывать нельзя.
+    #[test]
+    fn a_swaylock_style_file_has_no_account_stack() {
+        let text = "#\n# PAM configuration for swaylock\n#\n\nauth include login\n";
+        assert!(!has_account_stack(text));
+    }
+
+    /// `include` в auth не подтягивает account: строка `auth include` не
+    /// должна считаться account-модулем.
+    #[test]
+    fn auth_includes_do_not_count_as_account() {
+        let text = "auth include login\npassword include login\nsession include login\n";
+        assert!(!has_account_stack(text));
+    }
+
+    /// Когда account описан явно — обычный или необязательный (`-account`) —
+    /// проверку после аутентификации нужно делать.
+    #[test]
+    fn explicit_account_lines_are_found() {
+        assert!(has_account_stack("account include system-auth\n"));
+        assert!(has_account_stack("-account optional pam_permit.so\n"));
+        assert!(has_account_stack(
+            "auth include login\n\naccount required pam_unix.so\n"
+        ));
     }
 }
