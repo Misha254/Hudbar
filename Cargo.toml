@@ -54,7 +54,7 @@ png = "0.18.1"
 # настоящие иконки. Фичи с текстом и шрифтами выключены намеренно: иконки —
 # это пути, а fontdb с rustybuzz в проекте не нужны; `svgz` оставлен, потому
 # что в hicolor лежат сжатые .svgz (ark, kwin, darkly-settings).
-resvg = { version = "0.48.1", default-features = false, features = ["svgz"] }
+resvg = { version = "0.49.0", default-features = false, features = ["svgz"] }
 # preserve_order держит порядок ключей settings.json: без него serde_json
 # сортирует объект по алфавиту и каждая запись переставляет файл целиком.
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
