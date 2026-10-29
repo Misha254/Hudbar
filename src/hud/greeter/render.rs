@@ -12,7 +12,7 @@
 use chrono::{DateTime, Local};
 use tiny_skia::Pixmap;
 
-use super::canvas::{fill_rect, fill_round_rect};
+use super::canvas::{composite, fill_rect, fill_round_rect};
 use super::card_frame;
 use super::config::Config;
 use super::flow::{LineKind, Stage};
@@ -52,6 +52,9 @@ pub struct View<'a> {
     /// Открыт режим питания (`F12`).
     pub power: bool,
     pub battery: Option<Battery>,
+    /// 0 — обычный кадр, 1 — карточка и полоса уже ушли после входа.
+    /// Значение ведёт `GreeterApp`: оно же снимает затемнение с обоев.
+    pub leaving: f32,
 }
 
 /// Затемнение поверх фона. Не `ui.base`: затемнение обязано быть чёрным,
@@ -145,13 +148,24 @@ pub(crate) fn paint_background(
     config: &Config,
     background: Option<&Background>,
 ) {
+    paint_background_dim(pixmap, ui, background, config.dim);
+}
+
+/// То же, но затемнение задаёт вызывающий: при уходе с экрана оно плавно
+/// снимается, и обои светлеют ещё до появления рабочего стола.
+pub(crate) fn paint_background_dim(
+    pixmap: &mut Pixmap,
+    ui: &UiPalette,
+    background: Option<&Background>,
+    dim: f32,
+) {
     let (w, h) = (pixmap.width() as f32, pixmap.height() as f32);
     match background {
         Some(image) => {
             // Картинка уже в пикселях буфера: `draw_cover` сам считает от его
             // размеров, логические координаты ему не нужны.
             image.draw_cover(pixmap);
-            fill_rect(pixmap, 0.0, 0.0, w, h, dim_color(config.dim));
+            fill_rect(pixmap, 0.0, 0.0, w, h, dim_color(dim));
         }
         None => {
             let mut base = ui.base;
@@ -347,6 +361,10 @@ fn footer_hints(view: &View<'_>) -> String {
     }
 }
 
+/// Отступ вокруг карточки в слое ухода: рамка рисуется со сглаживанием, и
+/// без запаса её крайние пиксели обрезались бы.
+const LAYER_PAD: f32 = 2.0;
+
 /// Кадр целиком. `background` уже загружен вызывающим: чтение файла не должно
 /// случаться на каждом кадре.
 pub fn draw(
@@ -357,16 +375,82 @@ pub fn draw(
     background: Option<&Background>,
     view: &View<'_>,
 ) {
-    let ts = type_scale();
+    let leaving = view.leaving.clamp(0.0, 1.0);
     let size = (
         pixmap.width() as f32 / SCALE,
         pixmap.height() as f32 / SCALE,
     );
     let card = layout::card(size);
-    let rows = layout::of(card);
 
-    paint_background(pixmap, ui, config, background);
-    paint_strip(pixmap, text, ui, view);
+    // Затемнение снимается вместе с карточкой: к моменту входа обои уже
+    // светлые, и появление рабочего стола не даёт скачка яркости.
+    paint_background_dim(pixmap, ui, background, config.dim * (1.0 - leaving));
+    if leaving > 0.0 {
+        paint_leaving(pixmap, text, ui, config, view, card, leaving);
+    } else {
+        paint_strip(pixmap, text, ui, view);
+        paint_card(pixmap, text, ui, config, view, card);
+    }
+}
+
+/// Уход после входа: полоса и карточка гаснут, карточка чуть увеличивается.
+/// Слой рисуется отдельно и кладётся поверх фона, поэтому под ним остаются
+/// обои, а не дыра: экран не мигает чёрным посреди перехода.
+fn paint_leaving(
+    pixmap: &mut Pixmap,
+    text: &mut TextPainter,
+    ui: &UiPalette,
+    config: &Config,
+    view: &View<'_>,
+    card: Rect,
+    leaving: f32,
+) {
+    let alpha = 1.0 - leaving;
+    let scale = 1.0 + super::anim::EXIT_SCALE * leaving;
+
+    // Полоса на всю ширину: высота такая же, как у обычного кадра.
+    let strip_height = (layout::STRIP_H * SCALE) as u32;
+    if let Some(mut strip) = Pixmap::new(pixmap.width(), strip_height) {
+        strip.fill(tiny_skia::Color::TRANSPARENT);
+        paint_strip(&mut strip, text, ui, view);
+        composite(pixmap, &strip, (0.0, 0.0), alpha, 1.0);
+    }
+
+    // Карточка в своём прямоугольнике: при масштабе она не должна тянуть за
+    // собой весь кадр.
+    let layer_w = ((card.w + LAYER_PAD * 2.0) * SCALE) as u32;
+    let layer_h = ((card.h + LAYER_PAD * 2.0) * SCALE) as u32;
+    if let Some(mut layer) = Pixmap::new(layer_w, layer_h) {
+        layer.fill(tiny_skia::Color::TRANSPARENT);
+        paint_card(
+            &mut layer,
+            text,
+            ui,
+            config,
+            view,
+            Rect::new(LAYER_PAD, LAYER_PAD, card.w, card.h),
+        );
+        composite(
+            pixmap,
+            &layer,
+            ((card.x - LAYER_PAD) * SCALE, (card.y - LAYER_PAD) * SCALE),
+            alpha,
+            scale,
+        );
+    }
+}
+
+/// Содержимое карточки: подложка, рамка, поля, кнопка и подвал.
+fn paint_card(
+    pixmap: &mut Pixmap,
+    text: &mut TextPainter,
+    ui: &UiPalette,
+    config: &Config,
+    view: &View<'_>,
+    card: Rect,
+) {
+    let ts = type_scale();
+    let rows = layout::of(card);
 
     // Подложка из `ui.base` под карточкой: на пёстрых обоях карточка с одной
     // полупрозрачной заливкой сливалась с картинкой. Цвет палитры, не чёрный:
@@ -491,6 +575,7 @@ mod tests {
             stage: Stage::Idle,
             power: false,
             battery: None,
+            leaving: 0.0,
         }
     }
 
@@ -513,6 +598,66 @@ mod tests {
         assert_ne!(
             pixmap.pixel(0, 0).map(|p| (p.red(), p.green(), p.blue())),
             None
+        );
+    }
+
+    /// К концу ухода карточки и полосы нет: вход не заканчивается кадром с
+    /// ещё видимой кнопкой «Войти».
+    #[test]
+    fn the_card_is_gone_at_the_end_of_the_exit() {
+        let (mut pixmap, mut text) = frame();
+        let ui = super::super::ui_tokens::ui_palette(super::super::palette::Palette::default());
+        let mut v = view("mihail", "niri");
+        v.leaving = 1.0;
+        draw(&mut pixmap, &mut text, &ui, &Config::default(), None, &v);
+
+        let card = layout::card((1920.0, 1080.0));
+        let pixel = pixmap
+            .pixel(
+                ((card.x + card.w / 2.0) * SCALE) as u32,
+                ((card.y + card.h / 2.0) * SCALE) as u32,
+            )
+            .expect("пиксель")
+            .demultiply();
+        assert_eq!(
+            (pixel.red(), pixel.green(), pixel.blue()),
+            (ui.base.0, ui.base.1, ui.base.2),
+            "в центре карточки должен быть только фон"
+        );
+    }
+
+    /// На середине ухода кадр отличается от финального: карточка гаснет
+    /// постепенно, а не исчезает одним переключением.
+    #[test]
+    fn the_card_is_still_visible_halfway_through_the_exit() {
+        let ui = super::super::ui_tokens::ui_palette(super::super::palette::Palette::default());
+        let (mut halfway, mut halfway_text) = frame();
+        let mut v = view("mihail", "niri");
+        v.leaving = 0.5;
+        draw(
+            &mut halfway,
+            &mut halfway_text,
+            &ui,
+            &Config::default(),
+            None,
+            &v,
+        );
+
+        let (mut finished, mut finished_text) = frame();
+        v.leaving = 1.0;
+        draw(
+            &mut finished,
+            &mut finished_text,
+            &ui,
+            &Config::default(),
+            None,
+            &v,
+        );
+
+        assert_ne!(
+            halfway.data(),
+            finished.data(),
+            "в середине ухода карточка ещё должна быть видна"
         );
     }
 

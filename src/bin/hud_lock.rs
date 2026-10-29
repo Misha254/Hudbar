@@ -93,6 +93,8 @@ use text::{SCALE, TextPainter};
 use ui_tokens::{UiPalette, ui_palette};
 
 const CLOCK_WAIT_MS: u16 = 200;
+/// Пока карточка уходит, кадры идут 60 раз в секунду: 16 мс — шаг анимации.
+const FRAME_WAIT_MS: u16 = 16;
 
 mod xkb {
     pub const RETURN: u32 = 0xff0d;
@@ -157,6 +159,12 @@ struct LockApp {
     dirty: bool,
     exit: bool,
     last_minute: i32,
+    /// Настройки анимаций: выключенные делают уход мгновенным.
+    anim: anim::AnimSettings,
+    /// Уход после верного пароля; `None` — обычный экран.
+    leaving: Option<anim::Tween>,
+    /// Текущий прогресс ухода 0..1 для `View::leaving`.
+    exit_progress: f32,
 }
 
 impl LockApp {
@@ -218,6 +226,7 @@ impl LockApp {
             caps: self.mods.caps_lock,
             message: self.message.map(|text| (text, true)),
             busy: self.busy,
+            leaving: self.exit_progress,
         };
         render::draw(
             &mut pixmap,
@@ -295,7 +304,7 @@ impl LockApp {
     }
 
     fn submit(&mut self, conn: &Connection) {
-        if self.busy || self.password.is_empty() {
+        if self.busy || self.leaving.is_some() || self.password.is_empty() {
             return;
         }
         self.busy = true;
@@ -310,21 +319,56 @@ impl LockApp {
         self.busy = false;
         self.dirty = true;
         match result {
-            Ok(()) => {
-                if let Some(lock) = self.session_lock.take() {
-                    lock.unlock();
-                    let _ = conn.roundtrip();
-                }
-                self.exit = true;
-            }
+            Ok(()) => self.start_leaving(),
             Err(_) => {
                 self.message = Some(strings::text(self.lang).wrong);
             }
         }
     }
 
+    /// Начать уход после верного пароля. Замок ещё держится: `ext-session-lock`
+    /// снимается мгновенно, и единственный кадр перехода, который можно
+    /// показать, — свой.
+    fn start_leaving(&mut self) {
+        let now = std::time::Instant::now();
+        self.leaving = Some(anim::Tween::new(
+            0.0,
+            1.0,
+            now,
+            self.anim.scaled(anim::EXIT_DURATION),
+            anim::ease_out_cubic,
+        ));
+        self.exit_progress = 0.0;
+        self.dirty = true;
+    }
+
+    /// Текущий кадр ухода. `true` — карточка уже ушла, замок можно снимать.
+    fn advance_leaving(&mut self, now: std::time::Instant) -> bool {
+        let Some(tween) = &self.leaving else {
+            return false;
+        };
+        let progress = tween.value(now).clamp(0.0, 1.0);
+        if progress != self.exit_progress {
+            self.exit_progress = progress;
+            self.dirty = true;
+        }
+        tween.done(now)
+    }
+
+    /// Снять замок после последнего кадра ухода. `roundtrip` здесь не только
+    /// для порядка: он гарантирует, что карточка без содержимого уже
+    /// доставлена, и рабочий стол появляется без неё.
+    fn finish_unlock(&mut self, conn: &Connection) {
+        self.leaving = None;
+        if let Some(lock) = self.session_lock.take() {
+            lock.unlock();
+            let _ = conn.roundtrip();
+        }
+        self.exit = true;
+    }
+
     fn handle_key(&mut self, conn: &Connection, event: &KeyEvent) {
-        if self.busy {
+        if self.busy || self.leaving.is_some() {
             return;
         }
         let sym: u32 = event.keysym.into();
@@ -351,7 +395,7 @@ impl LockApp {
 
     fn handle_repeat(&mut self, event: &KeyEvent) {
         let sym: u32 = event.keysym.into();
-        if sym == xkb::BACKSPACE && !self.busy {
+        if sym == xkb::BACKSPACE && !self.busy && self.leaving.is_none() {
             self.password.pop();
             self.message = None;
             self.dirty = true;
@@ -655,7 +699,9 @@ fn run() -> Result<(), String> {
     let shm = Shm::bind(&globals, &qh).map_err(|error| format!("нет wl_shm: {error}"))?;
     let session_lock_state = SessionLockState::new(&globals, &qh);
     let ui = ui_palette(palette::load());
-    let lang = settings::load().language;
+    let loaded = settings::load();
+    let lang = loaded.language;
+    let anim = anim::AnimSettings::new(loaded.animations, loaded.animation_speed);
 
     let mut app = LockApp {
         registry_state: RegistryState::new(&globals),
@@ -680,6 +726,9 @@ fn run() -> Result<(), String> {
         dirty: false,
         exit: false,
         last_minute: chrono::Local::now().hour() as i32 * 60 + chrono::Local::now().minute() as i32,
+        anim,
+        leaving: None,
+        exit_progress: 0.0,
     };
 
     event_queue
@@ -692,12 +741,24 @@ fn run() -> Result<(), String> {
             break;
         }
         let _ = event_queue.dispatch_pending(&mut app);
+        let leaving_done = app.advance_leaving(std::time::Instant::now());
         app.tick();
         app.draw();
+        if leaving_done {
+            // Последний кадр без карточки должен уйти до `unlock`.
+            let _ = event_queue.flush();
+            app.finish_unlock(&conn);
+            break;
+        }
         if app.exit {
             break;
         }
-        shell::poll_read(&mut event_queue, conn.as_fd(), CLOCK_WAIT_MS);
+        let wait = if app.leaving.is_some() {
+            FRAME_WAIT_MS
+        } else {
+            CLOCK_WAIT_MS
+        };
+        shell::poll_read(&mut event_queue, conn.as_fd(), wait);
     }
 
     // Успешный `submit` уже снял блокировку. Если цикл закончился по другой

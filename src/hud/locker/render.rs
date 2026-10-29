@@ -12,7 +12,8 @@ use crate::greeter::image::Background;
 use crate::greeter::layout;
 use crate::greeter::panel;
 use crate::greeter::render::{
-    paint_background, paint_button, paint_card_plate, paint_clock, paint_field, paint_field_text,
+    paint_background_dim, paint_button, paint_card_plate, paint_clock, paint_field,
+    paint_field_text,
 };
 use crate::settings::Language;
 use crate::text::{Align, SCALE, TextPainter};
@@ -31,7 +32,13 @@ pub struct View<'a> {
     pub message: Option<(&'a str, bool)>,
     /// PAM уже думает; кнопка и строка сообщения это показывают.
     pub busy: bool,
+    /// 0 — обычный кадр, 1 — карточка уже ушла и замок можно снимать.
+    pub leaving: f32,
 }
+
+/// Отступ вокруг карточки в слое ухода: рамка рисуется со сглаживанием, и
+/// без запаса её крайние пиксели обрезались бы.
+const LAYER_PAD: f32 = 2.0;
 
 /// Кадр целиком. `background` загружен вызывающим: файл не читается на
 /// каждом тике.
@@ -43,16 +50,72 @@ pub fn draw(
     background: Option<&Background>,
     view: &View<'_>,
 ) {
-    let ts = type_scale();
     let size = (
         pixmap.width() as f32 / SCALE,
         pixmap.height() as f32 / SCALE,
     );
     let card = layout::card(size);
+    let leaving = view.leaving.clamp(0.0, 1.0);
+
+    // Затемнение снимается вместе с карточкой: к моменту разблокировки обои
+    // уже светлые, и рабочий стол не бьёт по глазам сменой яркости.
+    paint_background_dim(pixmap, ui, background, config.dim * (1.0 - leaving));
+    if leaving > 0.0 {
+        paint_leaving(pixmap, text, ui, config, view, card, leaving);
+    } else {
+        paint_card(pixmap, text, ui, config, view, card);
+    }
+}
+
+/// Уход после верного пароля: карточка гаснет и чуть увеличивается, а слой
+/// рисуется отдельно, поэтому под ней остаются обои, а не дыра.
+fn paint_leaving(
+    pixmap: &mut tiny_skia::Pixmap,
+    text: &mut TextPainter,
+    ui: &UiPalette,
+    config: &Config,
+    view: &View<'_>,
+    card: crate::geom::Rect,
+    leaving: f32,
+) {
+    let alpha = 1.0 - leaving;
+    let scale = 1.0 + crate::anim::EXIT_SCALE * leaving;
+    let layer_w = ((card.w + LAYER_PAD * 2.0) * SCALE) as u32;
+    let layer_h = ((card.h + LAYER_PAD * 2.0) * SCALE) as u32;
+    let Some(mut layer) = tiny_skia::Pixmap::new(layer_w, layer_h) else {
+        return;
+    };
+    layer.fill(tiny_skia::Color::TRANSPARENT);
+    paint_card(
+        &mut layer,
+        text,
+        ui,
+        config,
+        view,
+        crate::geom::Rect::new(LAYER_PAD, LAYER_PAD, card.w, card.h),
+    );
+    crate::canvas::composite(
+        pixmap,
+        &layer,
+        ((card.x - LAYER_PAD) * SCALE, (card.y - LAYER_PAD) * SCALE),
+        alpha,
+        scale,
+    );
+}
+
+/// Содержимое карточки: подложка, рамка, поля, кнопка и подвал.
+fn paint_card(
+    pixmap: &mut tiny_skia::Pixmap,
+    text: &mut TextPainter,
+    ui: &UiPalette,
+    config: &Config,
+    view: &View<'_>,
+    card: crate::geom::Rect,
+) {
+    let ts = type_scale();
     let rows = layout::of(card);
     let t = strings::text(view.lang);
 
-    paint_background(pixmap, ui, config, background);
     paint_card_plate(pixmap, ui, card, config.card_plate);
     card_frame::card(pixmap, card, ui);
 
@@ -162,6 +225,7 @@ mod tests {
             caps: false,
             message: None,
             busy: false,
+            leaving: 0.0,
         }
     }
 
@@ -186,6 +250,66 @@ mod tests {
             )
             .expect("пиксель");
         assert!(pixel.alpha() > 0, "карточка нарисована");
+    }
+
+    /// К концу ухода карточки нет: в её центре остаётся фон. Если бы слой
+    /// не гас, замок снимался бы с видимой карточкой на экране.
+    #[test]
+    fn the_card_is_gone_at_the_end_of_the_exit() {
+        let (mut pixmap, mut text) = frame();
+        let ui = ui_palette(Palette::default());
+        let mut v = view("mihail");
+        v.leaving = 1.0;
+        draw(&mut pixmap, &mut text, &ui, &Config::default(), None, &v);
+
+        let card = layout::card((1920.0, 1080.0));
+        let pixel = pixmap
+            .pixel(
+                ((card.x + card.w / 2.0) * SCALE) as u32,
+                ((card.y + card.h / 2.0) * SCALE) as u32,
+            )
+            .expect("пиксель")
+            .demultiply();
+        assert_eq!(
+            (pixel.red(), pixel.green(), pixel.blue()),
+            (ui.base.0, ui.base.1, ui.base.2),
+            "в центре карточки должен быть только фон"
+        );
+    }
+
+    /// На середине ухода кадр отличается от финального: карточка гаснет
+    /// постепенно, а не исчезает одним переключением.
+    #[test]
+    fn the_card_is_still_visible_halfway_through_the_exit() {
+        let ui = ui_palette(Palette::default());
+        let (mut halfway, mut halfway_text) = frame();
+        let mut v = view("mihail");
+        v.leaving = 0.5;
+        draw(
+            &mut halfway,
+            &mut halfway_text,
+            &ui,
+            &Config::default(),
+            None,
+            &v,
+        );
+
+        let (mut finished, mut finished_text) = frame();
+        v.leaving = 1.0;
+        draw(
+            &mut finished,
+            &mut finished_text,
+            &ui,
+            &Config::default(),
+            None,
+            &v,
+        );
+
+        assert_ne!(
+            halfway.data(),
+            finished.data(),
+            "в середине ухода карточка ещё должна быть видна"
+        );
     }
 
     /// Подсказки влезают в карточку при левом отступе полей и правом LG:

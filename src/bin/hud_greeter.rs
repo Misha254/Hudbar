@@ -303,6 +303,13 @@ impl GreetdClient for PreviewClient {
     }
 }
 
+/// Уход после успешного входа: пока твин идёт, niri ещё жив и сеанс ещё не
+/// запущен (greetd ждёт выхода гритера), поэтому карточку можно погасить.
+struct Leave {
+    tween: anim::Tween,
+    session: Session,
+}
+
 /// Окно входа.
 struct GreeterApp {
     registry_state: RegistryState,
@@ -333,6 +340,10 @@ struct GreeterApp {
     state_path: PathBuf,
     preview: bool,
     exit: Arc<AtomicBool>,
+    /// Уход после входа; `None` — обычный экран.
+    leaving: Option<Leave>,
+    /// Текущий прогресс ухода 0..1 для `View::leaving`.
+    exit_progress: f32,
 }
 
 impl GreeterApp {
@@ -410,7 +421,7 @@ impl GreeterApp {
 
     /// Enter: в поле имени — переход к паролю, в пароле — вход.
     fn submit(&mut self) {
-        if self.power {
+        if self.power || self.leaving.is_some() {
             return;
         }
         if self.focus == Field::User && self.login.password_chars() == 0 {
@@ -439,7 +450,45 @@ impl GreeterApp {
         let outcome = self.login.submit(&cmd, &env);
         self.ctx.dirty = true;
         if outcome == Submit::Done {
-            self.finish_login(&session);
+            self.begin_leave(session);
+        }
+    }
+
+    /// Начать уход после входа. Сеанс ещё не запущен: greetd стартует его
+    /// только после выхода гритера, и эти 240 мс целиком наши.
+    fn begin_leave(&mut self, session: Session) {
+        let now = std::time::Instant::now();
+        self.leaving = Some(Leave {
+            tween: anim::Tween::new(
+                0.0,
+                1.0,
+                now,
+                self.ctx.anim.scaled(anim::EXIT_DURATION),
+                anim::ease_out_cubic,
+            ),
+            session,
+        });
+        self.exit_progress = 0.0;
+        self.ctx.dirty = true;
+    }
+
+    /// Текущий кадр ухода. `true` — карточка уже ушла, можно завершать вход.
+    fn advance_leave(&mut self, now: std::time::Instant) -> bool {
+        let Some(leave) = &self.leaving else {
+            return false;
+        };
+        let progress = leave.tween.value(now).clamp(0.0, 1.0);
+        if progress != self.exit_progress {
+            self.exit_progress = progress;
+            self.ctx.dirty = true;
+        }
+        leave.tween.done(now)
+    }
+
+    /// Кадр ухода уже отправлен: сохранить состояние, погасить niri и выйти.
+    fn finish_leave(&mut self) {
+        if let Some(leave) = self.leaving.take() {
+            self.finish_login(&leave.session);
         }
     }
 
@@ -490,6 +539,9 @@ impl GreeterApp {
     }
 
     fn handle_key(&mut self, event: &KeyEvent) {
+        if self.leaving.is_some() {
+            return;
+        }
         let sym: u32 = event.keysym.into();
         let ctrl = self.mods.ctrl;
         let logo = self.mods.logo;
@@ -565,6 +617,9 @@ impl GreeterApp {
     /// Повторы: только Backspace. Удерживать Enter на экране входа опасно —
     /// каждая попытка создаёт сеанс greetd.
     fn handle_repeat(&mut self, event: &KeyEvent) {
+        if self.leaving.is_some() {
+            return;
+        }
         let sym: u32 = event.keysym.into();
         if sym == xkb::BACKSPACE {
             self.backspace();
@@ -572,7 +627,7 @@ impl GreeterApp {
     }
 
     fn click(&mut self, x: f32, y: f32) {
-        if self.power {
+        if self.power || self.leaving.is_some() {
             return;
         }
         let card = layout::card((self.ctx.width as f32, self.ctx.height as f32));
@@ -628,6 +683,7 @@ impl GreeterApp {
             stage: self.login.stage(),
             power: self.power,
             battery: self.battery,
+            leaving: self.exit_progress,
         };
         render::draw(
             &mut pixmap,
@@ -730,6 +786,7 @@ fn screenshot(cli: &Cli, out: &Path) -> Result<(), String> {
         stage: Stage::Idle,
         power,
         battery: panel::battery(),
+        leaving: 0.0,
     };
     let mut pixmap = tiny_skia::Pixmap::new(FALLBACK_W * SCALE as u32, FALLBACK_H * SCALE as u32)
         .ok_or_else(|| "не выделить буфер снимка".to_string())?;
@@ -887,6 +944,8 @@ fn run(cli: &Cli, preview: bool) -> Result<(), String> {
         state_path,
         preview,
         exit: Arc::new(AtomicBool::new(false)),
+        leaving: None,
+        exit_progress: 0.0,
     };
     app.draw();
 
@@ -899,7 +958,8 @@ fn run(cli: &Cli, preview: bool) -> Result<(), String> {
         }
         let _ = event_queue.dispatch_pending(&mut app);
         let now = std::time::Instant::now();
-        if app.ctx.animating(now) {
+        let leaving_done = app.advance_leave(now);
+        if app.ctx.animating(now) || app.leaving.is_some() {
             app.ctx.dirty = true;
         }
         app.tick();
@@ -908,10 +968,17 @@ fn run(cli: &Cli, preview: bool) -> Result<(), String> {
             app.handle_repeat(&event);
             app.draw();
         }
+        // Последний кадр ухода должен не только уйти композитору, но и быть
+        // показан до того, как niri погасят: после этого рисовать уже некому.
+        if leaving_done {
+            let _ = event_queue.flush();
+            let _ = conn.roundtrip();
+            app.finish_leave();
+        }
         if app.exit.load(Ordering::Relaxed) {
             break;
         }
-        let idle = if app.ctx.animating(std::time::Instant::now()) {
+        let idle = if app.ctx.animating(std::time::Instant::now()) || app.leaving.is_some() {
             16u16
         } else {
             200u16
