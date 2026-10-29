@@ -76,7 +76,16 @@ pub fn strip_clock(lang: Language, now: DateTime<Local>) -> String {
 
 /// Крупные часы карточки: только время, часы и минуты.
 pub fn big_clock(now: DateTime<Local>) -> String {
-    format!("{:02}:{:02}", now.hour(), now.minute())
+    let (hour, minute) = clock_parts(now);
+    format!("{hour}:{minute}")
+}
+
+/// Часы и минуты по отдельности: экран входа рисует их разными вызовами, чтобы
+/// двоеточие занимало уже моноширинную клетку, а фиксированный зазор вокруг
+/// него не давал «10: 17». Ширина при этом не прыгает: обе пары — две цифры
+/// моноширинного шрифта.
+pub fn clock_parts(now: DateTime<Local>) -> (String, String) {
+    (format!("{:02}", now.hour()), format!("{:02}", now.minute()))
 }
 
 /// Дата под часами: «Среда, 28 октября 2026» / «Wednesday, October 28, 2026».
@@ -182,6 +191,7 @@ mod tests {
             .single()
             .expect("дата");
         assert_eq!(big_clock(now), "20:31");
+        assert_eq!(clock_parts(now), ("20".to_string(), "31".to_string()));
         assert_eq!(strip_clock(Language::Ru, now), "Ср, 28 окт 20:31");
         assert_eq!(strip_clock(Language::En, now), "Wed, 28 Oct 20:31");
         assert_eq!(date_line(Language::Ru, now), "Среда, 28 октября 2026");

@@ -401,6 +401,26 @@ pub fn footer(
     hints: &str,
     counter: Option<&str>,
 ) {
+    footer_inset(pixmap, text, card, ui, hints, counter, spacing::LG);
+}
+
+/// То же, но с явным отступом подсказок от края карточки. Нужен экрану входа:
+/// его поля стоят на `layout::PAD`, и подвал обязан начаться там же. Отдельная
+/// функция, а не параметр у [`footer`]: меню и бинды зовут старую подпись, и их
+/// вид не меняется.
+///
+/// Разделитель по-прежнему идёт на всю ширину карточки — отступ двигает только
+/// текст, не линию.
+#[allow(clippy::too_many_arguments)]
+pub fn footer_inset(
+    pixmap: &mut tiny_skia::Pixmap,
+    text: &mut TextPainter,
+    card: Rect,
+    ui: &UiPalette,
+    hints: &str,
+    counter: Option<&str>,
+    inset: f32,
+) {
     let scale = type_scale();
     let rect = Rect::new(card.x, card.bottom() - FOOTER_H, card.w, FOOTER_H);
     fill_rect(
@@ -428,9 +448,9 @@ pub fn footer(
         scale.caption,
         ui.muted,
         Rect::new(
-            rect.x + spacing::LG,
+            rect.x + inset,
             band.y,
-            (rect.w - spacing::LG * 2.0 - reserve).max(0.0),
+            (rect.w - inset * 2.0 - reserve).max(0.0),
             band.h,
         ),
         Align::Start,
@@ -442,12 +462,7 @@ pub fn footer(
             scale.caption,
             ui.muted,
             center_band(
-                Rect::new(
-                    rect.right() - spacing::LG - counter_w,
-                    rect.y,
-                    counter_w,
-                    rect.h,
-                ),
+                Rect::new(rect.right() - inset - counter_w, rect.y, counter_w, rect.h),
                 scale.caption * 2.0,
             ),
             Align::End,
@@ -605,6 +620,38 @@ mod tests {
             .pixel(pixmap.width() / 2, pixmap.height() / 2)
             .expect("центр");
         assert!(middle.alpha() > 0, "центр карточки залит");
+    }
+
+    /// Подвал с прежней подписью и новый с явным отступом `spacing::LG` дают
+    /// один кадр: меню и бинды видят то же, что до выноса `footer_inset`.
+    #[test]
+    fn footer_default_is_the_same_as_an_explicit_lg_inset() {
+        let card = Rect::new(0.0, 0.0, CARD_W, FOOTER_H);
+        let ui = ui_palette(Palette::default());
+        let mut old = tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (FOOTER_H * SCALE) as u32)
+            .expect("буфер");
+        let mut new = tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (FOOTER_H * SCALE) as u32)
+            .expect("буфер");
+        let mut old_text = TextPainter::new(&super::super::ui_tokens::font_name());
+        let mut new_text = TextPainter::new(&super::super::ui_tokens::font_name());
+        footer(
+            &mut old,
+            &mut old_text,
+            card,
+            &ui,
+            "ENTER · TAB",
+            Some("1/9"),
+        );
+        footer_inset(
+            &mut new,
+            &mut new_text,
+            card,
+            &ui,
+            "ENTER · TAB",
+            Some("1/9"),
+            spacing::LG,
+        );
+        assert_eq!(old.data(), new.data());
     }
 
     /// Наложение полупрозрачной карточки на непрозрачную сцену: пикселей с

@@ -235,4 +235,21 @@ mod tests {
         assert_eq!(layout.caps.h, layout.password_label.h);
         assert!(layout.caps.right() <= layout.password_label.right() + 0.01);
     }
+
+    /// Подсказки подвала начинаются там же, где поля, — на `PAD`, а не на
+    /// меньшем отступе `card_frame::footer`. Разделитель при этом остаётся на
+    /// всю ширину карточки.
+    #[test]
+    fn the_footer_hints_line_up_with_the_fields() {
+        let layout = of(card(VIEW));
+        let hints_x = layout.footer.x + PAD;
+        assert!(
+            (hints_x - layout.user_box.x).abs() <= 1.0,
+            "подвал {hints_x}, поля {}",
+            layout.user_box.x
+        );
+        assert!((hints_x - layout.password_box.x).abs() <= 1.0);
+        assert_eq!(layout.footer.x, layout.card.x);
+        assert_eq!(layout.footer.w, layout.card.w);
+    }
 }

@@ -98,6 +98,7 @@ fn write_config(dir: &Path, config: &Config) -> Result<(), String> {
     let payload = serde_json::json!({
         "language": config.language.key(),
         "dim": config.dim,
+        "card_plate": config.card_plate,
         "font": config.font,
     });
     let text = serde_json::to_string_pretty(&payload)
@@ -256,13 +257,18 @@ mod tests {
         std::fs::create_dir_all(&data).expect("каталог");
         std::fs::write(
             config::config_path(&data),
-            r#"{"language": "ru", "dim": 0.7, "font": "Fira Code"}"#,
+            r#"{"language": "ru", "dim": 0.7, "card_plate": 0.4, "font": "Fira Code"}"#,
         )
         .expect("конфиг");
 
         sync(&data, &home).expect("синхронизация");
         let config = config::load(&data);
         assert!((config.dim - 0.7).abs() < 1e-6, "{}", config.dim);
+        assert!(
+            (config.card_plate - 0.4).abs() < 1e-6,
+            "{}",
+            config.card_plate
+        );
         assert_eq!(config.font, "Fira Code");
 
         let _ = std::fs::remove_dir_all(&root);

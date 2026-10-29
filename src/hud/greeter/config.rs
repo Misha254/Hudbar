@@ -27,12 +27,18 @@ pub const DIM_DEFAULT: f32 = 0.45;
 /// Предел затемнения: полностью чёрный фон — это уже не обои.
 pub const DIM_MAX: f32 = 0.9;
 
+/// Прозрачность подложки под карточкой: `ui.base` поверх обоев. Ноль — карточка
+/// лежит прямо на картинке, единица — сплошной цвет палитры.
+pub const CARD_PLATE_DEFAULT: f32 = 0.6;
+
 /// Настройки вида.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub language: Language,
     /// Доля затемнения поверх картинки, 0..=`DIM_MAX`.
     pub dim: f32,
+    /// Прозрачность подложки под карточкой, 0..=1.
+    pub card_plate: f32,
     /// Шрифт интерфейса. Пустое имя — шрифт по умолчанию из `ui_tokens`.
     pub font: String,
 }
@@ -42,6 +48,7 @@ impl Default for Config {
         Self {
             language: Language::Ru,
             dim: DIM_DEFAULT,
+            card_plate: CARD_PLATE_DEFAULT,
             font: super::ui_tokens::font_name(),
         }
     }
@@ -87,6 +94,9 @@ pub fn parse(text: &str) -> Config {
     if let Some(dim) = map.get("dim").and_then(serde_json::Value::as_f64) {
         config.dim = (dim as f32).clamp(0.0, DIM_MAX);
     }
+    if let Some(plate) = map.get("card_plate").and_then(serde_json::Value::as_f64) {
+        config.card_plate = (plate as f32).clamp(0.0, 1.0);
+    }
     if let Some(font) = map.get("font").and_then(serde_json::Value::as_str) {
         let font = font.trim();
         if !font.is_empty() {
@@ -114,14 +124,17 @@ mod tests {
         let config = load(&dir);
         assert_eq!(config.language, Language::Ru);
         assert!((config.dim - DIM_DEFAULT).abs() < 1e-6);
+        assert!((config.card_plate - CARD_PLATE_DEFAULT).abs() < 1e-6);
         assert!(!config.font.is_empty());
     }
 
     #[test]
     fn the_file_sets_language_dim_and_font() {
-        let config = parse(r#"{"language": "en", "dim": 0.7, "font": "Fira Code"}"#);
+        let config =
+            parse(r#"{"language": "en", "dim": 0.7, "card_plate": 0.35, "font": "Fira Code"}"#);
         assert_eq!(config.language, Language::En);
         assert!((config.dim - 0.7).abs() < 1e-6);
+        assert!((config.card_plate - 0.35).abs() < 1e-6);
         assert_eq!(config.font, "Fira Code");
     }
 
@@ -134,6 +147,8 @@ mod tests {
         assert_eq!(parse(r#"{"language": "de"}"#).language, Language::Ru);
         assert!((parse(r#"{"dim": 5.0}"#).dim - DIM_MAX).abs() < 1e-6);
         assert!(parse(r#"{"dim": -1.0}"#).dim.abs() < 1e-6);
+        assert!((parse(r#"{"card_plate": 5.0}"#).card_plate - 1.0).abs() < 1e-6);
+        assert!(parse(r#"{"card_plate": -1.0}"#).card_plate.abs() < 1e-6);
         assert_eq!(
             parse(r#"{"font": "   "}"#).font,
             super::super::ui_tokens::font_name(),

@@ -61,6 +61,83 @@ fn dim_color(dim: f32) -> Rgba {
     Rgba(0, 0, 0, alpha)
 }
 
+/// Подложка под карточкой: `ui.base` с прозрачностью `card_plate`. Тот же
+/// прямоугольник и радиус, что у `card_frame::card`, поэтому видна ровно как
+/// затемнённое поле карточки, а не как вторая рамка.
+///
+/// Цвет берётся из палитры, а не чёрный: на светлой схеме плашка светлая, и
+/// текст остаётся тёмным на светлом. Ноль — подложки нет, карточка лежит прямо
+/// на обоях.
+fn paint_card_plate(pixmap: &mut Pixmap, ui: &UiPalette, rect: Rect, plate: f32) {
+    let alpha = (plate.clamp(0.0, 1.0) * 255.0) as u8;
+    if alpha == 0 {
+        return;
+    }
+    fill_round_rect(
+        pixmap,
+        rect.x * SCALE,
+        rect.y * SCALE,
+        rect.w * SCALE,
+        rect.h * SCALE,
+        radii::LG * SCALE,
+        Rgba(ui.base.0, ui.base.1, ui.base.2, alpha),
+    );
+}
+
+/// Зазор между цифрами и ячейкой двоеточия. Три логических пикселя: заметно
+/// уже моноширинной клетки, но цифры не слипаются с точками.
+const CLOCK_COLON_GAP: f32 = spacing::XS * 0.75;
+
+/// Ширина ячейки двоеточия в долях кегля (4.8 px при `display` = 40).
+const CLOCK_COLON_W: f32 = 0.12;
+
+/// Три колонки часов: часы, двоеточие по центру своей узкой ячейки, минуты.
+/// Ширина считается один раз и не зависит от конкретных цифр: обе пары —
+/// по две цифры моноширинного шрифта.
+fn clock_columns(
+    text: &mut TextPainter,
+    now: DateTime<Local>,
+    rect: Rect,
+    size: f32,
+) -> (Rect, Rect, Rect) {
+    let (hour, minute) = panel::clock_parts(now);
+    let hour_w = text.text_width(&hour, size);
+    let minute_w = text.text_width(&minute, size);
+    let colon_w = size * CLOCK_COLON_W;
+    let colon = Rect::new(rect.x + hour_w + CLOCK_COLON_GAP, rect.y, colon_w, rect.h);
+    (
+        Rect::new(rect.x, rect.y, hour_w, rect.h),
+        colon,
+        Rect::new(colon.right() + CLOCK_COLON_GAP, rect.y, minute_w, rect.h),
+    )
+}
+
+/// Крупные часы «ЧЧ:ММ» тремя вызовами на общей базовой линии. Двоеточие
+/// центрируется в узкой ячейке, а не занимает полную клетку моноширинного
+/// шрифта, поэтому «10: 17» больше не выглядит как два числа.
+fn paint_clock(
+    pixmap: &mut Pixmap,
+    text: &mut TextPainter,
+    ui: &UiPalette,
+    now: DateTime<Local>,
+    size: f32,
+    rect: Rect,
+) {
+    let (hour, minute) = panel::clock_parts(now);
+    let (hour_rect, colon_rect, minute_rect) = clock_columns(text, now, rect, size);
+    // Базовая линия — по цифрам, как у прежней единой строки: двоеточие
+    // садится на неё же, а не центрируется отдельно и не «всплывает».
+    let sample = text.ink_metrics(&hour, size);
+    let baseline = text.baseline(rect, &sample);
+    for (part, part_rect, align) in [
+        (hour.as_str(), hour_rect, Align::Start),
+        (":", colon_rect, Align::Center),
+        (minute.as_str(), minute_rect, Align::Start),
+    ] {
+        text.paint_on_baseline(pixmap, part, size, ui.text, part_rect, align, baseline);
+    }
+}
+
 /// Фон кадра: картинка по `cover` или однотонный `base`, затем затемнение.
 fn paint_background(
     pixmap: &mut Pixmap,
@@ -291,6 +368,10 @@ pub fn draw(
     paint_background(pixmap, ui, config, background);
     paint_strip(pixmap, text, ui, view);
 
+    // Подложка из `ui.base` под карточкой: на пёстрых обоях карточка с одной
+    // полупрозрачной заливкой сливалась с картинкой. Цвет палитры, не чёрный:
+    // светлая схема получает светлую плашку.
+    paint_card_plate(pixmap, ui, card, config.card_plate);
     // Карточка: та же подложка и hairline-рамка, что у меню и окон биндов.
     card_frame::card(pixmap, card, ui);
 
@@ -304,14 +385,7 @@ pub fn draw(
         rows.title,
         Align::Start,
     );
-    text.paint(
-        pixmap,
-        &panel::big_clock(view.now),
-        ts.display,
-        ui.text,
-        rows.clock,
-        Align::Start,
-    );
+    paint_clock(pixmap, text, ui, view.now, ts.display, rows.clock);
     text.paint_boxed(
         pixmap,
         &panel::date_line(view.lang, view.now),
@@ -391,7 +465,9 @@ pub fn draw(
     paint_button(pixmap, text, ui, rows.button, button_label);
 
     let hints = footer_hints(view);
-    card_frame::footer(pixmap, text, rows.footer, ui, &hints, None);
+    // Подсказки начинаются на `layout::PAD`, как поля; разделитель остаётся на
+    // всю ширину карточки. Старая `card_frame::footer` не тронута.
+    card_frame::footer_inset(pixmap, text, rows.footer, ui, &hints, None, layout::PAD);
 }
 
 #[cfg(test)]
@@ -478,5 +554,85 @@ mod tests {
         }
         assert!(!is_cyrillic(&hints), "{hints}");
         assert!(!is_cyrillic(strings::EN.authenticating));
+    }
+
+    fn at(hour: u32, minute: u32) -> DateTime<Local> {
+        Local
+            .with_ymd_and_hms(2026, 10, 28, hour, minute, 0)
+            .single()
+            .expect("дата")
+    }
+
+    /// Ширина часов не зависит от цифр: обе пары — по две цифры
+    /// моноширинного шрифта, а зазоры и ячейка двоеточия фиксированы.
+    #[test]
+    fn the_clock_width_does_not_jump_between_times() {
+        let mut text = TextPainter::new(&super::super::ui_tokens::font_name());
+        let ts = type_scale();
+        let rect = Rect::new(0.0, 0.0, 400.0, ts.display * 1.3);
+        let mut width = |now| {
+            let (hour_rect, _, minute_rect) = clock_columns(&mut text, now, rect, ts.display);
+            minute_rect.right() - hour_rect.x
+        };
+        let zero = width(at(0, 0));
+        let late = width(at(23, 59));
+        let ones = width(at(11, 11));
+        assert!((zero - late).abs() < 0.01, "{zero} и {late}");
+        assert!((zero - ones).abs() < 0.01, "{zero} и {ones}");
+        // И это уже не моноширинная клетка двоеточия: строка плотнее.
+        assert!(
+            zero < text.text_width("00:00", ts.display),
+            "{zero} не уже клетки"
+        );
+    }
+
+    /// Подложка под карточкой проверяется на белом фоне — худшем случае для
+    /// светлой схемы. Контраст текста к фону карточки — не ниже 4.5:1.
+    #[test]
+    fn the_card_plate_keeps_text_readable_on_white() {
+        let white = tiny_skia::Color::WHITE;
+        let card = Rect::new(20.0, 20.0, 180.0, 80.0);
+        let contrast_of = |ui: &UiPalette, plate: f32| {
+            let mut pixmap = Pixmap::new(400, 300).expect("буфер");
+            pixmap.fill(white);
+            paint_card_plate(&mut pixmap, ui, card, plate);
+            card_frame::card(&mut pixmap, card, ui);
+            let pixel = pixmap
+                .pixel(
+                    ((card.x + card.w / 2.0) * SCALE) as u32,
+                    ((card.y + spacing::XS) * SCALE) as u32,
+                )
+                .expect("пиксель")
+                .demultiply();
+            super::super::ui_tokens::contrast(
+                ui.text,
+                Rgba(pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
+            )
+        };
+
+        let dark = super::super::ui_tokens::ui_palette(super::super::palette::Palette::default());
+        let light = super::super::ui_tokens::ui_palette(super::super::palette::Palette {
+            base: Rgba(0xf9, 0xf9, 0xff, 255),
+            text: Rgba(0x1a, 0x1b, 0x21, 255),
+            primary: Rgba(0x3b, 0x5b, 0x92, 255),
+            on_primary: Rgba(0xff, 0xff, 0xff, 255),
+            secondary: Rgba(0xdf, 0xe2, 0xeb, 255),
+            error: Rgba(0xba, 0x1a, 0x1a, 255),
+        });
+        let plate = Config::default().card_plate;
+        assert!(contrast_of(&dark, plate) >= 4.5, "тёмная схема");
+        assert!(contrast_of(&light, plate) >= 4.5, "светлая схема");
+    }
+
+    /// Ноль — подложки нет: карточка не обязана темнеть, если так настроено.
+    #[test]
+    fn a_zero_card_plate_leaves_the_background_alone() {
+        let mut pixmap = Pixmap::new(220, 120).expect("буфер");
+        pixmap.fill(tiny_skia::Color::WHITE);
+        let card = Rect::new(20.0, 20.0, 180.0, 80.0);
+        let ui = super::super::ui_tokens::ui_palette(super::super::palette::Palette::default());
+        paint_card_plate(&mut pixmap, &ui, card, 0.0);
+        let pixel = pixmap.pixel(100, 100).expect("пиксель");
+        assert_eq!((pixel.red(), pixel.green(), pixel.blue()), (255, 255, 255));
     }
 }
