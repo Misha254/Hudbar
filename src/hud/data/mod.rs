@@ -17,8 +17,8 @@ mod workspaces;
 pub use audio::{audio_set_default, refresh_audio};
 pub(crate) use network::{bt_now, set_bt_list};
 pub use network::{
-    bt_power, refresh_bt, refresh_wifi, wifi_connect, wifi_connect_pass, wifi_disconnect,
-    wifi_radio,
+    bt_power, refresh_bt, refresh_wifi, wifi_connect, wifi_connect_pass, wifi_connect_saved,
+    wifi_disconnect, wifi_radio,
 };
 pub(crate) use oneshot::{power_state, wpctl_volume};
 pub use weather::refresh_weather;
@@ -50,6 +50,9 @@ pub struct WifiNet {
     pub signal: u8,
     pub security: String,
     pub in_use: bool,
+    /// UUID сохранённого профиля: пароль уже в NetworkManager, спрашивать
+    /// его заново не нужно. `None` — профиля нет, сеть подключается с паролем.
+    pub saved_uuid: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -337,7 +340,7 @@ fn sys_loop(shared: Arc<Shared>) {
 }
 #[cfg(test)]
 mod tests {
-    use super::network::{parse_bt_devices, parse_wifi_list};
+    use super::network::{bind_saved, parse_bt_devices, parse_wifi_list};
     use super::oneshot::parse_wpctl_volume;
     use super::weather::parse_weather;
     use super::workspaces::parse_ws;
@@ -386,21 +389,43 @@ mod tests {
                     signal: 86,
                     security: "WPA2".into(),
                     in_use: true,
+                    saved_uuid: None,
                 },
                 WifiNet {
                     ssid: "Open".into(),
                     signal: 100,
                     security: "".into(),
                     in_use: false,
+                    saved_uuid: None,
                 },
                 WifiNet {
                     ssid: "broken".into(),
                     signal: 0,
                     security: "".into(),
                     in_use: false,
+                    saved_uuid: None,
                 },
             ]
         );
+    }
+
+    /// Панель бара подключает сеть с профилем без пароля, а сеть без профиля
+    /// оставляет с «нет UUID» — только ей пароль и нужен.
+    #[test]
+    fn saved_profiles_bind_by_ssid_and_leave_the_rest_for_the_password() {
+        let mut list = parse_wifi_list(" :HONOR 200:70:WPA2\n :OTK-314:60:WPA2\n :open-air:30:\n");
+        let profiles = vec![("HONOR 200".to_string(), "uuid-honor".to_string())];
+
+        bind_saved(&mut list, &profiles);
+
+        let uuid = |ssid: &str| {
+            list.iter()
+                .find(|net| net.ssid == ssid)
+                .and_then(|net| net.saved_uuid.clone())
+        };
+        assert_eq!(uuid("HONOR 200").as_deref(), Some("uuid-honor"));
+        assert_eq!(uuid("OTK-314"), None, "профиля нет — спросим пароль");
+        assert_eq!(uuid("open-air"), None);
     }
 
     #[test]

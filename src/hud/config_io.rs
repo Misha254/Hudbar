@@ -7,8 +7,7 @@
 //! - `colors.css` и шаблоны matugen не трогаются: цветами владеет matugen;
 //! - применяется только то, что реально изменилось.
 
-use super::config::Config;
-use super::settings::{HEIGHT_MAX, HEIGHT_MIN, Language, Module, NotificationPosition};
+use super::settings::{Language, Module, NotificationPosition};
 use serde_json::{Map, Value};
 use std::fs;
 use std::io::Write;
@@ -88,55 +87,6 @@ pub fn atomic_write(path: &Path, text: &str) -> Result<(), WriteError> {
     Ok(())
 }
 
-/// Накладывает модель на существующий JSON, сохраняя всё, чего модель не знает.
-pub fn merge(config: &Config, base: Option<&Value>) -> Value {
-    let mut root = match base {
-        Some(value @ Value::Object(_)) => value.clone(),
-        _ => Value::Object(Map::new()),
-    };
-
-    put_root(
-        &mut root,
-        "language",
-        Value::String(config.language.key().to_string()),
-    );
-    put_root(
-        &mut root,
-        "module_order",
-        Value::Array(
-            config
-                .flatten()
-                .into_iter()
-                .map(Value::String)
-                .collect::<Vec<_>>(),
-        ),
-    );
-
-    let bar = section(&mut root, "hudbar");
-    bar.insert("height".into(), Value::from(config.height));
-    bar.insert("control_button".into(), Value::Bool(config.control_button));
-    for module in Module::ALL {
-        bar.insert(
-            module.key().to_string(),
-            Value::Bool(config.module_enabled(module)),
-        );
-    }
-
-    let osd = section(&mut root, "osd");
-    osd.insert("enabled".into(), Value::Bool(config.osd));
-    osd.insert("duration_ms".into(), Value::from(config.osd_duration_ms));
-
-    let notes = section(&mut root, "notifications");
-    notes.insert("font_size".into(), Value::from(config.font_size));
-    notes.insert("line_height".into(), Value::from(config.line_height));
-    notes.insert(
-        "position".into(),
-        Value::String(config.position.key().to_string()),
-    );
-
-    root
-}
-
 /// Точечное изменение одного поля. Окно применяет `Patch`, а не всю модель:
 /// перед записью файл перечитывается с диска, и на него накладывается только
 /// то, что изменил пользователь. Чужие ключи и секции остаются на месте, а
@@ -152,8 +102,6 @@ pub enum Patch {
     },
     /// Корень `module_order` — порядок и состав зон.
     ModuleOrder(Vec<String>),
-    /// `hudbar.control_button` — шестерёнка Control Center на панели.
-    ControlButton(bool),
     Height(u32),
     Language(Language),
     Notifications {
@@ -170,6 +118,12 @@ pub enum Patch {
     Animations {
         enabled: Option<bool>,
         speed: Option<f32>,
+    },
+    /// `idle.screen_off_seconds` и `idle.suspend_seconds`: простой до гашения
+    /// экрана и до сна. Значения читает `sleep.sh`.
+    Idle {
+        screen_off_seconds: Option<u32>,
+        suspend_seconds: Option<u32>,
     },
 }
 
@@ -199,10 +153,6 @@ impl Patch {
                 Language::Ru => "порядок модулей".to_string(),
                 Language::En => "module order".to_string(),
             },
-            Patch::ControlButton(on) => match lang {
-                Language::Ru => format!("кнопка Control Center: {}", on_off(*on)),
-                Language::En => format!("Control Center button: {}", on_off(*on)),
-            },
             Patch::Height(height) => match lang {
                 Language::Ru => format!("высота: {height} px"),
                 Language::En => format!("height: {height} px"),
@@ -219,6 +169,10 @@ impl Patch {
             Patch::Animations { .. } => match lang {
                 Language::Ru => "Анимации".to_string(),
                 Language::En => "Animations".to_string(),
+            },
+            Patch::Idle { .. } => match lang {
+                Language::Ru => "Простой".to_string(),
+                Language::En => "Idle".to_string(),
             },
         }
     }
@@ -247,15 +201,6 @@ impl Patch {
                     return false;
                 }
                 put_root(root, "module_order", value);
-                true
-            }
-            Patch::ControlButton(on) => {
-                let bar = section(root, "hudbar");
-                let value = Value::Bool(*on);
-                if bar.get("control_button") == Some(&value) {
-                    return false;
-                }
-                bar.insert("control_button".to_string(), value);
                 true
             }
             Patch::Height(height) => {
@@ -346,6 +291,28 @@ impl Patch {
                 }
                 changed
             }
+            Patch::Idle {
+                screen_off_seconds,
+                suspend_seconds,
+            } => {
+                let mut changed = false;
+                let idle = section(root, "idle");
+                if let Some(seconds) = screen_off_seconds {
+                    let value = Value::from(*seconds);
+                    if idle.get("screen_off_seconds") != Some(&value) {
+                        idle.insert("screen_off_seconds".to_string(), value);
+                        changed = true;
+                    }
+                }
+                if let Some(seconds) = suspend_seconds {
+                    let value = Value::from(*seconds);
+                    if idle.get("suspend_seconds") != Some(&value) {
+                        idle.insert("suspend_seconds".to_string(), value);
+                        changed = true;
+                    }
+                }
+                changed
+            }
         }
     }
 }
@@ -400,57 +367,8 @@ fn put_root(root: &mut Value, key: &str, value: Value) {
         .insert(key.to_string(), value);
 }
 
-/// Читает текущий файл, накладывает модель и пишет атомарно.
-pub fn save(config: &Config) -> Result<(), WriteError> {
-    let path = settings_path();
-    let base = match fs::read_to_string(&path) {
-        Ok(text) => Some(
-            serde_json::from_str::<Value>(&text)
-                .map_err(|why| WriteError::Serialize(why.to_string()))?,
-        ),
-        Err(why) if why.kind() == std::io::ErrorKind::NotFound => None,
-        Err(why) => return Err(WriteError::Read(why.to_string())),
-    };
-    let merged = merge(config, base.as_ref());
-    let mut text = serde_json::to_string_pretty(&merged)
-        .map_err(|why| WriteError::Serialize(why.to_string()))?;
-    text.push('\n');
-    atomic_write(&path, &text)
-}
-
-/// Нормализует значение перед записью: высота и размеры в пределах поддержки.
-pub fn normalize(config: &mut Config) {
-    config.height = config.height.clamp(HEIGHT_MIN, HEIGHT_MAX);
-    config.font_size = config.font_size.clamp(
-        super::settings::FONT_SIZE_MIN,
-        super::settings::FONT_SIZE_MAX,
-    );
-    config.line_height = config.line_height.clamp(
-        super::settings::LINE_HEIGHT_MIN,
-        super::settings::LINE_HEIGHT_MAX,
-    );
-    if !matches!(config.language, Language::Ru | Language::En) {
-        config.language = Language::Ru;
-    }
-    if !matches!(
-        config.position,
-        NotificationPosition::TopLeft
-            | NotificationPosition::TopRight
-            | NotificationPosition::BottomLeft
-            | NotificationPosition::BottomRight
-    ) {
-        config.position = NotificationPosition::TopRight;
-    }
-}
-
-/// Настройки панели из файла: то же, что читает сам HUDbar.
-pub fn load() -> Config {
-    Config::from(&super::settings::load())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::settings::MODULE_KEYS;
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -514,123 +432,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_unknown_top_level_keys() {
-        let base: Value = serde_json::from_str(r#"{"custom":{"a":1},"language":"en"}"#).unwrap();
-
-        let merged = merge(&Config::default(), Some(&base));
-
-        assert_eq!(merged["custom"]["a"], 1);
-        assert_eq!(merged["language"], "ru", "модель перекрывает известное");
-    }
-
-    #[test]
-    fn merge_keeps_unknown_module_flags_and_extra_sections() {
-        let base: Value = serde_json::from_str(
-            r#"{"hudbar":{"weather":true,"future_module":true},"my_section":{"x":1}}"#,
-        )
-        .unwrap();
-
-        let merged = merge(&Config::default(), Some(&base));
-
-        assert_eq!(merged["hudbar"]["future_module"], true);
-        assert_eq!(merged["my_section"]["x"], 1);
-    }
-
-    #[test]
-    fn merge_writes_every_module_flag() {
-        let mut config = Config::default();
-        config.set_module(Module::Weather, false);
-        config.set_module(Module::Dnd, false);
-
-        let merged = merge(&config, None);
-
-        for key in MODULE_KEYS {
-            let expected = key != "weather" && key != "dnd";
-            assert_eq!(merged["hudbar"][key], Value::Bool(expected), "{key}");
-        }
-    }
-
-    #[test]
-    fn merge_writes_order_flat_from_zones() {
-        let mut config = Config::default();
-        config.move_within_zone(Module::Dnd, -1);
-
-        let merged = merge(&config, None);
-        let order: Vec<&str> = merged["module_order"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap())
-            .collect();
-
-        assert_eq!(order.len(), MODULE_KEYS.len());
-        assert_eq!(order[0], "tray");
-        assert_eq!(order[1], "weather");
-        assert_eq!(*order.last().unwrap(), "network");
-    }
-
-    #[test]
-    fn merge_writes_notifications() {
-        let config = Config {
-            font_size: 16,
-            line_height: 20,
-            position: NotificationPosition::BottomLeft,
-            ..Default::default()
-        };
-
-        let merged = merge(&config, None);
-
-        assert_eq!(merged["notifications"]["font_size"], 16);
-        assert_eq!(merged["notifications"]["line_height"], 20);
-        assert_eq!(merged["notifications"]["position"], "bottom-left");
-    }
-
-    #[test]
-    fn merge_writes_the_osd_section() {
-        let config = Config {
-            osd: false,
-            osd_duration_ms: 2500,
-            ..Default::default()
-        };
-
-        let merged = merge(&config, None);
-
-        assert_eq!(merged["osd"]["enabled"], false);
-        assert_eq!(merged["osd"]["duration_ms"], 2500);
-    }
-
-    #[test]
-    fn merge_result_parses_back_into_an_equal_config() {
-        let mut config = Config::default();
-        config.move_within_zone(Module::Audio, -1);
-        config.height = 33;
-        config.language = Language::En;
-
-        let merged = merge(&config, None);
-        let text = serde_json::to_string(&merged).unwrap();
-        let restored = Config::from(&super::super::settings::parse(&text));
-
-        assert_eq!(restored.flatten(), config.flatten());
-        assert_eq!(restored.height, 33);
-        assert_eq!(restored.language, Language::En);
-    }
-
-    #[test]
-    fn osd_section_survives_a_save_and_read_round_trip() {
-        let config = Config {
-            osd: false,
-            osd_duration_ms: 900,
-            ..Default::default()
-        };
-        let text = serde_json::to_string(&merge(&config, None)).unwrap();
-
-        let restored = Config::from(&super::super::settings::parse(&text));
-
-        assert!(!restored.osd);
-        assert_eq!(restored.osd_duration_ms, 900);
-    }
-
-    #[test]
     fn apply_patch_writes_only_the_osd_field_that_changed() {
         let dir = temp_dir("patch-osd");
         let path = dir.join("settings.json");
@@ -679,6 +480,32 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_writes_idle_timeouts_without_touching_other_sections() {
+        let dir = temp_dir("patch-idle");
+        let path = dir.join("settings.json");
+        seed(
+            &path,
+            r#"{"hudbar":{"height":27},"vpn":{"timeout_ms":1500}}"#,
+        );
+
+        let changed = apply_patch_to(
+            &path,
+            &Patch::Idle {
+                screen_off_seconds: Some(600),
+                suspend_seconds: Some(1800),
+            },
+        )
+        .unwrap();
+
+        assert!(changed);
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["idle"]["screen_off_seconds"], 600);
+        assert_eq!(root["idle"]["suspend_seconds"], 1800);
+        assert_eq!(root["hudbar"]["height"], 27);
+        assert_eq!(root["vpn"]["timeout_ms"], 1500);
+    }
+
+    #[test]
     fn apply_patch_reports_no_change_for_an_identical_osd_value() {
         let dir = temp_dir("patch-osd-noop");
         let path = dir.join("settings.json");
@@ -698,50 +525,8 @@ mod tests {
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
     }
 
-    #[test]
-    fn normalize_clamps_out_of_range_values() {
-        let mut config = Config {
-            height: 999,
-            font_size: 1,
-            line_height: 999,
-            ..Default::default()
-        };
-
-        normalize(&mut config);
-
-        assert_eq!(config.height, HEIGHT_MAX);
-        assert_eq!(config.font_size, 10);
-        assert_eq!(config.line_height, 28);
-    }
-
-    #[test]
-    fn normalize_keeps_valid_values_untouched() {
-        let mut config = Config {
-            height: 30,
-            font_size: 14,
-            line_height: 18,
-            ..Default::default()
-        };
-        let before = config.clone();
-
-        normalize(&mut config);
-
-        assert_eq!(config, before);
-    }
-
-    /// Окно не должно иметь возможности писать цвета: единственный путь записи —
-    /// `save`/`save_font`, и ни один из них не касается `colors.css`.
-    #[test]
-    fn write_targets_never_include_colors_css() {
-        let written = [settings_path().to_string_lossy().into_owned()];
-        assert_eq!(written.len(), 1);
-        assert!(!written[0].ends_with("colors.css"));
-        assert!(!written[0].contains("matugen"));
-        assert!(!written[0].ends_with(".css"));
-    }
-
-    /// Цветами владеет matugen, и окно не должно его запускать: иначе смена
-    /// Normal/Pixel пересчитала бы палитру. Проверяем все исходники, а не
+    /// Цветами владеет matugen, и меню не должно его запускать: иначе смена
+    /// схемы пересчитала бы палитру. Проверяем все исходники, а не
     /// список путей, — вызов можно было бы добавить где угодно.
     #[test]
     fn no_source_file_invokes_matugen() {

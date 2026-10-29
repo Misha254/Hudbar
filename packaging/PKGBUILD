@@ -8,16 +8,17 @@
 # строку нужно заменить, а файл положить в /usr/share/licenses/hudbar/.
 
 pkgname=hudbar
-pkgver=0.16.1
+pkgver=0.18.7
 pkgrel=1
-pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев и VPN'
+pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, VPN, экран входа и блокировки'
 arch=('x86_64')
 url='https://github.com/Misha254/Hudbar'
 license=('custom')
-depends=('dbus' 'gcc-libs' 'libxkbcommon' 'systemd-libs')
+depends=('dbus' 'gcc-libs' 'libxkbcommon' 'pam' 'systemd-libs')
 makedepends=('cargo' 'git' 'rust')
 optdepends=(
-    'niri: рабочий стол, для которого панель и написана'
+    'niri: рабочий стол, для которого панель и написана, и композитор экрана входа'
+    'greetd: экран входа hud-greeter-rs'
     'networkmanager: чип сети, Wi-Fi и VPN (nmcli)'
     'bluez-utils: состояние Bluetooth (bluetoothctl)'
     'pipewire: громкость и микрофон (wpctl, pactl)'
@@ -43,6 +44,8 @@ _bins=(
     hud-vpn-rs
     hud-wallpaper-rs
     hud-schemes-rs
+    hud-greeter-rs
+    hud-lock-rs
 )
 _scripts=(
     hud-menu
@@ -83,6 +86,17 @@ package() {
     # установочном файле, поэтому копируется вместе с остальными.
     install -Dm644 docs/settings.schema.json "$pkgdir/usr/share/hudbar/settings.schema.json"
 
+    # Экран входа: конфиг niri, пример greetd и установщик. Бинарь уже в
+    # _bins; здесь только файлы, которые root ставит отдельно.
+    install -Dm644 contrib/greeter/niri-greeter.kdl \
+        "$pkgdir/usr/share/hudbar/greeter/niri-greeter.kdl"
+    install -Dm644 contrib/greeter/config.toml.example \
+        "$pkgdir/usr/share/hudbar/greeter/config.toml.example"
+    install -Dm755 contrib/greeter/install-greeter.sh \
+        "$pkgdir/usr/share/hudbar/greeter/install-greeter.sh"
+
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgname/CHANGELOG.md"
+    install -Dm644 docs/greeter.md "$pkgdir/usr/share/doc/$pkgname/greeter.md"
+    install -Dm644 docs/lock.md "$pkgdir/usr/share/doc/$pkgname/lock.md"
 }

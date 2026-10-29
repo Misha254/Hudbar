@@ -16,8 +16,9 @@ use super::super::data::oneshot;
 use super::super::schemes;
 use super::action::Action;
 use super::settings::{
-    ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, Language, Module, OSD_DURATION_MAX_MS,
-    OSD_DURATION_MIN_MS,
+    ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, IDLE_SCREEN_OFF_MAX_SECONDS,
+    IDLE_SCREEN_OFF_MIN_SECONDS, IDLE_SUSPEND_MAX_SECONDS, IDLE_SUSPEND_MIN_SECONDS, Language,
+    Module, OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS,
 };
 use super::settings_icons;
 use super::state::Menu;
@@ -156,11 +157,6 @@ fn has_keybinds() -> bool {
 }
 fn has_yazibinds() -> bool {
     has("hud-yazibinds-rs")
-}
-/// Высота панели одним значением для корневой строки «Панель»: состояние
-/// видно без входа в раздел.
-fn height_value() -> String {
-    format!("{:.0} px", values::height())
 }
 /// Строка языка на корне. Язык — настройка всего интерфейса, а не деталь
 /// оформления: в «Стиле» её приходилось искать, теперь она на виду.
@@ -363,9 +359,7 @@ fn panel_section(lang: Language) -> Node {
         animations_group(lang),
         order_section(lang),
     ];
-    Node::submenu(settings_icons::PANEL_MONITOR, title, children)
-        .with_value(height_value)
-        .search_as(kw)
+    Node::submenu(settings_icons::PANEL_MONITOR, title, children).search_as(kw)
 }
 
 /// Группа тумблеров модулей: что вообще живёт на панели.
@@ -381,7 +375,7 @@ fn modules_group(lang: Language) -> Node {
     Node::submenu(settings_icons::TH_LARGE, title, children).search_as(kw)
 }
 
-/// Группа вида панели: высота и шестерёнка Control Center.
+/// Группа вида панели: высота панели.
 fn look_group(lang: Language) -> Node {
     let t = |ru: &'static str, en: &'static str| match lang {
         Language::Ru => ru,
@@ -406,13 +400,6 @@ fn look_group(lang: Language) -> Node {
                 values::set_height,
             )
             .search_as(&["height", "высота"]),
-            Node::toggle(
-                settings_icons::CONTROLS,
-                "Control Center",
-                values::control_button,
-                values::set_control_button,
-            )
-            .search_as(&["control", "control center", "шестерёнка"]),
         ],
     )
     .search_as(kw)
@@ -805,6 +792,65 @@ fn has_devices_menu() -> bool {
 }
 
 /// Раздел системы: живые переключатели и быстрые скрипты.
+/// «Питание» в «Системе»: простой экрана, сон ноутбука и профиль питания
+/// одной строкой. Три отдельных пункта подряд занимали половину уровня и
+/// читались как разрозненные настройки, хотя все они про энергию.
+fn power_group(lang: Language) -> Node {
+    let t = |ru: &'static str, en: &'static str| match lang {
+        Language::Ru => ru,
+        Language::En => en,
+    };
+    Node::submenu(
+        settings_icons::BATTERY,
+        t("Питание", "Power"),
+        vec![
+            Node::number(
+                settings_icons::PANEL_MONITOR,
+                t("Экран гаснет", "Screen off"),
+                (IDLE_SCREEN_OFF_MIN_SECONDS / 60) as f32,
+                (IDLE_SCREEN_OFF_MAX_SECONDS / 60) as f32,
+                1.0,
+                t(" мин", " min"),
+                values::idle_screen_off,
+                values::set_idle_screen_off,
+            )
+            .with_id("system/idle-screen-off")
+            .search_as(&["screen", "idle", "экран", "гаснет", "простой"]),
+            Node::number(
+                settings_icons::SLEEP,
+                t("Сон ноутбука", "Suspend after"),
+                (IDLE_SUSPEND_MIN_SECONDS / 60) as f32,
+                (IDLE_SUSPEND_MAX_SECONDS / 60) as f32,
+                1.0,
+                t(" мин", " min"),
+                values::idle_suspend,
+                values::set_idle_suspend,
+            )
+            .with_id("system/idle-suspend")
+            .search_as(&["sleep", "suspend", "сон", "спать", "простой"]),
+            Node::action(
+                settings_icons::BATTERY,
+                t("Режим питания", "Power profile"),
+                Action::Native(super::action::Native::PowerProfileCycle),
+            )
+            .with_value(power_profile_value)
+            .with_id("system/power-profile")
+            .when(has_power_profile)
+            .search_as(&["power", "питание", "профиль", "battery"]),
+        ],
+    )
+    .with_id("system/power")
+    .search_as(&[
+        "power",
+        "питание",
+        "энергия",
+        "idle",
+        "простой",
+        "сон",
+        "экран",
+    ])
+}
+
 fn system_section(lang: Language) -> Node {
     let (title, kw) = match lang {
         Language::Ru => ("Система", &["system", "система"]),
@@ -833,15 +879,7 @@ fn system_section(lang: Language) -> Node {
         )
         .with_id("system/coffee")
         .search_as(&["coffee", "кофе", "caffeine"]),
-        Node::action(
-            settings_icons::BATTERY,
-            t("Режим питания", "Power profile"),
-            Action::Native(super::action::Native::PowerProfileCycle),
-        )
-        .with_value(power_profile_value)
-        .with_id("system/power-profile")
-        .when(has_power_profile)
-        .search_as(&["power", "питание", "профиль", "battery"]),
+        power_group(lang),
         updates_group(lang),
     ];
     // «Конфиги» дописываются отдельно: целей может не оказаться вовсе, и
@@ -1228,9 +1266,15 @@ fn about_section(lang: Language) -> Node {
     .search_as(kw)
 }
 
-/// Настоящее дерево на указанном языке. Порядок корня повторяет `SECTIONS`,
-/// чтобы прямой вход по идентификатору не зависел от подписей: сначала
-/// настройки и система, потом инструменты и справка.
+/// «Питание» не показывается в корне: у него есть бинд `super+P`, который
+/// открывает раздел напрямую (`hud-menu power`). Узел остаётся в дереве, чтобы
+/// этот вход и снимки работали; `visible` убирает его из списка и поиска.
+fn power_hidden() -> bool {
+    false
+}
+
+/// Настоящее дерево на указанном языке. Порядок видимого корня повторяет
+/// `SECTIONS`: сначала настройки и система, потом инструменты и справка.
 pub fn tree_in(lang: Language) -> Vec<Node> {
     vec![
         apps_section(lang),
@@ -1239,7 +1283,7 @@ pub fn tree_in(lang: Language) -> Vec<Node> {
         notifications_section(lang),
         language_row(lang),
         system_section(lang),
-        power_section(lang),
+        power_section(lang).when(power_hidden),
         capture_section(lang),
         keybinds_section(lang),
         about_section(lang),
@@ -1397,6 +1441,75 @@ mod tests {
                 visible,
                 has_audio(),
                 "видимость входа обязана совпадать с наличием wpctl/pactl"
+            );
+        }
+    }
+
+    /// Три настройки энергии собраны в одно подменю «Питание»: простой
+    /// экрана, сон и профиль. В самом разделе «Система» их строк больше нет —
+    /// иначе группа дублировалась бы тремя пунктами подряд.
+    #[test]
+    fn power_group_keeps_idle_and_profile_rows_together() {
+        for lang in [Language::Ru, Language::En] {
+            let system = tree_in(lang)
+                .into_iter()
+                .find(|node| node.identity() == "Система" || node.identity() == "System")
+                .expect("раздел «Система»");
+            let children = system.children().expect("у раздела есть дети");
+            for id in ["system/idle-screen-off", "system/idle-suspend"] {
+                assert!(
+                    !children.iter().any(|node| node.identity() == id),
+                    "строка {id} должна жить в «Питании», а не в «Системе»"
+                );
+            }
+
+            let group = find_by_id(children, "system/power");
+            assert!(
+                matches!(group.kind, super::super::tree::NodeKind::Submenu(_)),
+                "питание — подменю"
+            );
+            assert!(
+                group.value.is_none(),
+                "строка подменю без значения: профиль виден внутри, а не справа"
+            );
+            assert_eq!(
+                group.title,
+                if lang == Language::Ru {
+                    "Питание"
+                } else {
+                    "Power"
+                }
+            );
+
+            let kids = group.children().expect("у подменю есть пункты");
+            let ids: Vec<&str> = kids.iter().map(Node::identity).collect();
+            assert_eq!(
+                ids,
+                [
+                    "system/idle-screen-off",
+                    "system/idle-suspend",
+                    "system/power-profile"
+                ]
+            );
+
+            let screen = find_by_id(kids, "system/idle-screen-off");
+            assert_eq!(
+                screen.title,
+                if lang == Language::Ru {
+                    "Экран гаснет"
+                } else {
+                    "Screen off"
+                },
+                "единица измерения остаётся в значении справа, а не в заголовке"
+            );
+            let suspend = find_by_id(kids, "system/idle-suspend");
+            assert_eq!(
+                suspend.title,
+                if lang == Language::Ru {
+                    "Сон ноутбука"
+                } else {
+                    "Suspend after"
+                }
             );
         }
     }
@@ -1636,15 +1749,15 @@ mod tests {
     }
 
     #[test]
-    fn root_has_ten_sections_in_order() {
+    fn root_has_nine_sections_without_power() {
         for lang in [Language::Ru, Language::En] {
             let menu = Menu::new(tree_in(lang));
             assert_eq!(menu.depth(), 0);
-            assert_eq!(menu.frame().items.len(), 10);
+            assert_eq!(menu.frame().items.len(), 9);
             assert_eq!(
                 menu.frame().items.len(),
                 super::super::SECTIONS.len(),
-                "порядок прямого входа повторяет корень"
+                "порядок прямого входа повторяет видимый корень"
             );
         }
         let ru = Menu::new(tree_in(Language::Ru));
@@ -1659,12 +1772,96 @@ mod tests {
                 "Уведомления",
                 "Язык",
                 "Система",
-                "Питание",
                 "Захват",
                 "Бинды",
                 "Hudbar"
             ]
         );
+        let panel = frame
+            .items
+            .iter()
+            .find(|item| item.title == "Панель")
+            .expect("строка «Панель»");
+        assert!(
+            panel.value.is_empty(),
+            "у раздела нет значения справа: «27 px» в корне только мешало"
+        );
+    }
+
+    /// Control Center удалён целиком: в «Панель › Вид панели» осталась только
+    /// высота, а строки с этим названием нет ни в одном разделе.
+    #[test]
+    fn control_center_is_gone_from_the_tree() {
+        use super::super::tree::NodeKind;
+
+        fn titles(node: &Node, out: &mut Vec<String>) {
+            out.push(node.title.clone());
+            if let NodeKind::Submenu(children) = &node.kind {
+                for child in children {
+                    titles(child, out);
+                }
+            }
+        }
+
+        for lang in [Language::Ru, Language::En] {
+            let look = look_group(lang);
+            let NodeKind::Submenu(children) = &look.kind else {
+                panic!("«Вид панели» — подменю, а не {:?}", look.kind);
+            };
+            assert_eq!(
+                children.len(),
+                1,
+                "в «Вид панели» осталась только высота, а не переключатель Control Center"
+            );
+            assert_eq!(
+                children[0].title,
+                match lang {
+                    Language::Ru => "Высота",
+                    Language::En => "Height",
+                }
+            );
+
+            let mut found = Vec::new();
+            for node in tree_in(lang) {
+                titles(&node, &mut found);
+            }
+            assert!(
+                !found.iter().any(|title| title == "Control Center"),
+                "строка Control Center не должна оставаться в дереве: {found:?}"
+            );
+        }
+    }
+
+    /// «Питание» убрано из корня, но бинд `super+P` зовёт `hud-menu power`:
+    /// скрытый раздел обязан открываться прямым входом.
+    #[test]
+    fn hidden_power_section_opens_by_id() {
+        for lang in [Language::Ru, Language::En] {
+            let mut menu = Menu::new(tree_in(lang));
+            menu.set_lang(lang);
+            assert!(
+                !menu.frame().items.iter().any(|item| item.title
+                    == if lang == Language::Ru {
+                        "Питание"
+                    } else {
+                        "Power"
+                    }),
+                "раздел питания не должен попадать в корень"
+            );
+            assert!(
+                super::super::open_section(&mut menu, "power"),
+                "прямой вход по идентификатору работает"
+            );
+            assert_eq!(menu.depth(), 1);
+            assert_eq!(
+                menu.current().title,
+                if lang == Language::Ru {
+                    "Питание"
+                } else {
+                    "Power"
+                }
+            );
+        }
     }
 
     #[test]
@@ -1796,14 +1993,10 @@ mod tests {
     #[test]
     fn power_confirm_runs_the_command_or_returns_without_it() {
         let mut menu = Menu::new(tree_in(Language::Ru));
-        let index = menu
-            .frame()
-            .items
-            .iter()
-            .position(|item| item.title == "Питание")
-            .expect("раздел «Питание»");
-        menu.current_mut().list.select(index);
-        assert_eq!(menu.enter(), Outcome::Pushed);
+        assert!(
+            super::super::open_section(&mut menu, "power"),
+            "скрытый раздел открывается прямым входом"
+        );
 
         let index = menu
             .frame()

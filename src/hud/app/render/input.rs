@@ -65,7 +65,6 @@ impl App {
                     );
                 }
             }
-            Some(Hit::ControlChip) => self.toggle_panel(PanelKind::Control, qh),
             Some(Hit::ClockChip) => self.toggle_panel(PanelKind::Clock, qh),
             Some(Hit::WeatherChip) => self.toggle_panel(PanelKind::Weather, qh),
             Some(Hit::VolChip) => self.toggle_panel(PanelKind::Volume, qh),
@@ -164,7 +163,6 @@ impl App {
         match kind {
             PanelKind::Wifi => sys.wifi_enabled,
             PanelKind::Bt => sys.bt_on,
-            PanelKind::Control => true,
             PanelKind::Volume => !sys.vol_muted,
             PanelKind::Mic => !sys.mic_muted,
             _ => false,
@@ -284,30 +282,14 @@ impl App {
         }
         let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
         match kind {
-            PanelKind::Control => {
-                // Индекс строки, а не подпись: подписи зависят от языка, и
-                // сравнение по тексту ломалось бы в английском окне. Порядок
-                // совпадает с `control_rows`.
-                match idx {
-                    0 => data::wifi_radio(&self.shared, !self.radio_state(PanelKind::Wifi)),
-                    1 => data::bt_power(&self.shared, !self.radio_state(PanelKind::Bt)),
-                    2 => crate::hud::actions::dnd_toggle(),
-                    3 => crate::hud::actions::vol_mute_toggle(&self.shared),
-                    4 => crate::hud::actions::mic_mute_toggle(&self.shared),
-                    // Раньше это открывало rofi-пикер из `wall.sh`. Теперь
-                    // выбор обоев — своё окно HUDbar, а `wall.sh` остался
-                    // только применением (awww + matugen).
-                    5 => crate::hud::actions::spawn("hud-wallpaper"),
-                    6 => crate::hud::actions::spawn_with_args("hud-menu", &["power"]),
-                    7 => crate::hud::actions::spawn("dynalock.sh"),
-                    _ => {}
-                }
-                self.close_panel();
-            }
             PanelKind::Wifi => {
                 if let Some(n) = sys.wifi_list.get(idx) {
                     if n.in_use {
                         data::wifi_disconnect(&self.shared);
+                    } else if let Some(uuid) = n.saved_uuid.clone() {
+                        // Профиль уже есть: пароль лежит в NetworkManager,
+                        // спрашивать его заново незачем.
+                        data::wifi_connect_saved(&self.shared, &uuid);
                     } else if n.security.is_empty() || n.security == "--" {
                         data::wifi_connect(&self.shared, &n.ssid);
                     } else if let Some(pn) = self.panel.as_mut() {

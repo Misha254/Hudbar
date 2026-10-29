@@ -165,14 +165,15 @@ DND, воркспейсы, элементы трея.
 | `colors.css` | `palette.rs` | каждый проход главного цикла |
 | `font` | `ui::configured_font` | один раз на старте |
 
-`settings.json` содержит секции `appearance`, `hudbar`, `notifications`, `osd` и `vpn`; описание
+`settings.json` содержит секции `hudbar`, `notifications`, `osd`, `idle` и `vpn`; описание
 ключей, диапазонов и значений по умолчанию — в `docs/settings.schema.json`. Схема ложится рядом с
 настройками, а в установочном файле стоит ссылка `"$schema": "./settings.schema.json"`: редактор по
 ней проверяет файл и подсказывает ключи. Соответствие схемы коду держат тесты
 (`the_settings_schema_matches_the_parser`), а установочного файла — `the_installed_settings_match_the_schema_defaults`.
 Установщик перед обновлением объединяет старые настройки и сохраняет backup; исходный файл
-`~/.config/hud-settings/settings.json` оставляется без изменений: он читается как запасной
-вариант до 01.01.2027, дальше живёт только `hudbar/settings.json` (см. ROADMAP, F).
+`~/.config/hud-settings/settings.json` оставляется без изменений: его читают только легаси-утилиты
+`hud-setting` и `hud-migrate-settings` до 01.01.2027, а меню и панель работают исключительно с
+`~/.config/hudbar/settings.json` (см. ROADMAP, F).
 
 Ошибки внешних зависимостей и ненулевые коды выхода пишутся в
 `~/.local/state/hudbar.log` или `$XDG_STATE_HOME/hudbar.log`. Секреты прячутся по

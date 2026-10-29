@@ -608,6 +608,79 @@ where
         + LayerShellHandler
         + 'static,
 {
+    open_with(
+        compositor,
+        layer_shell,
+        shm,
+        qh,
+        shape,
+        Anchor::empty(),
+        Some((shape.width, shape.height)),
+        now,
+        anim,
+    )
+}
+
+/// Полноэкранный слой: якоря на все четыре стороны, размер отдаёт композитор
+/// (`set_size(0, 0)`).
+///
+/// Отдельная функция, а не флаг у [`open`]: у меню, обоев и схем размер
+/// карточки свой и якорей нет, и менять их поведение ради экрана входа нельзя.
+/// Всё остальное — пул, configure, проявление — общее.
+pub fn open_fullscreen<D>(
+    compositor: &CompositorState,
+    layer_shell: &LayerShell,
+    shm: &Shm,
+    qh: &QueueHandle<D>,
+    shape: Shape,
+    now: std::time::Instant,
+    anim: AnimSettings,
+) -> Result<Context, String>
+where
+    D: Dispatch<wl_surface::WlSurface, SurfaceData<()>>
+        + Dispatch<
+            smithay_client_toolkit::reexports::protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+            LayerSurfaceData,
+        >
+        + LayerShellHandler
+        + 'static,
+{
+    open_with(
+        compositor,
+        layer_shell,
+        shm,
+        qh,
+        shape,
+        Anchor::all(),
+        None,
+        now,
+        anim,
+    )
+}
+
+/// Общая часть `open` и `open_fullscreen`. `size` — явный `set_size` или
+/// `None`, чтобы размер задал композитор по якорям.
+#[allow(clippy::too_many_arguments)]
+fn open_with<D>(
+    compositor: &CompositorState,
+    layer_shell: &LayerShell,
+    shm: &Shm,
+    qh: &QueueHandle<D>,
+    shape: Shape,
+    anchor: Anchor,
+    size: Option<(u32, u32)>,
+    now: std::time::Instant,
+    anim: AnimSettings,
+) -> Result<Context, String>
+where
+    D: Dispatch<wl_surface::WlSurface, SurfaceData<()>>
+        + Dispatch<
+            smithay_client_toolkit::reexports::protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+            LayerSurfaceData,
+        >
+        + LayerShellHandler
+        + 'static,
+{
     let surface = compositor.create_surface(qh);
     let layer = layer_shell.create_layer_surface(
         qh,
@@ -616,13 +689,15 @@ where
         shape.namespace,
         None,
     );
-    layer.set_anchor(Anchor::empty());
+    layer.set_anchor(anchor);
     layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
     layer.set_exclusive_zone(-1);
     layer.set_margin(0, 0, 0, 0);
     // Размер до первого commit: у слоя без якорей композитор не возьмёт
-    // ширину откуда-то ещё.
-    layer.set_size(shape.width, shape.height);
+    // ширину откуда-то ещё. С якорями на все стороны нули — просьба «дай
+    // весь экран».
+    let (width, height) = size.unwrap_or((0, 0));
+    layer.set_size(width, height);
     layer.commit();
     let bytes = shape.width as usize
         * shape.max_height as usize

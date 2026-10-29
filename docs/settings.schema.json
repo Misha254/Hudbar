@@ -27,7 +27,7 @@
     "hudbar": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Сам бар: высота, включённость чипов, кнопка Control Center и анимации.",
+      "description": "Сам бар: высота, включённость чипов и анимации.",
       "properties": {
         "height": {
           "type": "integer",
@@ -86,11 +86,6 @@
           "default": true,
           "description": "Чип режима «не беспокоить»."
         },
-        "control_button": {
-          "type": "boolean",
-          "default": true,
-          "description": "Шестерёнка Control Center на баре. Выключать её нужно явно."
-        },
         "animations": {
           "type": "boolean",
           "default": true,
@@ -148,6 +143,27 @@
           "maximum": 4000,
           "default": 1600,
           "description": "Сколько миллисекунд висит окно: значение вне диапазона зажимается в 600..4000."
+        }
+      }
+    },
+    "idle": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Простой системы: через сколько секунд гаснет экран и ноутбук уходит в сон. Значения читает ~/.local/bin/sleep.sh и передаёт их swayidle.",
+      "properties": {
+        "screen_off_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600,
+          "default": 900,
+          "description": "Сколько секунд без ввода гасить экран: значение вне диапазона зажимается в 60..3600."
+        },
+        "suspend_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 10800,
+          "default": 1200,
+          "description": "Сколько секунд без ввода уходить в сон: значение вне диапазона зажимается в 60..10800."
         }
       }
     },

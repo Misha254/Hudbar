@@ -63,6 +63,7 @@ pub mod wifi;
 // `main.rs` меню лежит в `hud::menu`, а в бинаре меню — в корне
 // крейта, и путь до общих модулей у них разный.
 use action::{Action, Live};
+use settings::Language;
 use state::Menu;
 use tree::Node;
 
@@ -463,19 +464,23 @@ pub fn demo_menu() -> Menu {
 
 /// Разделы корня и их идентификаторы для прямого входа: `hud-menu style`.
 /// Идентификатор английский, чтобы набирать его было не только в русской
-/// раскладке.
-pub const SECTIONS: [(&str, &str); 10] = [
-    ("apps", "Приложения"),
-    ("panel", "Панель"),
-    ("style", "Стиль"),
-    ("notifications", "Уведомления"),
-    ("language", "Язык"),
-    ("system", "Система"),
-    ("power", "Питание"),
-    ("capture", "Захват"),
-    ("keybinds", "Бинды"),
-    ("about", "Hudbar"),
+/// раскладке; подписи обеих языковых версий хранятся рядом, потому что дерево
+/// строится на текущем языке.
+pub const SECTIONS: [(&str, &str, &str); 9] = [
+    ("apps", "Приложения", "Applications"),
+    ("panel", "Панель", "Panel"),
+    ("style", "Стиль", "Style"),
+    ("notifications", "Уведомления", "Notifications"),
+    ("language", "Язык", "Language"),
+    ("system", "Система", "System"),
+    ("capture", "Захват", "Capture"),
+    ("keybinds", "Бинды", "Keybinds"),
+    ("about", "Hudbar", "Hudbar"),
 ];
+
+/// Разделы без строки в корне: «Питание» остаётся доступным по бинду
+/// `super+P` (`hud-menu power`), но список корня и поиск им не засоряются.
+pub const HIDDEN_SECTIONS: [(&str, &str, &str); 1] = [("power", "Питание", "Power")];
 
 /// Заголовок раздела по идентификатору. Вложенный путь `system/control`
 /// заголовка не имеет: у него есть только родитель.
@@ -485,8 +490,21 @@ pub fn section_title(id: &str) -> Option<&'static str> {
     }
     SECTIONS
         .iter()
-        .find(|(key, _)| *key == id)
-        .map(|(_, title)| *title)
+        .chain(HIDDEN_SECTIONS.iter())
+        .find(|(key, _, _)| *key == id)
+        .map(|(_, title, _)| *title)
+}
+
+/// Подпись раздела на языке меню: по ней раздел ищется в дереве.
+fn section_title_in(lang: Language, id: &str) -> Option<&'static str> {
+    SECTIONS
+        .iter()
+        .chain(HIDDEN_SECTIONS.iter())
+        .find(|(key, _, _)| *key == id)
+        .map(|(_, ru, en)| match lang {
+            Language::Ru => *ru,
+            Language::En => *en,
+        })
 }
 
 /// Такой раздел (возможно, вложенный) есть в дереве.
@@ -496,8 +514,8 @@ pub fn has_section(id: &str) -> bool {
 
 /// Открывает раздел сразу при старте. Возвращает `true`, если раздел найден:
 /// неизвестный идентификатор должен открывать корень, а не пустой уровень.
-/// Вход идёт по позиции в `SECTIONS`, а не по заголовку: настоящее дерево
-/// строится на текущем языке, и русская подпись здесь не обязана совпасть.
+/// Раздел ищется по подписи на языке меню, а не по позиции: настоящий корень
+/// строится на текущем языке, а скрытые разделы вообще не попадают в список.
 pub fn open_section(menu: &mut Menu, id: &str) -> bool {
     // Вложенный путь: сначала родительский раздел, потом строка с такой
     // личностью. Нужен биндам вида `super+Escape → hud-menu-rs system/control`,
@@ -520,19 +538,17 @@ pub fn open_section(menu: &mut Menu, id: &str) -> bool {
         menu.current_mut().list.select(index);
         return menu.enter() == state::Outcome::Pushed;
     }
-    let Some(index) = SECTIONS.iter().position(|(key, _)| *key == id) else {
+    let Some(title) = section_title_in(menu.lang(), id) else {
         return false;
     };
-    let Some(item) = menu.current().list.items().get(index) else {
-        return false;
-    };
+    // `push` не смотрит на `visible`: «Питание» спрятано из корня, но прямой
+    // вход `hud-menu power` обязан открыть его так же, как раньше.
+    if menu.push(title) {
+        return true;
+    }
     // В корне есть строки-значения (язык): «открыть» им нечего, а `Enter`
     // на выборе переключил бы значение прямо из командной строки.
-    if !matches!(item.kind, item::ItemKind::Submenu) {
-        return false;
-    }
-    menu.current_mut().list.select(index);
-    menu.enter() == state::Outcome::Pushed
+    false
 }
 
 #[cfg(test)]
@@ -567,7 +583,7 @@ mod tests {
     fn nested_tree() -> Vec<Node> {
         SECTIONS
             .iter()
-            .map(|(key, title)| {
+            .map(|(key, title, _)| {
                 if *key == "system" {
                     Node::submenu(
                         settings_icons::SYSTEM,

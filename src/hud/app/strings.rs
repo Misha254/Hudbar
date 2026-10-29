@@ -9,48 +9,12 @@
 use crate::hud::i18n::{pick, wind_unit};
 use crate::hud::settings::Language;
 
-pub fn control_center(lang: Language) -> &'static str {
-    pick(lang, "Центр управления", "Control center")
-}
-
 pub fn sound(lang: Language) -> &'static str {
     pick(lang, "Звук", "Sound")
 }
 
 pub fn microphone(lang: Language) -> &'static str {
     pick(lang, "Микрофон", "Microphone")
-}
-
-pub fn wallpaper(lang: Language) -> &'static str {
-    pick(lang, "Обои", "Wallpaper")
-}
-
-pub fn power(lang: Language) -> &'static str {
-    pick(lang, "Питание", "Power")
-}
-
-pub fn lock(lang: Language) -> &'static str {
-    pick(lang, "Блокировка", "Lock")
-}
-
-pub fn choose(lang: Language) -> &'static str {
-    pick(lang, "выбрать", "choose")
-}
-
-pub fn menu(lang: Language) -> &'static str {
-    pick(lang, "меню", "menu")
-}
-
-pub fn run(lang: Language) -> &'static str {
-    pick(lang, "запустить", "launch")
-}
-
-pub fn on(lang: Language) -> &'static str {
-    pick(lang, "вкл", "on")
-}
-
-pub fn off(lang: Language) -> &'static str {
-    pick(lang, "выкл", "off")
 }
 
 /// Состояние выключенного радио: это подсказка, а не выбор.
@@ -246,14 +210,8 @@ mod tests {
 
     #[test]
     fn labels_have_both_languages() {
-        assert_eq!(control_center(Language::Ru), "Центр управления");
-        assert_eq!(control_center(Language::En), "Control center");
         assert_eq!(sound(Language::Ru), "Звук");
         assert_eq!(sound(Language::En), "Sound");
-        assert_eq!(on(Language::Ru), "вкл");
-        assert_eq!(on(Language::En), "on");
-        assert_eq!(choose(Language::Ru), "выбрать");
-        assert_eq!(choose(Language::En), "choose");
         assert_eq!(
             password_hint(Language::Ru),
             "Enter — подключить · Esc — назад"

@@ -123,6 +123,57 @@ pub fn stroke_rect(
     fill_rect(pixmap, x + w - width, y, width, h, color);
 }
 
+/// Кладёт готовый слой поверх кадра с прозрачностью и увеличением вокруг
+/// центра. Координаты — в пикселях буфера, как у остальных примитивов.
+///
+/// `tiny_skia::Pixmap::draw_pixmap` умеет смещать слой, но не масштабировать:
+/// его `transform` двигает только прямоугольник, а картинку оставляет 1:1.
+/// Поэтому шейдер собирается вручную. `Pattern` сам инвертирует переданную
+/// матрицу, поэтому здесь кладётся прямой переход «слой → экран».
+pub fn composite(
+    target: &mut tiny_skia::Pixmap,
+    layer: &tiny_skia::Pixmap,
+    at: (f32, f32),
+    alpha: f32,
+    scale: f32,
+) {
+    let alpha = alpha.clamp(0.0, 1.0);
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    if alpha == 0.0 || layer.width() == 0 || layer.height() == 0 {
+        return;
+    }
+    let (lw, lh) = (layer.width() as f32, layer.height() as f32);
+    let center = (at.0 + lw / 2.0, at.1 + lh / 2.0);
+    // Слой → экран: увеличение вокруг центра, начало слоя остаётся в `at`.
+    let to_screen = tiny_skia::Transform::from_row(
+        scale,
+        0.0,
+        0.0,
+        scale,
+        center.0 - scale * lw / 2.0,
+        center.1 - scale * lh / 2.0,
+    );
+    let paint = tiny_skia::Paint {
+        shader: tiny_skia::Pattern::new(
+            layer.as_ref(),
+            tiny_skia::SpreadMode::Pad,
+            tiny_skia::FilterQuality::Bilinear,
+            alpha,
+            to_screen,
+        ),
+        ..Default::default()
+    };
+    let Some(rect) = tiny_skia::Rect::from_xywh(to_screen.tx, to_screen.ty, lw * scale, lh * scale)
+    else {
+        return;
+    };
+    target.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+}
+
 /// Запись холста в PNG — одна на все снимки: меню, приложения и окно обоев.
 ///
 /// Копий было три, и различались они только текстом ошибок; теперь «не создался
@@ -254,6 +305,31 @@ mod tests {
                 "виды различаются: pixel={pixel}"
             );
         }
+    }
+
+    /// Уход экрана кладёт карточку отдельным слоем: прозрачность и увеличение
+    /// должны действительно попадать в кадр, а не оставаться нулевой заливкой.
+    #[test]
+    fn composite_places_and_scales_the_layer() {
+        let mut target = tiny_skia::Pixmap::new(20, 20).expect("буфер");
+        target.fill(Rgba(0, 0, 0, 255).to_tiny());
+        let mut layer = tiny_skia::Pixmap::new(4, 4).expect("слой");
+        layer.fill(Rgba(255, 0, 0, 255).to_tiny());
+
+        composite(&mut target, &layer, (4.0, 4.0), 0.5, 2.0);
+
+        let inside = target.pixel(5, 5).expect("пиксель").demultiply();
+        let outside = target.pixel(1, 1).expect("пиксель").demultiply();
+        assert!(
+            (120..=136).contains(&inside.red()),
+            "полупрозрачный красный лёг на чёрный: {inside:?}"
+        );
+        assert_eq!(outside.red(), 0, "вне слоя фон не тронут");
+        assert_eq!(
+            target.pixel(13, 13).expect("пиксель").demultiply().red(),
+            0,
+            "слой увеличен ровно вдвое, а не на весь кадр"
+        );
     }
 
     /// Снимок читается обратно: запись кладёт RGBA как есть, и тем же форматом

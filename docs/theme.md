@@ -21,10 +21,12 @@
 | nvim | `~/.config/nvim/after/plugin/matugen_colors.lua` | при следующем запуске |
 | zathura | `~/.config/zathura/zathurarc` | при следующем запуске |
 | spicetify | `~/.config/spicetify/Themes/text/color.ini` | `spicetify apply` |
-| swaylock | `~/.config/swaylock/config` | при следующей блокировке |
+| swaylock | `~/.config/swaylock/config` | при следующей блокировке; запасной вариант |
+| `hud-lock-rs` | `~/.config/hudbar/colors.css`, `~/.config/wallpaper` | при каждой блокировке |
 | clipse | `~/.config/clipse/theme.json` | при следующем запуске |
 | cal | `~/.local/bin/cal.sh` | при следующем запуске |
-| greetd (`tuigreet`) | `/etc/tuigreet/config.toml` | статическая тема, только root |
+| greetd (`hud-greeter-rs`) | `/var/lib/hudbar-greeter/colors.css` | `hud-greeter-rs --sync` от пользователя |
+| greetd (`tuigreet`, запасной) | `/etc/tuigreet/config.toml` | статическая тема, только root |
 
 Файлы matugen-шаблонов и готовые куски для установки — `contrib/theme/`.
 
@@ -96,10 +98,14 @@ GTK-подобный, а не Breeze: это осознанный обмен, qt
 
 ## Границы
 
-- **Экран входа статичен.** `tuigreet` читает `/etc/tuigreet/config.toml`,
-  файл принадлежит root. Динамическая тема потребовала бы писать в `/etc` из
-  пользовательской сессии. Готовая тёмная тема лежит в
-  `contrib/theme/tuigreet.toml`, ставится один раз:
+- **Экран входа: свой гритер, тема через `--sync`.** `hud-greeter-rs` читает
+  `colors.css` и обои из `/var/lib/hudbar-greeter`, куда их кладёт
+  `hud-greeter-rs --sync` от обычного пользователя; `matugen` в `/etc` не
+  пишет. Устройство, протокол и откат — `docs/greeter.md`.
+- **`tuigreet` — запасной вариант.** Статическая тема
+  `contrib/theme/tuigreet.toml` осталась рабочей: `tuigreet` читает
+  `/etc/tuigreet/config.toml`, файл принадлежит root, поэтому динамической
+  тема быть не может. Ставится один раз:
   `sudo install -Dm644 tuigreet.toml /etc/tuigreet/config.toml`.
 - **Уже запущенные приложения не перекрашиваются.** GTK и Qt читают тему при
   старте; HUDbar, niri и dunst перечитывают файлы сами.

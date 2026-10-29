@@ -9,22 +9,24 @@ The repository has one canonical entrypoint for each HUD feature. Files currentl
 | App launcher | `hud-apps` | shell wrapper + `hud-apps-rs` | Native launcher on `Super+D`, replaces the rofi apps menu |
 | niri binds | `hud-keybinds` | shell wrapper + `hud-keybinds-rs` | Native keybind viewer |
 | yazi binds | `hud-yazibinds` | shell wrapper + `hud-yazibinds-rs` | Native yazi keybind viewer |
-| Settings backend | `hud-setting` | Python CLI | Persist settings and restart affected services |
+| Settings | HUD menu and bar panels | Rust (`config_io::apply_patch`) | Atomic edits of `settings.json`, applied immediately |
+| Legacy settings CLI | `hud-setting` | Python CLI | Manual fallback reader for `~/.config/hud-settings` until 2027-01-01; not called by HUDbar binaries |
 
-The `CTL` chip in the bar opens the built-in control center. It provides quick actions for Wi-Fi,
-Bluetooth, DND, audio, microphone, wallpapers, power menu, and screen lock.
+The bar chips open their own panels (Wi-Fi, Bluetooth, audio, clock, tray). The rest lives in the HUD
+menu (`hud-menu`): wallpapers, power, lock, capture, updates and settings. There is no separate
+control center; `Super+P` opens the Power section directly.
 
 All persistent HUD state is stored in `~/.config/hudbar/settings.json` under the `hudbar`,
-`notifications`, `osd`, and `vpn` sections. Key names, ranges, and installer defaults are
+`notifications`, `osd`, `idle`, and `vpn` sections. Key names, ranges, and installer defaults are
 described by `docs/settings.schema.json`; the installer drops the schema next to the settings file,
 which points at it with a relative `$schema` key, so an editor validates and completes the file. Two
 tests keep the schema honest: one compares it with the parser (keys, ranges, enumerations), the other
 with the installed default file. The previous `~/.config/hud-settings/settings.json` file
-is read only as a fallback until 2027-01-01, and a script says so on stderr when it actually
-reads it. `hud-migrate-settings` merges it with any existing flat HUDbar settings, writes a backup
-before changing the canonical file, and leaves legacy files untouched. After 2027-01-01 the
-fallbacks, the section merge in `hud-setting`, `hud-migrate-settings` and the legacy directory
-itself go away (ROADMAP F).
+is read only by the legacy `hud-setting` and `hud-migrate-settings` tools until 2027-01-01; the menu
+and bar never touch it. `hud-migrate-settings` merges it with any existing flat HUDbar settings,
+writes a backup before changing the canonical file, and leaves legacy files untouched. After
+2027-01-01 the fallback, the section merge in `hud-setting`, `hud-migrate-settings` and the legacy
+directory itself go away (ROADMAP F).
 
 ## Removed Legacy Settings Window
 
@@ -35,8 +37,8 @@ Its leftover layout modules (`settings_ui`, `settings_view`, `settings_snapshot`
 ever used the drawing primitives, the `Rect` geometry and the font name. Those now live in
 `src/hud/canvas.rs`, `src/hud/geom.rs` and `ui_tokens::font_name`. The Wi-Fi, audio and Bluetooth
 stages it had covered are complete and live in the menu instead. `src/hud/dunst.rs`, the window's
-dunstrc patcher, is gone as well: `hud-setting` (`patch_dunst`) writes the same font, line-height
-and origin values into `dunst/dunstrc` and the matugen template, and it is the only writer left.
+dunstrc patcher, is gone as well. `hud-setting` still carries `patch_dunst`, but no HUDbar binary
+calls it: it runs only when the legacy tool is invoked by hand.
 
 ## Deprecated active routes
 

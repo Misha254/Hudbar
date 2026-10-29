@@ -476,7 +476,7 @@ pub fn render_all(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>
 /// темах. Значения живые (из `settings.json` и системы), поэтому снимки
 /// отражают машину, а не макет.
 pub fn render_real_all(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
-    const SECTIONS: [&str; 12] = [
+    const SECTIONS: [&str; 13] = [
         "root",
         "apps",
         "panel",
@@ -486,6 +486,7 @@ pub fn render_real_all(directory: &std::path::Path) -> Result<Vec<std::path::Pat
         "capture",
         "keybinds",
         "system",
+        "system/power",
         "system/updates",
         "power",
         "about",
@@ -703,8 +704,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("каталог снимков");
         let written = render_real_all(&dir).expect("снимки настоящего дерева");
-        // Корень, девять разделов, порядок модулей и подменю обновления.
-        assert_eq!(written.len(), 12);
+        // Корень, девять разделов, порядок модулей и два подменю «Системы».
+        assert_eq!(written.len(), 13);
         for path in &written {
             assert!(
                 std::fs::metadata(path).is_ok_and(|meta| meta.len() > 0),

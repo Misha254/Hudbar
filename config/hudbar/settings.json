@@ -25,7 +25,6 @@
     "audio": true,
     "network": true,
     "dnd": true,
-    "control_button": true,
     "animations": true,
     "animation_speed": 1.0
   },
@@ -37,6 +36,10 @@
   "osd": {
     "enabled": false,
     "duration_ms": 1600
+  },
+  "idle": {
+    "screen_off_seconds": 900,
+    "suspend_seconds": 1200
   },
   "vpn": {
     "controller": "127.0.0.1:9090",

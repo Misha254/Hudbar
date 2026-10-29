@@ -190,20 +190,6 @@ pub fn mic_mute_toggle(shared: &Arc<Shared>) {
     });
 }
 
-pub fn dnd_toggle() {
-    std::thread::spawn(|| {
-        let paused = crate::hud::log::output("dunstctl", &["is-paused"])
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .is_some_and(|value| value.trim() == "true");
-        let target = if paused { "false" } else { "true" };
-        let _ = crate::hud::log::status("dunstctl", &["set-paused", target]);
-    });
-}
-
-pub fn spawn(command: &str) {
-    spawn_with_args(command, &[]);
-}
-
 /// Запуск с аргументами: нужно там, где скрипт-обёртка принимает раздел
 /// меню, например `hud-menu power`.
 pub fn spawn_with_args(command: &str, args: &[&str]) {
