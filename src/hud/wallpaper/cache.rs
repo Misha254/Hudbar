@@ -217,17 +217,17 @@ mod tests {
     #[test]
     fn preview_key_is_stable_for_the_same_path() {
         let cache = PathBuf::from("/tmp");
-        let file = PathBuf::from("/home/mihail/wallpapers/anime/x.png");
+        let file = PathBuf::from("/home/user/wallpapers/x.png");
         let first = preview_for(&cache, &file);
         let second = preview_for(&cache, &file);
         assert_eq!(first, second);
         assert!(first.ends_with(format!(
             "image-w3-{}.png",
-            sha256_hex("/home/mihail/wallpapers/anime/x.png")
+            sha256_hex("/home/user/wallpapers/x.png")
         )));
         let different = preview_for(
             &cache,
-            &PathBuf::from("/home/mihail/wallpapers/anime/y.png"),
+            &PathBuf::from("/home/user/wallpapers/y.png"),
         );
         assert_ne!(first, different);
     }
