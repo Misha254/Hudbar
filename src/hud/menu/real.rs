@@ -158,11 +158,6 @@ fn has_keybinds() -> bool {
 fn has_yazibinds() -> bool {
     has("hud-yazibinds-rs")
 }
-/// Высота панели одним значением для корневой строки «Панель»: состояние
-/// видно без входа в раздел.
-fn height_value() -> String {
-    format!("{:.0} px", values::height())
-}
 /// Строка языка на корне. Язык — настройка всего интерфейса, а не деталь
 /// оформления: в «Стиле» её приходилось искать, теперь она на виду.
 fn language_row(lang: Language) -> Node {
@@ -364,9 +359,7 @@ fn panel_section(lang: Language) -> Node {
         animations_group(lang),
         order_section(lang),
     ];
-    Node::submenu(settings_icons::PANEL_MONITOR, title, children)
-        .with_value(height_value)
-        .search_as(kw)
+    Node::submenu(settings_icons::PANEL_MONITOR, title, children).search_as(kw)
 }
 
 /// Группа тумблеров модулей: что вообще живёт на панели.
@@ -382,7 +375,7 @@ fn modules_group(lang: Language) -> Node {
     Node::submenu(settings_icons::TH_LARGE, title, children).search_as(kw)
 }
 
-/// Группа вида панели: высота и шестерёнка Control Center.
+/// Группа вида панели: высота панели.
 fn look_group(lang: Language) -> Node {
     let t = |ru: &'static str, en: &'static str| match lang {
         Language::Ru => ru,
@@ -407,13 +400,6 @@ fn look_group(lang: Language) -> Node {
                 values::set_height,
             )
             .search_as(&["height", "высота"]),
-            Node::toggle(
-                settings_icons::CONTROLS,
-                "Control Center",
-                values::control_button,
-                values::set_control_button,
-            )
-            .search_as(&["control", "control center", "шестерёнка"]),
         ],
     )
     .search_as(kw)
@@ -808,14 +794,13 @@ fn has_devices_menu() -> bool {
 /// Раздел системы: живые переключатели и быстрые скрипты.
 /// «Питание» в «Системе»: простой экрана, сон ноутбука и профиль питания
 /// одной строкой. Три отдельных пункта подряд занимали половину уровня и
-/// читались как разрозненные настройки, хотя все они про энергию. Значение
-/// справа — текущий профиль, если он вообще доступен на машине.
+/// читались как разрозненные настройки, хотя все они про энергию.
 fn power_group(lang: Language) -> Node {
     let t = |ru: &'static str, en: &'static str| match lang {
         Language::Ru => ru,
         Language::En => en,
     };
-    let mut group = Node::submenu(
+    Node::submenu(
         settings_icons::BATTERY,
         t("Питание", "Power"),
         vec![
@@ -863,13 +848,7 @@ fn power_group(lang: Language) -> Node {
         "простой",
         "сон",
         "экран",
-    ]);
-    // Без профиля питания строка справа показывала бы «Неизвестно»: значение
-    // есть только там, где сервис действительно отвечает.
-    if has_power_profile() {
-        group = group.with_value(power_profile_value);
-    }
-    group
+    ])
 }
 
 fn system_section(lang: Language) -> Node {
@@ -1489,6 +1468,10 @@ mod tests {
                 matches!(group.kind, super::super::tree::NodeKind::Submenu(_)),
                 "питание — подменю"
             );
+            assert!(
+                group.value.is_none(),
+                "строка подменю без значения: профиль виден внутри, а не справа"
+            );
             assert_eq!(
                 group.title,
                 if lang == Language::Ru {
@@ -1794,6 +1777,59 @@ mod tests {
                 "Hudbar"
             ]
         );
+        let panel = frame
+            .items
+            .iter()
+            .find(|item| item.title == "Панель")
+            .expect("строка «Панель»");
+        assert!(
+            panel.value.is_empty(),
+            "у раздела нет значения справа: «27 px» в корне только мешало"
+        );
+    }
+
+    /// Control Center удалён целиком: в «Панель › Вид панели» осталась только
+    /// высота, а строки с этим названием нет ни в одном разделе.
+    #[test]
+    fn control_center_is_gone_from_the_tree() {
+        use super::super::tree::NodeKind;
+
+        fn titles(node: &Node, out: &mut Vec<String>) {
+            out.push(node.title.clone());
+            if let NodeKind::Submenu(children) = &node.kind {
+                for child in children {
+                    titles(child, out);
+                }
+            }
+        }
+
+        for lang in [Language::Ru, Language::En] {
+            let look = look_group(lang);
+            let NodeKind::Submenu(children) = &look.kind else {
+                panic!("«Вид панели» — подменю, а не {:?}", look.kind);
+            };
+            assert_eq!(
+                children.len(),
+                1,
+                "в «Вид панели» осталась только высота, а не переключатель Control Center"
+            );
+            assert_eq!(
+                children[0].title,
+                match lang {
+                    Language::Ru => "Высота",
+                    Language::En => "Height",
+                }
+            );
+
+            let mut found = Vec::new();
+            for node in tree_in(lang) {
+                titles(&node, &mut found);
+            }
+            assert!(
+                !found.iter().any(|title| title == "Control Center"),
+                "строка Control Center не должна оставаться в дереве: {found:?}"
+            );
+        }
     }
 
     /// «Питание» убрано из корня, но бинд `super+P` зовёт `hud-menu power`:

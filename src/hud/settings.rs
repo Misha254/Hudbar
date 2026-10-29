@@ -239,8 +239,6 @@ pub struct Settings {
     pub audio: bool,
     pub network: bool,
     pub dnd: bool,
-    /// Показывать ли шестерёнку Control Center на панели.
-    pub control_button: bool,
     pub font_size: u32,
     pub line_height: u32,
     pub position: NotificationPosition,
@@ -345,13 +343,12 @@ impl Default for Settings {
             audio: true,
             network: true,
             dnd: true,
-            control_button: true,
             font_size: 13,
             line_height: 15,
             position: NotificationPosition::TopRight,
             // Выключено по умолчанию: окно создаёт и уничтожает слой
             // layer-shell, а на nvidia с niri такое churn — лишний риск.
-            // Включается пользователем в Control Center.
+            // Включается пользователем в разделе «Панель».
             osd: false,
             osd_duration_ms: OSD_DURATION_DEFAULT_MS,
             animations: true,
@@ -428,11 +425,9 @@ fn parse_into(settings: &mut Settings, content: &str) {
     settings.audio = get_bool(object, "audio", settings.audio);
     settings.network = get_bool(object, "network", settings.network);
     settings.dnd = get_bool(object, "dnd", settings.dnd);
-    // По умолчанию кнопка есть: выключать её нужно явно.
-    settings.control_button = get_bool(object, "control_button", true);
 
     // Анимации включаются по умолчанию: без них значения в панели появляются
-    // рывком, но выключать их нужно явно — как и кнопку шестерёнки.
+    // рывком, но выключать их нужно явно.
     settings.animations = get_bool(object, "animations", settings.animations);
     if let Some(speed) = object.get("animation_speed").and_then(Value::as_f64) {
         settings.animation_speed = clamp_f(speed, ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX);
@@ -872,14 +867,14 @@ mod tests {
             "секции схемы"
         );
 
-        // Секция бара: высота, кнопка шестерёнки, анимации и все ключи модулей.
+        // Секция бара: высота, анимации и все ключи модулей.
         let hudbar = properties["hudbar"]["properties"]
             .as_object()
             .expect("секция hudbar");
         let mut keys: Vec<&str> = hudbar.keys().map(String::as_str).collect();
         keys.sort_unstable();
         let mut expected: Vec<&str> = MODULE_KEYS.to_vec();
-        expected.extend(["animation_speed", "animations", "control_button", "height"]);
+        expected.extend(["animation_speed", "animations", "height"]);
         expected.sort_unstable();
         assert_eq!(keys, expected, "ключи секции hudbar");
 

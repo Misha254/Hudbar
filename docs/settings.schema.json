@@ -27,7 +27,7 @@
     "hudbar": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Сам бар: высота, включённость чипов, кнопка Control Center и анимации.",
+      "description": "Сам бар: высота, включённость чипов и анимации.",
       "properties": {
         "height": {
           "type": "integer",
@@ -85,11 +85,6 @@
           "type": "boolean",
           "default": true,
           "description": "Чип режима «не беспокоить»."
-        },
-        "control_button": {
-          "type": "boolean",
-          "default": true,
-          "description": "Шестерёнка Control Center на баре. Выключать её нужно явно."
         },
         "animations": {
           "type": "boolean",

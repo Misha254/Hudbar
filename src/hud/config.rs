@@ -27,8 +27,6 @@ pub struct Config {
     pub font_size: u32,
     pub line_height: u32,
     pub position: NotificationPosition,
-    /// Показывать ли шестерёнку Control Center на панели.
-    pub control_button: bool,
     /// Своё окно громкости/микрофона вместо уведомления dunst.
     pub osd: bool,
     pub osd_duration_ms: u32,
@@ -124,7 +122,6 @@ impl Config {
             audio: self.module_enabled(Module::Audio),
             network: self.module_enabled(Module::Network),
             dnd: self.module_enabled(Module::Dnd),
-            control_button: self.control_button,
             font_size: self.font_size,
             line_height: self.line_height,
             position: self.position,
@@ -162,7 +159,6 @@ impl Default for Config {
             font_size: 13,
             line_height: 15,
             position: NotificationPosition::TopRight,
-            control_button: true,
             osd: true,
             osd_duration_ms: OSD_DURATION_DEFAULT_MS,
             vpn_controller: VPN_CONTROLLER_DEFAULT.to_string(),
@@ -192,7 +188,6 @@ impl From<&Settings> for Config {
                 config.set_module(module, on);
             }
         }
-        config.control_button = settings.control_button;
         let zones = split_by_zone(&settings.module_order);
         config.left = zones.0;
         config.center = zones.1;

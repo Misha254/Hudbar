@@ -25,7 +25,6 @@
     "audio": true,
     "network": true,
     "dnd": true,
-    "control_button": true,
     "animations": true,
     "animation_speed": 1.0
   },

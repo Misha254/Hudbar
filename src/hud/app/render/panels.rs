@@ -2,46 +2,7 @@ use super::*;
 
 use crate::hud::i18n;
 
-fn level_label(lang: settings::Language, level: u8, muted: bool) -> String {
-    if muted {
-        off(lang).to_string()
-    } else {
-        format!("{level}%")
-    }
-}
-
 impl App {
-    pub fn control_rows(&self) -> Vec<(String, String, bool)> {
-        let lang = self.settings.language;
-        let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
-        vec![
-            (
-                "Wi-Fi".to_string(),
-                toggle_label(lang, sys.wifi_enabled),
-                sys.wifi_enabled,
-            ),
-            (
-                "Bluetooth".to_string(),
-                toggle_label(lang, sys.bt_on),
-                sys.bt_on,
-            ),
-            ("DND".to_string(), toggle_label(lang, sys.dnd), sys.dnd),
-            (
-                sound(lang).to_string(),
-                level_label(lang, sys.vol, sys.vol_muted),
-                !sys.vol_muted,
-            ),
-            (
-                microphone(lang).to_string(),
-                level_label(lang, sys.mic, sys.mic_muted),
-                !sys.mic_muted,
-            ),
-            (wallpaper(lang).to_string(), choose(lang).to_string(), false),
-            (power(lang).to_string(), menu(lang).to_string(), false),
-            (lock(lang).to_string(), run(lang).to_string(), false),
-        ]
-    }
-
     pub fn panel_rows(&self) -> Vec<(String, String, bool)> {
         if matches!(
             self.panel.as_ref().map(|p| &p.view),
@@ -49,13 +10,8 @@ impl App {
         ) {
             return Vec::new();
         }
-        match self.panel.as_ref().map(|p| p.kind) {
-            Some(PanelKind::Control) => self.control_rows(),
-            _ => {
-                let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
-                self.panel_rows_for_system(sys)
-            }
-        }
+        let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
+        self.panel_rows_for_system(sys)
     }
 
     fn panel_rows_for_system(&self, sys: data::Sys) -> Vec<(String, String, bool)> {
@@ -226,10 +182,6 @@ impl App {
                     + cal_rows(year, month) as f32 * CAL_ROW_H
                     + PANEL_PAD_BOTTOM) as u32
             }
-            Some(p) if p.kind == PanelKind::Control => {
-                (PANEL_HEADER + self.control_rows().len() as f32 * PANEL_ROW + PANEL_PAD_BOTTOM)
-                    as u32
-            }
             Some(p) if p.kind == PanelKind::Weather => WX_H,
             Some(p) if matches!(p.kind, PanelKind::Volume | PanelKind::Mic) => {
                 let rows = self.av_devices().len().max(1) as f32;
@@ -301,7 +253,6 @@ impl App {
                 let title: String = match panel.kind {
                     PanelKind::Wifi => "Wi-Fi".to_string(),
                     PanelKind::Bt => "Bluetooth".to_string(),
-                    PanelKind::Control => control_center(lang).to_string(),
                     PanelKind::TrayMenu { idx } => self
                         .shared
                         .sys
@@ -851,25 +802,4 @@ impl App {
     }
 
     // ---------- frames ----------
-}
-
-fn toggle_label(lang: settings::Language, enabled: bool) -> String {
-    if enabled { on(lang) } else { off(lang) }.to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{level_label, toggle_label};
-    use crate::hud::settings::Language;
-
-    #[test]
-    fn control_labels_show_state_and_level() {
-        assert_eq!(toggle_label(Language::Ru, true), "вкл");
-        assert_eq!(toggle_label(Language::Ru, false), "выкл");
-        assert_eq!(toggle_label(Language::En, true), "on");
-        assert_eq!(toggle_label(Language::En, false), "off");
-        assert_eq!(level_label(Language::Ru, 42, false), "42%");
-        assert_eq!(level_label(Language::Ru, 42, true), "выкл");
-        assert_eq!(level_label(Language::En, 42, true), "off");
-    }
 }

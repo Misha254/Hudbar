@@ -92,18 +92,6 @@ pub fn set_height(value: f32) {
     }
 }
 
-/// Шестерёнка Control Center на панели.
-pub fn control_button() -> bool {
-    settings::load().control_button
-}
-
-/// Переключение шестерёнки Control Center.
-pub fn set_control_button(on: bool) {
-    if let Err(error) = config_io::apply_patch(&Patch::ControlButton(on)) {
-        log::warn(format!("кнопка не переключилась: {error}"));
-    }
-}
-
 /// Анимации включены. Панель подхватывает файл сразу, окна — при следующем
 /// запуске: они читают настройки один раз на старте.
 pub fn animations() -> bool {
