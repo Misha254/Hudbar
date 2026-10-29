@@ -14,6 +14,14 @@ pub const LINE_HEIGHT_MAX: u32 = 28;
 pub const OSD_DURATION_MIN_MS: u32 = 600;
 pub const OSD_DURATION_MAX_MS: u32 = 4000;
 pub const OSD_DURATION_DEFAULT_MS: u32 = 1600;
+/// Простой до гашения экрана и до сна ноутбука, в секундах. Это же значение
+/// читает `~/.local/bin/sleep.sh`, который передаёт его `swayidle`.
+pub const IDLE_SCREEN_OFF_MIN_SECONDS: u32 = 60;
+pub const IDLE_SCREEN_OFF_MAX_SECONDS: u32 = 3600;
+pub const IDLE_SCREEN_OFF_DEFAULT_SECONDS: u32 = 900;
+pub const IDLE_SUSPEND_MIN_SECONDS: u32 = 60;
+pub const IDLE_SUSPEND_MAX_SECONDS: u32 = 10800;
+pub const IDLE_SUSPEND_DEFAULT_SECONDS: u32 = 1200;
 /// Границы скорости анимаций: 0.5 — вдвое медленнее, 2.0 — вдвое быстрее.
 pub const ANIMATION_SPEED_MIN: f32 = 0.5;
 pub const ANIMATION_SPEED_MAX: f32 = 2.0;
@@ -245,6 +253,10 @@ pub struct Settings {
     pub animations: bool,
     /// Множитель длительности анимаций: 2.0 — вдвое быстрее.
     pub animation_speed: f32,
+    /// Через сколько секунд простоя гаснет экран.
+    pub idle_screen_off_seconds: u32,
+    /// Через сколько секунд простоя ноутбук уходит в сон.
+    pub idle_suspend_seconds: u32,
     /// Адрес external controller Mihomo для VPN-окна.
     pub vpn_controller: String,
     /// Таймаут обращения к контроллеру.
@@ -344,6 +356,8 @@ impl Default for Settings {
             osd_duration_ms: OSD_DURATION_DEFAULT_MS,
             animations: true,
             animation_speed: ANIMATION_SPEED_DEFAULT,
+            idle_screen_off_seconds: IDLE_SCREEN_OFF_DEFAULT_SECONDS,
+            idle_suspend_seconds: IDLE_SUSPEND_DEFAULT_SECONDS,
             vpn_controller: VPN_CONTROLLER_DEFAULT.to_string(),
             vpn_timeout_ms: VPN_TIMEOUT_DEFAULT_MS,
         }
@@ -461,17 +475,38 @@ fn parse_into(settings: &mut Settings, content: &str) {
                 clamp(duration as i64, OSD_DURATION_MIN_MS, OSD_DURATION_MAX_MS);
         }
     }
+
+    // Секция `idle`: те же секунды, что читает `sleep.sh`. Старый файл без неё
+    // получает прежние 15 и 20 минут, поэтому поведение не меняется.
+    if let Some(idle) = value.get("idle").and_then(Value::as_object) {
+        if let Some(seconds) = idle.get("screen_off_seconds").and_then(Value::as_u64) {
+            settings.idle_screen_off_seconds = clamp(
+                seconds as i64,
+                IDLE_SCREEN_OFF_MIN_SECONDS,
+                IDLE_SCREEN_OFF_MAX_SECONDS,
+            );
+        }
+        if let Some(seconds) = idle.get("suspend_seconds").and_then(Value::as_u64) {
+            settings.idle_suspend_seconds = clamp(
+                seconds as i64,
+                IDLE_SUSPEND_MIN_SECONDS,
+                IDLE_SUSPEND_MAX_SECONDS,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         ANIMATION_SPEED_DEFAULT, ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, FONT_SIZE_MAX,
-        FONT_SIZE_MIN, HEIGHT_MAX, HEIGHT_MIN, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN, Language,
-        MODULE_KEYS, Module, NotificationPosition, OSD_DURATION_DEFAULT_MS, OSD_DURATION_MAX_MS,
-        OSD_DURATION_MIN_MS, Settings, VPN_CONTROLLER_DEFAULT, VPN_TIMEOUT_DEFAULT_MS,
-        VPN_TIMEOUT_MAX_MS, VPN_TIMEOUT_MIN_MS, Zone, clamp_f, default_module_order,
-        normalize_module_order, parse_into,
+        FONT_SIZE_MIN, HEIGHT_MAX, HEIGHT_MIN, IDLE_SCREEN_OFF_DEFAULT_SECONDS,
+        IDLE_SCREEN_OFF_MAX_SECONDS, IDLE_SCREEN_OFF_MIN_SECONDS, IDLE_SUSPEND_DEFAULT_SECONDS,
+        IDLE_SUSPEND_MAX_SECONDS, IDLE_SUSPEND_MIN_SECONDS, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN,
+        Language, MODULE_KEYS, Module, NotificationPosition, OSD_DURATION_DEFAULT_MS,
+        OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS, Settings, VPN_CONTROLLER_DEFAULT,
+        VPN_TIMEOUT_DEFAULT_MS, VPN_TIMEOUT_MAX_MS, VPN_TIMEOUT_MIN_MS, Zone, clamp_f,
+        default_module_order, normalize_module_order, parse_into,
     };
 
     #[test]
@@ -518,6 +553,41 @@ mod tests {
             settings.osd_duration().as_millis(),
             OSD_DURATION_MAX_MS as u128
         );
+    }
+
+    #[test]
+    fn reads_idle_timeouts_and_clamps_them() {
+        let mut settings = Settings::default();
+        parse_into(
+            &mut settings,
+            r#"{"idle":{"screen_off_seconds":600,"suspend_seconds":99999}}"#,
+        );
+        assert_eq!(settings.idle_screen_off_seconds, 600);
+        assert_eq!(
+            settings.idle_suspend_seconds, IDLE_SUSPEND_MAX_SECONDS,
+            "сон зажимается в верхнюю границу"
+        );
+
+        let mut too_small = Settings::default();
+        parse_into(
+            &mut too_small,
+            r#"{"idle":{"screen_off_seconds":1,"suspend_seconds":5}}"#,
+        );
+        assert_eq!(
+            too_small.idle_screen_off_seconds,
+            IDLE_SCREEN_OFF_MIN_SECONDS
+        );
+        assert_eq!(too_small.idle_suspend_seconds, IDLE_SUSPEND_MIN_SECONDS);
+    }
+
+    #[test]
+    fn idle_timeouts_default_to_the_old_swayidle_values() {
+        let settings = Settings::default();
+        assert_eq!(
+            settings.idle_screen_off_seconds,
+            IDLE_SCREEN_OFF_DEFAULT_SECONDS
+        );
+        assert_eq!(settings.idle_suspend_seconds, IDLE_SUSPEND_DEFAULT_SECONDS);
     }
 
     #[test]
@@ -792,6 +862,7 @@ mod tests {
             [
                 "$schema",
                 "hudbar",
+                "idle",
                 "language",
                 "module_order",
                 "notifications",
@@ -845,6 +916,22 @@ mod tests {
             "длительность OSD"
         );
         assert_eq!(
+            range(&["properties", "idle", "properties", "screen_off_seconds"]),
+            (
+                IDLE_SCREEN_OFF_MIN_SECONDS as i64,
+                IDLE_SCREEN_OFF_MAX_SECONDS as i64
+            ),
+            "гашение экрана"
+        );
+        assert_eq!(
+            range(&["properties", "idle", "properties", "suspend_seconds"]),
+            (
+                IDLE_SUSPEND_MIN_SECONDS as i64,
+                IDLE_SUSPEND_MAX_SECONDS as i64
+            ),
+            "сон ноутбука"
+        );
+        assert_eq!(
             range(&["properties", "vpn", "properties", "timeout_ms"]),
             (VPN_TIMEOUT_MIN_MS as i64, VPN_TIMEOUT_MAX_MS as i64),
             "таймаут контроллера"
@@ -892,6 +979,16 @@ mod tests {
             properties["osd"]["properties"]["duration_ms"]["default"].as_i64(),
             Some(OSD_DURATION_DEFAULT_MS as i64),
             "длительность OSD"
+        );
+        assert_eq!(
+            properties["idle"]["properties"]["screen_off_seconds"]["default"].as_i64(),
+            Some(IDLE_SCREEN_OFF_DEFAULT_SECONDS as i64),
+            "гашение экрана"
+        );
+        assert_eq!(
+            properties["idle"]["properties"]["suspend_seconds"]["default"].as_i64(),
+            Some(IDLE_SUSPEND_DEFAULT_SECONDS as i64),
+            "сон ноутбука"
         );
         assert_eq!(
             properties["hudbar"]["properties"]["animation_speed"]["default"].as_f64(),

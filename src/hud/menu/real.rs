@@ -16,8 +16,9 @@ use super::super::data::oneshot;
 use super::super::schemes;
 use super::action::Action;
 use super::settings::{
-    ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, Language, Module, OSD_DURATION_MAX_MS,
-    OSD_DURATION_MIN_MS,
+    ANIMATION_SPEED_MAX, ANIMATION_SPEED_MIN, IDLE_SCREEN_OFF_MAX_SECONDS,
+    IDLE_SCREEN_OFF_MIN_SECONDS, IDLE_SUSPEND_MAX_SECONDS, IDLE_SUSPEND_MIN_SECONDS, Language,
+    Module, OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS,
 };
 use super::settings_icons;
 use super::state::Menu;
@@ -833,6 +834,30 @@ fn system_section(lang: Language) -> Node {
         )
         .with_id("system/coffee")
         .search_as(&["coffee", "кофе", "caffeine"]),
+        Node::number(
+            settings_icons::PANEL_MONITOR,
+            t("Экран гаснет, мин", "Screen off, min"),
+            (IDLE_SCREEN_OFF_MIN_SECONDS / 60) as f32,
+            (IDLE_SCREEN_OFF_MAX_SECONDS / 60) as f32,
+            1.0,
+            t(" мин", " min"),
+            values::idle_screen_off,
+            values::set_idle_screen_off,
+        )
+        .with_id("system/idle-screen-off")
+        .search_as(&["screen", "idle", "экран", "гаснет", "простой"]),
+        Node::number(
+            settings_icons::SLEEP,
+            t("Сон ноутбука, мин", "Suspend after, min"),
+            (IDLE_SUSPEND_MIN_SECONDS / 60) as f32,
+            (IDLE_SUSPEND_MAX_SECONDS / 60) as f32,
+            1.0,
+            t(" мин", " min"),
+            values::idle_suspend,
+            values::set_idle_suspend,
+        )
+        .with_id("system/idle-suspend")
+        .search_as(&["sleep", "suspend", "сон", "спать", "простой"]),
         Node::action(
             settings_icons::BATTERY,
             t("Режим питания", "Power profile"),
@@ -1228,9 +1253,15 @@ fn about_section(lang: Language) -> Node {
     .search_as(kw)
 }
 
-/// Настоящее дерево на указанном языке. Порядок корня повторяет `SECTIONS`,
-/// чтобы прямой вход по идентификатору не зависел от подписей: сначала
-/// настройки и система, потом инструменты и справка.
+/// «Питание» не показывается в корне: у него есть бинд `super+P`, который
+/// открывает раздел напрямую (`hud-menu power`). Узел остаётся в дереве, чтобы
+/// этот вход и снимки работали; `visible` убирает его из списка и поиска.
+fn power_hidden() -> bool {
+    false
+}
+
+/// Настоящее дерево на указанном языке. Порядок видимого корня повторяет
+/// `SECTIONS`: сначала настройки и система, потом инструменты и справка.
 pub fn tree_in(lang: Language) -> Vec<Node> {
     vec![
         apps_section(lang),
@@ -1239,7 +1270,7 @@ pub fn tree_in(lang: Language) -> Vec<Node> {
         notifications_section(lang),
         language_row(lang),
         system_section(lang),
-        power_section(lang),
+        power_section(lang).when(power_hidden),
         capture_section(lang),
         keybinds_section(lang),
         about_section(lang),
@@ -1636,15 +1667,15 @@ mod tests {
     }
 
     #[test]
-    fn root_has_ten_sections_in_order() {
+    fn root_has_nine_sections_without_power() {
         for lang in [Language::Ru, Language::En] {
             let menu = Menu::new(tree_in(lang));
             assert_eq!(menu.depth(), 0);
-            assert_eq!(menu.frame().items.len(), 10);
+            assert_eq!(menu.frame().items.len(), 9);
             assert_eq!(
                 menu.frame().items.len(),
                 super::super::SECTIONS.len(),
-                "порядок прямого входа повторяет корень"
+                "порядок прямого входа повторяет видимый корень"
             );
         }
         let ru = Menu::new(tree_in(Language::Ru));
@@ -1659,12 +1690,43 @@ mod tests {
                 "Уведомления",
                 "Язык",
                 "Система",
-                "Питание",
                 "Захват",
                 "Бинды",
                 "Hudbar"
             ]
         );
+    }
+
+    /// «Питание» убрано из корня, но бинд `super+P` зовёт `hud-menu power`:
+    /// скрытый раздел обязан открываться прямым входом.
+    #[test]
+    fn hidden_power_section_opens_by_id() {
+        for lang in [Language::Ru, Language::En] {
+            let mut menu = Menu::new(tree_in(lang));
+            menu.set_lang(lang);
+            assert!(
+                !menu.frame().items.iter().any(|item| item.title
+                    == if lang == Language::Ru {
+                        "Питание"
+                    } else {
+                        "Power"
+                    }),
+                "раздел питания не должен попадать в корень"
+            );
+            assert!(
+                super::super::open_section(&mut menu, "power"),
+                "прямой вход по идентификатору работает"
+            );
+            assert_eq!(menu.depth(), 1);
+            assert_eq!(
+                menu.current().title,
+                if lang == Language::Ru {
+                    "Питание"
+                } else {
+                    "Power"
+                }
+            );
+        }
     }
 
     #[test]
@@ -1796,14 +1858,10 @@ mod tests {
     #[test]
     fn power_confirm_runs_the_command_or_returns_without_it() {
         let mut menu = Menu::new(tree_in(Language::Ru));
-        let index = menu
-            .frame()
-            .items
-            .iter()
-            .position(|item| item.title == "Питание")
-            .expect("раздел «Питание»");
-        menu.current_mut().list.select(index);
-        assert_eq!(menu.enter(), Outcome::Pushed);
+        assert!(
+            super::super::open_section(&mut menu, "power"),
+            "скрытый раздел открывается прямым входом"
+        );
 
         let index = menu
             .frame()

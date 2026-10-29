@@ -136,6 +136,10 @@ impl Config {
             // только изменённые поля.
             animations: super::settings::Settings::default().animations,
             animation_speed: super::settings::ANIMATION_SPEED_DEFAULT,
+            // Простой правится в меню, а не в окне настроек: здесь значения по
+            // умолчанию, чтобы модель оставалась полной.
+            idle_screen_off_seconds: super::settings::IDLE_SCREEN_OFF_DEFAULT_SECONDS,
+            idle_suspend_seconds: super::settings::IDLE_SUSPEND_DEFAULT_SECONDS,
             vpn_controller: super::settings::VPN_CONTROLLER_DEFAULT.to_string(),
             vpn_timeout_ms: super::settings::VPN_TIMEOUT_DEFAULT_MS,
         }

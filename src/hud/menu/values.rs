@@ -20,8 +20,9 @@ use super::super::data::oneshot;
 use super::super::log;
 use super::super::schemes;
 use super::super::settings::{
-    self, FONT_SIZE_MAX, FONT_SIZE_MIN, HEIGHT_MAX, HEIGHT_MIN, Language, Module,
-    NotificationPosition, OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS, clamp,
+    self, FONT_SIZE_MAX, FONT_SIZE_MIN, HEIGHT_MAX, HEIGHT_MIN, IDLE_SCREEN_OFF_MAX_SECONDS,
+    IDLE_SCREEN_OFF_MIN_SECONDS, IDLE_SUSPEND_MAX_SECONDS, IDLE_SUSPEND_MIN_SECONDS, Language,
+    Module, NotificationPosition, OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS, clamp,
 };
 use super::super::wallpaper;
 
@@ -136,6 +137,52 @@ pub fn set_animation_speed(value: f32) {
         speed: Some(speed),
     }) {
         log::warn(format!("скорость анимаций не записалась: {error}"));
+    }
+}
+
+/// Простой до гашения экрана в минутах: в файле лежат секунды, а меню
+/// показывает привычные минуты.
+pub fn idle_screen_off() -> f32 {
+    settings::load().idle_screen_off_seconds as f32 / 60.0
+}
+
+/// Запись простоя до гашения экрана. `sleep.sh` перезапускается, иначе
+/// `swayidle` продолжил бы ждать по старым таймаутам.
+pub fn set_idle_screen_off(value: f32) {
+    let seconds = clamp(
+        (value.max(1.0) * 60.0).round() as i64,
+        IDLE_SCREEN_OFF_MIN_SECONDS,
+        IDLE_SCREEN_OFF_MAX_SECONDS,
+    );
+    match config_io::apply_patch(&Patch::Idle {
+        screen_off_seconds: Some(seconds),
+        suspend_seconds: None,
+    }) {
+        Ok(true) => restart_idle(),
+        Ok(false) => {}
+        Err(error) => log::warn(format!("простой экрана не записался: {error}")),
+    }
+}
+
+/// Простой до сна ноутбука в минутах.
+pub fn idle_suspend() -> f32 {
+    settings::load().idle_suspend_seconds as f32 / 60.0
+}
+
+/// Запись простоя до сна. После изменения `swayidle` перезапускается.
+pub fn set_idle_suspend(value: f32) {
+    let seconds = clamp(
+        (value.max(1.0) * 60.0).round() as i64,
+        IDLE_SUSPEND_MIN_SECONDS,
+        IDLE_SUSPEND_MAX_SECONDS,
+    );
+    match config_io::apply_patch(&Patch::Idle {
+        screen_off_seconds: None,
+        suspend_seconds: Some(seconds),
+    }) {
+        Ok(true) => restart_idle(),
+        Ok(false) => {}
+        Err(error) => log::warn(format!("простой до сна не записался: {error}")),
     }
 }
 
@@ -315,6 +362,20 @@ pub fn set_coffee(_on: bool) {
         }
         dunstify("☕ Caffeine ON", "Idle, dim and suspend disabled");
     }
+}
+
+/// Перезапустить `sleep.sh` после смены таймаутов. В кофе-моде он не должен
+/// подниматься: там `swayidle` намеренно убит до выключения режима.
+fn restart_idle() {
+    let dir = oneshot::runtime_dir();
+    if dir.join("hud-coffee").is_file() {
+        return;
+    }
+    let pid_file = dir.join("hud-idle.pid");
+    if idle_sleep_running(&pid_file) {
+        stop_idle(&pid_file);
+    }
+    spawn_sleep();
 }
 
 /// Жив ли `swayidle` из `sleep.sh`: pid-файл может быть протухшим, поэтому

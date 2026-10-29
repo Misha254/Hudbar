@@ -171,6 +171,12 @@ pub enum Patch {
         enabled: Option<bool>,
         speed: Option<f32>,
     },
+    /// `idle.screen_off_seconds` и `idle.suspend_seconds`: простой до гашения
+    /// экрана и до сна. Значения читает `sleep.sh`.
+    Idle {
+        screen_off_seconds: Option<u32>,
+        suspend_seconds: Option<u32>,
+    },
 }
 
 impl Patch {
@@ -219,6 +225,10 @@ impl Patch {
             Patch::Animations { .. } => match lang {
                 Language::Ru => "Анимации".to_string(),
                 Language::En => "Animations".to_string(),
+            },
+            Patch::Idle { .. } => match lang {
+                Language::Ru => "Простой".to_string(),
+                Language::En => "Idle".to_string(),
             },
         }
     }
@@ -341,6 +351,28 @@ impl Patch {
                     let value = Value::from(*speed);
                     if bar.get("animation_speed") != Some(&value) {
                         bar.insert("animation_speed".to_string(), value);
+                        changed = true;
+                    }
+                }
+                changed
+            }
+            Patch::Idle {
+                screen_off_seconds,
+                suspend_seconds,
+            } => {
+                let mut changed = false;
+                let idle = section(root, "idle");
+                if let Some(seconds) = screen_off_seconds {
+                    let value = Value::from(*seconds);
+                    if idle.get("screen_off_seconds") != Some(&value) {
+                        idle.insert("screen_off_seconds".to_string(), value);
+                        changed = true;
+                    }
+                }
+                if let Some(seconds) = suspend_seconds {
+                    let value = Value::from(*seconds);
+                    if idle.get("suspend_seconds") != Some(&value) {
+                        idle.insert("suspend_seconds".to_string(), value);
                         changed = true;
                     }
                 }
@@ -676,6 +708,32 @@ mod tests {
         assert_eq!(root["osd"]["enabled"], true);
         assert_eq!(root["osd"]["duration_ms"], 1200);
         assert_eq!(root["hudbar"]["height"], 27);
+    }
+
+    #[test]
+    fn apply_patch_writes_idle_timeouts_without_touching_other_sections() {
+        let dir = temp_dir("patch-idle");
+        let path = dir.join("settings.json");
+        seed(
+            &path,
+            r#"{"hudbar":{"height":27},"vpn":{"timeout_ms":1500}}"#,
+        );
+
+        let changed = apply_patch_to(
+            &path,
+            &Patch::Idle {
+                screen_off_seconds: Some(600),
+                suspend_seconds: Some(1800),
+            },
+        )
+        .unwrap();
+
+        assert!(changed);
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["idle"]["screen_off_seconds"], 600);
+        assert_eq!(root["idle"]["suspend_seconds"], 1800);
+        assert_eq!(root["hudbar"]["height"], 27);
+        assert_eq!(root["vpn"]["timeout_ms"], 1500);
     }
 
     #[test]
