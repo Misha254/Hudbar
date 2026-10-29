@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.18.5] - 2026-10-29
+
+### Removed
+- Мёртвый слой старого окна настроек: `Config::{module_enabled, toggle_module,
+  move_selected, to_settings}` и `config_io::{merge, save, normalize, load}`.
+  Осталась только живая модель зон, через которую меню меняет порядок модулей;
+  поведение не изменилось.
+- Тест удалённой pixel-темы в `bind_data`: он проверял собственную локальную
+  копию парсера, а не рабочий код.
+
+### Changed
+- `docs/COMPONENTS.md` и `docs/ARCHITECTURE.md`: убраны упоминания Control
+  Center, несуществующей секции `appearance` и статуса `hud-setting` как
+  канонического бэкенда. Легаси-утилиты описаны как ручной запасной путь до
+  01.01.2027.
+
 ## [0.18.4] - 2026-10-29
 
 ### Changed
