@@ -8,13 +8,13 @@
 # строку нужно заменить, а файл положить в /usr/share/licenses/hudbar/.
 
 pkgname=hudbar
-pkgver=0.17.1
+pkgver=0.18.0
 pkgrel=1
-pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, VPN и экран входа'
+pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, VPN, экран входа и блокировки'
 arch=('x86_64')
 url='https://github.com/Misha254/Hudbar'
 license=('custom')
-depends=('dbus' 'gcc-libs' 'libxkbcommon' 'systemd-libs')
+depends=('dbus' 'gcc-libs' 'libxkbcommon' 'pam' 'systemd-libs')
 makedepends=('cargo' 'git' 'rust')
 optdepends=(
     'niri: рабочий стол, для которого панель и написана, и композитор экрана входа'
@@ -45,6 +45,7 @@ _bins=(
     hud-wallpaper-rs
     hud-schemes-rs
     hud-greeter-rs
+    hud-lock-rs
 )
 _scripts=(
     hud-menu
@@ -97,4 +98,5 @@ package() {
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgname/CHANGELOG.md"
     install -Dm644 docs/greeter.md "$pkgdir/usr/share/doc/$pkgname/greeter.md"
+    install -Dm644 docs/lock.md "$pkgdir/usr/share/doc/$pkgname/lock.md"
 }
