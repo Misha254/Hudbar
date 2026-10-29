@@ -21,7 +21,8 @@
 | nvim | `~/.config/nvim/after/plugin/matugen_colors.lua` | при следующем запуске |
 | zathura | `~/.config/zathura/zathurarc` | при следующем запуске |
 | spicetify | `~/.config/spicetify/Themes/text/color.ini` | `spicetify apply` |
-| swaylock | `~/.config/swaylock/config` | при следующей блокировке |
+| swaylock | `~/.config/swaylock/config` | при следующей блокировке; запасной вариант |
+| `hud-lock-rs` | `~/.config/hudbar/colors.css`, `~/.config/wallpaper` | при каждой блокировке |
 | clipse | `~/.config/clipse/theme.json` | при следующем запуске |
 | cal | `~/.local/bin/cal.sh` | при следующем запуске |
 | greetd (`hud-greeter-rs`) | `/var/lib/hudbar-greeter/colors.css` | `hud-greeter-rs --sync` от пользователя |

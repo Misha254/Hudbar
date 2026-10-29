@@ -1,6 +1,6 @@
 [package]
 name = "hudbar"
-version = "0.17.1"
+version = "0.18.0"
 edition = "2024"
 
 # Release-профиль панели и окон: сборки одноразовые, поэтому единый codegen-unit
@@ -46,6 +46,10 @@ path = "src/bin/hud_apps.rs"
 [[bin]]
 name = "hud-greeter-rs"
 path = "src/bin/hud_greeter.rs"
+
+[[bin]]
+name = "hud-lock-rs"
+path = "src/bin/hud_lock.rs"
 
 [dependencies]
 chrono = "0.4.45"

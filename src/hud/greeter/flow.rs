@@ -117,6 +117,12 @@ impl Secret {
             .unwrap_or(self.bytes.len())
     }
 
+    /// Сырые байты для PAM. Только на время проверки; сам буфер остаётся
+    /// затираемым и очищается вызывающим.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// Текст для greetd. `None` — буфер не UTF-8 (так бывает только при
     /// программной ошибке: `push` принимает `char`).
     fn text(&self) -> Option<&str> {

@@ -68,7 +68,7 @@ fn dim_color(dim: f32) -> Rgba {
 /// Цвет берётся из палитры, а не чёрный: на светлой схеме плашка светлая, и
 /// текст остаётся тёмным на светлом. Ноль — подложки нет, карточка лежит прямо
 /// на обоях.
-fn paint_card_plate(pixmap: &mut Pixmap, ui: &UiPalette, rect: Rect, plate: f32) {
+pub(crate) fn paint_card_plate(pixmap: &mut Pixmap, ui: &UiPalette, rect: Rect, plate: f32) {
     let alpha = (plate.clamp(0.0, 1.0) * 255.0) as u8;
     if alpha == 0 {
         return;
@@ -115,7 +115,7 @@ fn clock_columns(
 /// Крупные часы «ЧЧ:ММ» тремя вызовами на общей базовой линии. Двоеточие
 /// центрируется в узкой ячейке, а не занимает полную клетку моноширинного
 /// шрифта, поэтому «10: 17» больше не выглядит как два числа.
-fn paint_clock(
+pub(crate) fn paint_clock(
     pixmap: &mut Pixmap,
     text: &mut TextPainter,
     ui: &UiPalette,
@@ -139,7 +139,7 @@ fn paint_clock(
 }
 
 /// Фон кадра: картинка по `cover` или однотонный `base`, затем затемнение.
-fn paint_background(
+pub(crate) fn paint_background(
     pixmap: &mut Pixmap,
     ui: &UiPalette,
     config: &Config,
@@ -236,7 +236,7 @@ pub fn paint_strip(pixmap: &mut Pixmap, text: &mut TextPainter, ui: &UiPalette, 
 
 /// Поле ввода: скруглённая подложка и рамка. Фокус — акцентная рамка, а не
 /// отдельная строка: карточка не должна менять высоту при переходе Tab.
-fn paint_field(pixmap: &mut Pixmap, ui: &UiPalette, rect: Rect, focused: bool) {
+pub(crate) fn paint_field(pixmap: &mut Pixmap, ui: &UiPalette, rect: Rect, focused: bool) {
     let radius = radii::SM * SCALE;
     let (x, y, w, h) = (
         rect.x * SCALE,
@@ -274,7 +274,7 @@ fn paint_field(pixmap: &mut Pixmap, ui: &UiPalette, rect: Rect, focused: bool) {
 ///
 /// Длина пароля приходит числом, а не строкой: сам пароль в отрисовку не
 /// попадает даже в виде `x`. Иначе он оказался бы в куче лишний раз.
-fn paint_field_text(
+pub(crate) fn paint_field_text(
     pixmap: &mut Pixmap,
     text: &mut TextPainter,
     ui: &UiPalette,
@@ -311,7 +311,7 @@ fn paint_field_text(
 }
 
 /// Кнопка входа: сплошной акцент и текст `on_primary`.
-fn paint_button(
+pub(crate) fn paint_button(
     pixmap: &mut Pixmap,
     text: &mut TextPainter,
     ui: &UiPalette,
