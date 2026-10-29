@@ -543,6 +543,21 @@ mod tests {
         assert!(!hints.contains("niri"), "{hints}");
     }
 
+    /// Английские подсказки длиннее русских; после выравнивания по полям они
+    /// обязаны влезать целиком, иначе подвал заканчивается многоточием.
+    #[test]
+    fn the_footer_hints_fit_the_card_at_the_field_inset() {
+        let mut text = TextPainter::new(&super::super::ui_tokens::font_name());
+        let mut v = view("mihail", "niri");
+        v.lang = Language::En;
+        let hints = footer_hints(&v);
+        let card = layout::card((1920.0, 1080.0));
+        let available = card.w - layout::PAD - spacing::LG;
+        let width = text.text_width(&hints, type_scale().caption);
+        assert!(width <= available, "{width} > {available}: {hints}");
+        assert!(hints.ends_with(strings::EN.hint_power), "{hints}");
+    }
+
     /// Английский кадр не должен содержать кириллицы ни в одной подписи.
     #[test]
     fn the_english_frame_has_no_russian_labels() {

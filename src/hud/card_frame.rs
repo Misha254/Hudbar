@@ -404,10 +404,12 @@ pub fn footer(
     footer_inset(pixmap, text, card, ui, hints, counter, spacing::LG);
 }
 
-/// То же, но с явным отступом подсказок от края карточки. Нужен экрану входа:
-/// его поля стоят на `layout::PAD`, и подвал обязан начаться там же. Отдельная
-/// функция, а не параметр у [`footer`]: меню и бинды зовут старую подпись, и их
-/// вид не меняется.
+/// То же, но с явным отступом подсказок слева. Нужен экрану входа: его поля
+/// стоят на `layout::PAD`, и подвал обязан начаться там же. Правый отступ
+/// остаётся `spacing::LG`: если расширить и его, английские подсказки
+/// перестают влезать и обрезаются многоточием. Отдельная функция, а не
+/// параметр у [`footer`]: меню и бинды зовут старую подпись, и их вид не
+/// меняется.
 ///
 /// Разделитель по-прежнему идёт на всю ширину карточки — отступ двигает только
 /// текст, не линию.
@@ -419,7 +421,7 @@ pub fn footer_inset(
     ui: &UiPalette,
     hints: &str,
     counter: Option<&str>,
-    inset: f32,
+    left: f32,
 ) {
     let scale = type_scale();
     let rect = Rect::new(card.x, card.bottom() - FOOTER_H, card.w, FOOTER_H);
@@ -448,9 +450,9 @@ pub fn footer_inset(
         scale.caption,
         ui.muted,
         Rect::new(
-            rect.x + inset,
+            rect.x + left,
             band.y,
-            (rect.w - inset * 2.0 - reserve).max(0.0),
+            (rect.w - left - spacing::LG - reserve).max(0.0),
             band.h,
         ),
         Align::Start,
@@ -462,7 +464,12 @@ pub fn footer_inset(
             scale.caption,
             ui.muted,
             center_band(
-                Rect::new(rect.right() - inset - counter_w, rect.y, counter_w, rect.h),
+                Rect::new(
+                    rect.right() - spacing::LG - counter_w,
+                    rect.y,
+                    counter_w,
+                    rect.h,
+                ),
                 scale.caption * 2.0,
             ),
             Align::End,
