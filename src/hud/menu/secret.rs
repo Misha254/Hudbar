@@ -92,7 +92,7 @@ impl SecretTarget {
 /// подтверждении буфер переезжает в команду через [`SecretInput::into_parts`].
 #[derive(PartialEq, Eq)]
 pub struct SecretInput {
-    /// Что именно вводим: «Пароль для HONOR 200».
+    /// Что именно вводим: «Пароль для Home 5G».
     pub title: String,
     /// Буфер пароля. Не `trim`: пробел бывает частью пароля.
     pub value: String,
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn masking_shows_one_dot_per_symbol() {
         let mut input = SecretInput::new(
-            SecretTarget::wifi("HONOR 200", "wifi/net/HONOR 200"),
+            SecretTarget::wifi("Home 5G", "wifi/net/Home 5G"),
             Language::Ru,
         );
         assert!(input.is_empty());
@@ -291,7 +291,7 @@ mod tests {
     /// журнале и `Debug` его нет.
     #[test]
     fn submit_moves_the_buffer_into_the_command_without_cloning() {
-        let target = SecretTarget::wifi("HONOR 200", "wifi/net/HONOR 200");
+        let target = SecretTarget::wifi("Home 5G", "wifi/net/Home 5G");
         let mut input = SecretInput::new(target, Language::Ru);
         for ch in "тихийпароль".chars() {
             input.push(ch);

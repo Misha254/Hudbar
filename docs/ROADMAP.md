@@ -150,7 +150,7 @@ nvim (lualine), zathura, spicetify, hudbar, swaylock, cal, clipse, chromium.
   (`nmc_readline_echo` в NetworkManager), pty не нужен. Догадки по слову
   `password` убраны из обоих журналов (`log::command_line`,
   `CommandSpec::log_line`): прячет пометка. Проверено живьём 15.10.2026
-  (`nmcli` 1.58.1, сеть `HONOR 200`): промпт `Password (802-11-wireless-security.psk)`
+  (`nmcli` 1.58.1, домашняя сеть): промпт `Password (802-11-wireless-security.psk)`
   прочитан из pipe, подключение прошло, а `ps` за минуту наблюдения показал
   только `nmcli --ask device wifi connect <SSID>` — пароля в `argv` не было.
 - Ограничение клонирования: `SecretData(Vec<u8>)` клонируется вместе с

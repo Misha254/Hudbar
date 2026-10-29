@@ -413,8 +413,8 @@ mod tests {
     /// оставляет с «нет UUID» — только ей пароль и нужен.
     #[test]
     fn saved_profiles_bind_by_ssid_and_leave_the_rest_for_the_password() {
-        let mut list = parse_wifi_list(" :HONOR 200:70:WPA2\n :OTK-314:60:WPA2\n :open-air:30:\n");
-        let profiles = vec![("HONOR 200".to_string(), "uuid-honor".to_string())];
+        let mut list = parse_wifi_list(" :Home 5G:70:WPA2\n :Guest-Net:60:WPA2\n :open-air:30:\n");
+        let profiles = vec![("Home 5G".to_string(), "uuid-honor".to_string())];
 
         bind_saved(&mut list, &profiles);
 
@@ -423,8 +423,8 @@ mod tests {
                 .find(|net| net.ssid == ssid)
                 .and_then(|net| net.saved_uuid.clone())
         };
-        assert_eq!(uuid("HONOR 200").as_deref(), Some("uuid-honor"));
-        assert_eq!(uuid("OTK-314"), None, "профиля нет — спросим пароль");
+        assert_eq!(uuid("Home 5G").as_deref(), Some("uuid-honor"));
+        assert_eq!(uuid("Guest-Net"), None, "профиля нет — спросим пароль");
         assert_eq!(uuid("open-air"), None);
     }
 

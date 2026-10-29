@@ -117,13 +117,14 @@ contrib/opencode/
 ## Установка (fish)
 
 Исходник живёт в репозитории, в `~/.config/opencode/plugins/` ставится
-симлинк. Старый `notify-idle.js` при этом снимаем, чтобы не было дубля
-уведомлений — переименовываем в `.bak`, не удаляем.
+симлинк (команды — из корня репозитория). Старый `notify-idle.js` при этом
+снимаем, чтобы не было дубля уведомлений — переименовываем в `.bak`, не
+удаляем.
 
 ```fish
 mkdir -p ~/.config/opencode/plugins
 mv ~/.config/opencode/plugins/notify-idle.js ~/.config/opencode/plugins/notify-idle.js.bak
-ln -s /home/mihail/code/hudbar/contrib/opencode/hudbar-notify.js ~/.config/opencode/plugins/hudbar-notify.js
+ln -s "$PWD/contrib/opencode/hudbar-notify.js" ~/.config/opencode/plugins/hudbar-notify.js
 ```
 
 В 2.2.0 сервер сам следит за каталогом и загружает новый файл без
@@ -144,7 +145,7 @@ opencode api get /api/plugin | grep -o '"id":"hudbar-notify"[^}]*'
 Ручная отправка уведомления мимо opencode:
 
 ```fish
-node -e "import('/home/mihail/code/hudbar/contrib/opencode/lib/deliver.js').then(async ({deliver}) => console.log(JSON.stringify(await deliver('Готово','проверка',{urgency:'low',tag:'opencode-manual-test'}))))"
+node -e "import('$PWD/contrib/opencode/lib/deliver.js').then(async ({deliver}) => console.log(JSON.stringify(await deliver('Готово','проверка',{urgency:'low',tag:'opencode-manual-test'}))))"
 ```
 
 ## Откат (fish)
@@ -193,7 +194,7 @@ set -x HUDBAR_NOTIFY_DEBUG 1
 ## Тесты
 
 ```fish
-cd /home/mihail/code/hudbar/contrib/opencode
+cd contrib/opencode
 node --test test/proc.test.js test/strings.test.js test/throttle.test.js test/decide.test.js test/deliver.test.js test/focus-debug.test.js
 ```
 

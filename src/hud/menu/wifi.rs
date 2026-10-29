@@ -857,7 +857,7 @@ mod tests {
     use super::*;
 
     const RADIO_ON: &str = "enabled\n";
-    const DEVICES: &str = "wlp0s20f0u2:wifi:connected:HONOR 200\nlo:loopback:connected (externally):lo\np2p-dev-wlp4s0:wifi-p2p:disconnected:\nwlp4s0:wifi:disconnected:\n";
+    const DEVICES: &str = "wlp0s20f0u2:wifi:connected:Home 5G\nlo:loopback:connected (externally):lo\np2p-dev-wlp4s0:wifi-p2p:disconnected:\nwlp4s0:wifi:disconnected:\n";
     const LISTS: &str = r"*:My\:Net:78:WPA2:AA\:BB\:CC\:DD\:EE\:FF
  :My\:Net:92:WPA2:11\:22\:33\:44\:55\:66
  :Дом \\ принтер:54:WPA2:77\:88\:99\:AA\:BB\:CC
@@ -886,8 +886,8 @@ mod tests {
             ok(RADIO_ON),
             ok(DEVICES),
             ok(LISTS),
-            ok("HONOR 200:uuid-honor:802-11-wireless\nMeta:uuid-meta:tun\n"),
-            ok("802-11-wireless.ssid:Cudy-5g\n"),
+            ok("Home 5G:uuid-honor:802-11-wireless\nMeta:uuid-meta:tun\n"),
+            ok("802-11-wireless.ssid:Office-5g\n"),
         ]
     }
 
@@ -897,18 +897,18 @@ mod tests {
     fn saved_profiles_are_keyed_by_ssid_and_fall_back_to_the_profile_name() {
         let runner = ScriptedRunner::new(vec![
             ok(
-                "HONOR 200:uuid-honor:802-11-wireless\nMeta:uuid-meta:tun\nCudy-5g:uuid-cudy:802-11-wireless\n",
+                "Home 5G:uuid-honor:802-11-wireless\nMeta:uuid-meta:tun\nOffice-5g:uuid-office:802-11-wireless\n",
             ),
-            ok("802-11-wireless.ssid:Cudy-5g\n"),
+            ok("802-11-wireless.ssid:Office-5g\n"),
         ]);
 
-        let saved = saved_profile_uuids(&runner, &["HONOR 200"]);
+        let saved = saved_profile_uuids(&runner, &["Home 5G"]);
 
         assert_eq!(
             saved,
             vec![
-                ("HONOR 200".to_string(), "uuid-honor".to_string()),
-                ("Cudy-5g".to_string(), "uuid-cudy".to_string()),
+                ("Home 5G".to_string(), "uuid-honor".to_string()),
+                ("Office-5g".to_string(), "uuid-office".to_string()),
             ],
             "tun отброшен, SSID уточнён только у профиля без видимого имени"
         );
@@ -983,7 +983,7 @@ mod tests {
         let device = block.ready().expect("устройство есть");
         assert_eq!(device.name, "wlp0s20f0u2");
         assert!(device.is_connected());
-        assert_eq!(device.connection.as_deref(), Some("HONOR 200"));
+        assert_eq!(device.connection.as_deref(), Some("Home 5G"));
     }
 
     #[test]
@@ -1058,14 +1058,14 @@ mod tests {
         let runner = ScriptedRunner::new(vec![
             ok(RADIO_ON),
             ok("wlp0s20f0u2:wifi:connected:\n"),
-            ok(":Cudy-5g:70:WPA2:AA:BB\n"),
-            ok("Cudy-5g:uuid-cudy:802-11-wireless\n"),
-            ok("802-11-wireless.ssid:Cudy-5g\n"),
+            ok(":Office-5g:70:WPA2:AA:BB\n"),
+            ok("Office-5g:uuid-office:802-11-wireless\n"),
+            ok("802-11-wireless.ssid:Office-5g\n"),
         ]);
         let snapshot = WifiProvider.fetch(&runner).expect("снимок");
         let networks = snapshot.networks.ready().expect("сети есть");
-        let cudy = networks.iter().find(|n| n.ssid == "Cudy-5g").unwrap();
-        assert_eq!(cudy.saved_uuid.as_deref(), Some("uuid-cudy"));
+        let office = networks.iter().find(|n| n.ssid == "Office-5g").unwrap();
+        assert_eq!(office.saved_uuid.as_deref(), Some("uuid-office"));
     }
 
     /// SSID профиля приходит экранированным, как в списке сетей: `My\:Network`
@@ -1201,10 +1201,10 @@ mod tests {
 
     #[test]
     fn saved_network_is_switched_by_uuid() {
-        let up = connect_saved_action("uuid-cudy");
+        let up = connect_saved_action("uuid-office");
         let runner = RecordingRunner::new();
         up.perform_with(&runner).expect("выполнено");
-        assert_eq!(runner.calls(), ["run nmcli connection up uuid uuid-cudy"]);
+        assert_eq!(runner.calls(), ["run nmcli connection up uuid uuid-office"]);
         let down = disconnect_action("uuid-honor");
         let runner = RecordingRunner::new();
         down.perform_with(&runner).expect("выполнено");
@@ -1386,10 +1386,10 @@ mod tests {
     /// ни в журнале — он уезжает по stdin вместе с `--ask`.
     #[test]
     fn connect_with_password_keeps_the_password_out_of_every_text() {
-        let spec = connect_with_password("HONOR 200", "тихийпароль");
+        let spec = connect_with_password("Home 5G", "тихийпароль");
         let (program, args) = spec.argv();
         assert_eq!(program, "nmcli");
-        assert_eq!(args, ["--ask", "device", "wifi", "connect", "HONOR 200"]);
+        assert_eq!(args, ["--ask", "device", "wifi", "connect", "Home 5G"]);
         assert!(
             !args.iter().any(|arg| arg == "-c" || arg.contains("sh -c")),
             "shell не используется"
@@ -1419,8 +1419,8 @@ mod tests {
                 vec!["--ask", "device", "wifi", "connect", "Дом \\ принтер"],
             ),
             (
-                "HONOR 200",
-                vec!["--ask", "device", "wifi", "connect", "HONOR 200"],
+                "Home 5G",
+                vec!["--ask", "device", "wifi", "connect", "Home 5G"],
             ),
             (
                 "-dash-net",
@@ -1542,13 +1542,13 @@ mod tests {
             device: device_block(&Block::Ready(parse_devices(DEVICES))),
             active: Some(ActiveLink {
                 device: "wlp0s20f0u2".to_string(),
-                name: "HONOR 200".to_string(),
+                name: "Home 5G".to_string(),
                 uuid: Some("uuid-honor".to_string()),
             }),
             networks: Block::Ready(Vec::new()),
         };
         let rows = build_nodes(&snapshot, Language::Ru);
-        assert_eq!(rows[0].title, "Wi-Fi: вкл · HONOR 200");
+        assert_eq!(rows[0].title, "Wi-Fi: вкл · Home 5G");
     }
 
     /// Раздел без адаптера — одна Info: курсора при открытии нет.
