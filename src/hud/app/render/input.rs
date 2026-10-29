@@ -286,6 +286,10 @@ impl App {
                 if let Some(n) = sys.wifi_list.get(idx) {
                     if n.in_use {
                         data::wifi_disconnect(&self.shared);
+                    } else if let Some(uuid) = n.saved_uuid.clone() {
+                        // Профиль уже есть: пароль лежит в NetworkManager,
+                        // спрашивать его заново незачем.
+                        data::wifi_connect_saved(&self.shared, &uuid);
                     } else if n.security.is_empty() || n.security == "--" {
                         data::wifi_connect(&self.shared, &n.ssid);
                     } else if let Some(pn) = self.panel.as_mut() {

@@ -80,6 +80,7 @@ pub(super) fn parse_wifi_list(text: &str) -> Vec<WifiNet> {
                 ssid: fields[1].to_string(),
                 signal: fields[2].trim().parse::<u16>().unwrap_or(0).min(100) as u8,
                 security: fields[3].trim().to_string(),
+                saved_uuid: None,
             })
         })
         .collect::<Vec<_>>();
@@ -123,7 +124,31 @@ fn wifi_now() -> Result<Vec<WifiNet>, String> {
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
         })
         .ok_or_else(|| "nmcli недоступен".to_string())?;
-    Ok(parse_wifi_list(&text))
+    let mut list = parse_wifi_list(&text);
+    let profiles = saved_profiles(&list);
+    bind_saved(&mut list, &profiles);
+    Ok(list)
+}
+
+/// UUID сохранённых профилей по SSID — тем же правилом, что у меню: панель
+/// бара по нему решает, спрашивать пароль или поднять профиль.
+fn saved_profiles(list: &[WifiNet]) -> Vec<(String, String)> {
+    let known: Vec<&str> = list.iter().map(|net| net.ssid.as_str()).collect();
+    crate::hud::menu::wifi::saved_profile_uuids(
+        &crate::hud::menu::system::SystemCommandRunner::default(),
+        &known,
+    )
+}
+
+/// Проставляет сетям UUID их профиля. Сети без профиля остаются с `None`:
+/// им пароль действительно нужен.
+pub(super) fn bind_saved(list: &mut [WifiNet], profiles: &[(String, String)]) {
+    for net in list {
+        net.saved_uuid = profiles
+            .iter()
+            .find(|(ssid, _)| *ssid == net.ssid)
+            .map(|(_, uuid)| uuid.clone());
+    }
 }
 
 fn set_wifi_list(shared: &Arc<Shared>, result: Result<Vec<WifiNet>, String>) {
@@ -235,6 +260,20 @@ pub fn wifi_connect(shared: &Arc<Shared>, ssid: &str) {
     let ssid = ssid.to_string();
     std::thread::spawn(move || {
         let _ = crate::hud::log::status("nmcli", &["dev", "wifi", "connect", &ssid]);
+        std::thread::sleep(Duration::from_millis(900));
+        set_wifi_list(&s, wifi_now());
+    });
+}
+
+/// Подключение к защищённой сети с паролем. Команду собирает `menu::wifi` —
+/// Подключение к сохранённой сети: `nmcli connection up uuid <UUID>`.
+/// Пароль не спрашивается — он уже лежит в профиле NetworkManager.
+pub fn wifi_connect_saved(shared: &Arc<Shared>, uuid: &str) {
+    let s = shared.clone();
+    let uuid = uuid.to_string();
+    std::thread::spawn(move || {
+        let spec = crate::hud::menu::wifi::connect_saved_spec(&uuid);
+        crate::hud::menu::system::run_logged(&spec);
         std::thread::sleep(Duration::from_millis(900));
         set_wifi_list(&s, wifi_now());
     });

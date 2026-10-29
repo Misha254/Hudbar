@@ -169,10 +169,11 @@ impl SystemProvider for WifiProvider {
         let radio = radio(runner);
         let devices = all_devices(runner);
         let listed = network_list(runner);
-        let profiles = wireless_profiles(
-            runner,
-            listed.ready().map(Vec::as_slice).unwrap_or_default(),
-        );
+        let known: Vec<&str> = listed
+            .ready()
+            .map(|nets| nets.iter().map(|net| net.ssid.as_str()).collect())
+            .unwrap_or_default();
+        let profiles = wireless_profiles(runner, &known);
 
         if radio.is_empty() && devices.is_empty() {
             return Err(ProviderError::Unavailable("нет nmcli".to_string()));
@@ -298,7 +299,9 @@ pub struct Profile {
 }
 
 /// Профили типа 802-11-wireless: `nmcli -t -f NAME,UUID,TYPE connection show`.
-fn wireless_profiles(runner: &dyn CommandRunner, visible: &[WifiNet]) -> Vec<Profile> {
+/// `known` — имена видимых сетей: для них имя профиля обычно и есть SSID, и
+/// отдельный дозапрос не нужен.
+fn wireless_profiles(runner: &dyn CommandRunner, known: &[&str]) -> Vec<Profile> {
     let spec = CommandSpec::new("nmcli")
         .arg("-t")
         .arg("-f")
@@ -325,15 +328,27 @@ fn wireless_profiles(runner: &dyn CommandRunner, visible: &[WifiNet]) -> Vec<Pro
     // Имя профиля NetworkManager обычно совпадает с SSID, но не обязано.
     // Уточнение нужно только тем профилям, чьё имя не совпало ни с одной
     // видимой сетью: один вызов на «непохожий» профиль, а не на каждый.
-    let visible: Vec<&str> = visible.iter().map(|net| net.ssid.as_str()).collect();
     profiles
         .into_iter()
         .map(|mut profile| {
-            if !visible.contains(&profile.name.as_str()) {
+            if !known.contains(&profile.name.as_str()) {
                 profile.ssid = profile_ssid(runner, &profile.uuid);
             }
             profile
         })
+        .collect()
+}
+
+/// UUID сохранённых беспроводных профилей по SSID. Панель бара подключает
+/// такую сеть командой `connection up uuid`, не спрашивая пароль: он уже
+/// лежит в профиле NetworkManager. Сопоставление — то же, что у строк меню:
+/// сначала SSID из профиля, потом имя профиля.
+///
+/// `known` — SSID видимых сетей: для них SSID не дозапрашивается.
+pub fn saved_profile_uuids(runner: &dyn CommandRunner, known: &[&str]) -> Vec<(String, String)> {
+    wireless_profiles(runner, known)
+        .into_iter()
+        .map(|profile| (profile.ssid.unwrap_or(profile.name), profile.uuid))
         .collect()
 }
 
@@ -512,14 +527,20 @@ pub fn disconnect_action(uuid: &str) -> Action {
 }
 
 /// Включить сохранённую сеть: `nmcli connection up uuid <UUID>`.
+/// Им же подключается панель бара, поэтому команда собрана отдельно.
+pub fn connect_saved_spec(uuid: &str) -> CommandSpec {
+    CommandSpec::new("nmcli")
+        .arg("connection")
+        .arg("up")
+        .arg("uuid")
+        .arg(uuid)
+        .with_timeout(CONNECT_TIMEOUT)
+}
+
+/// Включить сохранённую сеть (действие меню).
 pub fn connect_saved_action(uuid: &str) -> Action {
     Action::RefreshAndRun {
-        command: CommandSpec::new("nmcli")
-            .arg("connection")
-            .arg("up")
-            .arg("uuid")
-            .arg(uuid)
-            .with_timeout(CONNECT_TIMEOUT),
+        command: connect_saved_spec(uuid),
         refresh: ProviderKey::WIFI,
     }
 }
@@ -868,6 +889,38 @@ mod tests {
             ok("HONOR 200:uuid-honor:802-11-wireless\nMeta:uuid-meta:tun\n"),
             ok("802-11-wireless.ssid:Cudy-5g\n"),
         ]
+    }
+
+    /// Панель бара берёт отсюда UUID профилей: сеть с профилем подключается
+    /// без пароля, даже если имя профиля не совпало с SSID.
+    #[test]
+    fn saved_profiles_are_keyed_by_ssid_and_fall_back_to_the_profile_name() {
+        let runner = ScriptedRunner::new(vec![
+            ok(
+                "HONOR 200:uuid-honor:802-11-wireless\nMeta:uuid-meta:tun\nCudy-5g:uuid-cudy:802-11-wireless\n",
+            ),
+            ok("802-11-wireless.ssid:Cudy-5g\n"),
+        ]);
+
+        let saved = saved_profile_uuids(&runner, &["HONOR 200"]);
+
+        assert_eq!(
+            saved,
+            vec![
+                ("HONOR 200".to_string(), "uuid-honor".to_string()),
+                ("Cudy-5g".to_string(), "uuid-cudy".to_string()),
+            ],
+            "tun отброшен, SSID уточнён только у профиля без видимого имени"
+        );
+        assert_eq!(
+            runner
+                .calls()
+                .iter()
+                .filter(|call| call.starts_with("nmcli -t -f 802-11-wireless.ssid"))
+                .count(),
+            1,
+            "для видимой сети лишнего вызова нет"
+        );
     }
 
     #[test]
