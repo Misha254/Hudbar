@@ -50,6 +50,11 @@ pub struct TextBox {
     pub ink_top: f32,
     /// Низ залитых пикселей относительно базовой линии.
     pub ink_bottom: f32,
+    /// Ширина краски от пера. `blend` кладёт маску в перо и не добавляет
+    /// левый подшив, поэтому слева краска начинается ровно на пере, а справа
+    /// не доходит до ширины строки на правый подшив. Для текста, который
+    /// позиционируется по клеткам, эта разница заметна.
+    pub ink_width: f32,
 }
 
 type ShapedText = (TextBox, Vec<(CacheKey, i32, i32)>);
@@ -107,7 +112,9 @@ impl TextPainter {
         // одном FontSystem.
         let mut top = f32::INFINITY;
         let mut bottom = f32::NEG_INFINITY;
-        for (key, _, y) in &glyphs {
+        let mut left = f32::INFINITY;
+        let mut right = f32::NEG_INFINITY;
+        for (key, gx, y) in &glyphs {
             if let Some(image) = self.swash.get_image_uncached(&mut self.font_system, *key)
                 && matches!(image.content, SwashContent::Mask)
             {
@@ -115,6 +122,10 @@ impl TextPainter {
                 let bottom_edge = top_edge + image.placement.height as f32;
                 top = top.min(top_edge);
                 bottom = bottom.max(bottom_edge);
+                // Как и в `blend`, маска начинается в пере плюс позиция глифа.
+                let left_edge = *gx as f32;
+                left = left.min(left_edge);
+                right = right.max(left_edge + image.placement.width as f32);
             }
         }
         let measured = if top.is_finite() && bottom > top {
@@ -122,6 +133,7 @@ impl TextPainter {
                 width: width / SCALE,
                 ink_top: top / SCALE,
                 ink_bottom: bottom / SCALE,
+                ink_width: (right - left) / SCALE,
             }
         } else {
             // Пустая строка или шрифт без глифов: типовые пропорции заглавной.
@@ -129,6 +141,7 @@ impl TextPainter {
                 width: width / SCALE,
                 ink_top: -size * 0.72,
                 ink_bottom: size * 0.2,
+                ink_width: width / SCALE,
             }
         };
         let result = (measured, glyphs);

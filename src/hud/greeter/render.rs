@@ -87,16 +87,16 @@ pub(crate) fn paint_card_plate(pixmap: &mut Pixmap, ui: &UiPalette, rect: Rect, 
     );
 }
 
-/// Зазор между цифрами и ячейкой двоеточия. Три логических пикселя: заметно
+/// Зазор между цифрами и краской двоеточия. Три логических пикселя: заметно
 /// уже моноширинной клетки, но цифры не слипаются с точками.
 const CLOCK_COLON_GAP: f32 = spacing::XS * 0.75;
 
-/// Ширина ячейки двоеточия в долях кегля (4.8 px при `display` = 40).
-const CLOCK_COLON_W: f32 = 0.12;
-
-/// Три колонки часов: часы, двоеточие по центру своей узкой ячейки, минуты.
-/// Ширина считается один раз и не зависит от конкретных цифр: обе пары —
-/// по две цифры моноширинного шрифта.
+/// Три колонки часов: часы, двоеточие и минуты. Клетки цифр считаются по
+/// ширине строки и не зависят от конкретных цифр: обе пары — по две цифры
+/// моноширинного шрифта, поэтому минуты никогда не прыгают. Двоеточие
+/// ставится по своей краске и на середину пустого места справа от часов:
+/// строка шире своей краски на правый подшив, и без этой половины точки
+/// прижимаются к часам, а правая щель остаётся вдвое шире левой.
 fn clock_columns(
     text: &mut TextPainter,
     now: DateTime<Local>,
@@ -106,18 +106,25 @@ fn clock_columns(
     let (hour, minute) = panel::clock_parts(now);
     let hour_w = text.text_width(&hour, size);
     let minute_w = text.text_width(&minute, size);
-    let colon_w = size * CLOCK_COLON_W;
-    let colon = Rect::new(rect.x + hour_w + CLOCK_COLON_GAP, rect.y, colon_w, rect.h);
+    let hour_ink = text.ink_metrics(&hour, size).ink_width;
+    let colon_w = text.ink_metrics(":", size).ink_width;
+    let slack = (hour_w - hour_ink) / 2.0;
+    let minute_x = rect.x + hour_w + colon_w + CLOCK_COLON_GAP * 2.0;
     (
         Rect::new(rect.x, rect.y, hour_w, rect.h),
-        colon,
-        Rect::new(colon.right() + CLOCK_COLON_GAP, rect.y, minute_w, rect.h),
+        Rect::new(
+            rect.x + hour_ink + slack + CLOCK_COLON_GAP,
+            rect.y,
+            colon_w,
+            rect.h,
+        ),
+        Rect::new(minute_x, rect.y, minute_w, rect.h),
     )
 }
 
 /// Крупные часы «ЧЧ:ММ» тремя вызовами на общей базовой линии. Двоеточие
-/// центрируется в узкой ячейке, а не занимает полную клетку моноширинного
-/// шрифта, поэтому «10: 17» больше не выглядит как два числа.
+/// ставится по своей краске, а не по клетке моноширинного шрифта, поэтому
+/// «10: 17» больше не выглядит как два числа.
 pub(crate) fn paint_clock(
     pixmap: &mut Pixmap,
     text: &mut TextPainter,
@@ -132,12 +139,20 @@ pub(crate) fn paint_clock(
     // садится на неё же, а не центрируется отдельно и не «всплывает».
     let sample = text.ink_metrics(&hour, size);
     let baseline = text.baseline(rect, &sample);
-    for (part, part_rect, align) in [
-        (hour.as_str(), hour_rect, Align::Start),
-        (":", colon_rect, Align::Center),
-        (minute.as_str(), minute_rect, Align::Start),
+    for (part, part_rect) in [
+        (hour.as_str(), hour_rect),
+        (":", colon_rect),
+        (minute.as_str(), minute_rect),
     ] {
-        text.paint_on_baseline(pixmap, part, size, ui.text, part_rect, align, baseline);
+        text.paint_on_baseline(
+            pixmap,
+            part,
+            size,
+            ui.text,
+            part_rect,
+            Align::Start,
+            baseline,
+        );
     }
 }
 
@@ -723,8 +738,59 @@ mod tests {
             .expect("дата")
     }
 
+    /// Щели вокруг двоеточия, посчитанные по нарисованным пикселям: строки
+    /// краски идут подряд, между ними — провалы. Возвращает две щели вокруг
+    /// двоеточия — слева и справа.
+    fn colon_gaps(now: DateTime<Local>, size: f32) -> (f32, f32) {
+        let mut text = TextPainter::new(&super::super::ui_tokens::font_name());
+        let ui = super::super::ui_tokens::ui_palette(super::super::palette::Palette::default());
+        let rect = Rect::new(0.0, 0.0, 400.0, size * 1.3);
+        let (w, h) = ((rect.w * SCALE) as u32, (rect.h * SCALE) as u32);
+        let mut pixmap = Pixmap::new(w, h).expect("буфер");
+        pixmap.fill(tiny_skia::Color::BLACK);
+        paint_clock(&mut pixmap, &mut text, &ui, now, size, rect);
+
+        let mut runs: Vec<(u32, u32)> = Vec::new();
+        let mut start = None;
+        for x in 0..w {
+            let ink = (0..h).any(|y| {
+                pixmap
+                    .pixel(x, y)
+                    .is_some_and(|pixel| pixel.alpha() > 0 && pixel.green() > 32)
+            });
+            match (ink, start) {
+                (true, None) => start = Some(x),
+                (false, Some(from)) => {
+                    runs.push((from, x - 1));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(runs.len(), 5, "две пары цифр и двоеточие: {runs:?}");
+        let left = (runs[2].0 - runs[1].1 - 1) as f32 / SCALE;
+        let right = (runs[3].0 - runs[2].1 - 1) as f32 / SCALE;
+        (left, right)
+    }
+
+    /// Точки двоеточия стоят ровно между цифрами при любом времени. Раньше
+    /// двоеточие центрировалось по ширине символа, а его краска уже ширины и
+    /// рисуется от пера, — точки уезжали к часам и наезжали на последнюю цифру.
+    #[test]
+    fn the_colon_sits_evenly_between_the_digits() {
+        let ts = type_scale();
+        for now in [at(10, 17), at(11, 11), at(0, 0), at(23, 59)] {
+            let (left, right) = colon_gaps(now, ts.display);
+            assert!(
+                (left - right).abs() <= 1.0 / SCALE,
+                "{now}: щели вокруг двоеточия разные — {left} и {right}"
+            );
+            assert!(left > 0.0, "{now}: двоеточие слиплось с часами");
+        }
+    }
+
     /// Ширина часов не зависит от цифр: обе пары — по две цифры
-    /// моноширинного шрифта, а зазоры и ячейка двоеточия фиксированы.
+    /// моноширинного шрифта, а зазоры и клетка двоеточия фиксированы.
     #[test]
     fn the_clock_width_does_not_jump_between_times() {
         let mut text = TextPainter::new(&super::super::ui_tokens::font_name());
