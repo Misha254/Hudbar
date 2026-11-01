@@ -225,10 +225,7 @@ mod tests {
             "image-w3-{}.png",
             sha256_hex("/home/user/wallpapers/x.png")
         )));
-        let different = preview_for(
-            &cache,
-            &PathBuf::from("/home/user/wallpapers/y.png"),
-        );
+        let different = preview_for(&cache, &PathBuf::from("/home/user/wallpapers/y.png"));
         assert_ne!(first, different);
     }
 
