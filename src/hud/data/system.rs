@@ -40,9 +40,14 @@ pub(super) fn battery() -> (Option<u8>, bool, bool, Option<f32>) {
 }
 
 /// Остаток батареи в ватт-часах. Два источника: `energy_now` в µWh, а без
-/// него `charge_now` (µAh) умножить на `voltage_now` (µV): микроампер-часы
-/// и микровольты дают 1e-12 ватт-часов на единицу произведения. Ноль и
-/// отсутствие файлов означают «данных нет».
+/// него `charge_now` (µAh) умножить на номинальное напряжение
+/// `voltage_min_design` (µV): микроампер-часы и микровольты дают 1e-12
+/// ватт-часов на единицу произведения.
+///
+/// Номинальное, а не текущее `voltage_now`: под нагрузкой и на полном заряде
+/// напряжение выше, и остаток завышается (на BAT0 49.1 Wh вместо 43.4 Wh).
+/// Так же считает upower. `voltage_now` остаётся запасным источником, если
+/// `voltage_min_design` нет. Ноль и отсутствие файлов означают «данных нет».
 fn battery_wh(p: &Path) -> Option<f32> {
     if let Some(uwh) = read_trim(&p.join("energy_now")).parse::<f64>().ok()
         && uwh > 0.0
@@ -50,7 +55,10 @@ fn battery_wh(p: &Path) -> Option<f32> {
         return Some((uwh / 1e6) as f32);
     }
     let c = read_trim(&p.join("charge_now")).parse::<f64>().ok()?;
-    let v = read_trim(&p.join("voltage_now")).parse::<f64>().ok()?;
+    let v = read_trim(&p.join("voltage_min_design"))
+        .parse::<f64>()
+        .ok()
+        .or_else(|| read_trim(&p.join("voltage_now")).parse::<f64>().ok())?;
     let wh = c * v * 1e-12;
     (wh > 0.0).then_some(wh as f32)
 }
@@ -293,4 +301,71 @@ pub(super) fn dnd_paused() -> bool {
     crate::hud::log::output("dunstctl", &["is-paused"])
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::battery_wh;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("hudbar-battery-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write(p: &Path, name: &str, value: &str) {
+        fs::write(p.join(name), value).unwrap();
+    }
+
+    #[test]
+    fn charge_is_converted_with_the_nominal_voltage() {
+        let p = dir("nominal");
+        write(&p, "charge_now", "3805000");
+        write(&p, "voltage_min_design", "11400000");
+        write(&p, "voltage_now", "12915000");
+
+        let wh = battery_wh(&p).unwrap();
+        assert!((wh - 43.377).abs() < 0.01, "{wh}");
+
+        fs::remove_dir_all(p).unwrap();
+    }
+
+    #[test]
+    fn voltage_now_is_used_only_without_the_nominal_one() {
+        let p = dir("voltage-now");
+        write(&p, "charge_now", "3805000");
+        write(&p, "voltage_now", "11400000");
+
+        let wh = battery_wh(&p).unwrap();
+        assert!((wh - 43.377).abs() < 0.01, "{wh}");
+
+        fs::remove_dir_all(p).unwrap();
+    }
+
+    #[test]
+    fn energy_now_wins_over_charge() {
+        let p = dir("energy-now");
+        write(&p, "energy_now", "43377000");
+        write(&p, "charge_now", "3805000");
+        write(&p, "voltage_min_design", "11400000");
+
+        let wh = battery_wh(&p).unwrap();
+        assert!((wh - 43.377).abs() < 0.01, "{wh}");
+
+        fs::remove_dir_all(p).unwrap();
+    }
+
+    #[test]
+    fn zero_or_missing_data_means_no_reading() {
+        let p = dir("empty");
+        write(&p, "charge_now", "0");
+        write(&p, "voltage_min_design", "11400000");
+        assert_eq!(battery_wh(&p), None);
+
+        fs::remove_dir_all(p).unwrap();
+    }
 }
