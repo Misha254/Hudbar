@@ -98,7 +98,6 @@ fn write_config(dir: &Path, config: &Config) -> Result<(), String> {
     let payload = serde_json::json!({
         "language": config.language.key(),
         "dim": config.dim,
-        "card_plate": config.card_plate,
         "font": config.font,
     });
     let text = serde_json::to_string_pretty(&payload)
@@ -153,12 +152,18 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Временный файл рядом с целью и с тем же расширением: `vipsthumbnail` и
+/// `magick` выбирают формат по расширению и без `.png` отказываются писать.
 fn temp_path(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
+    let stem = path
+        .file_stem()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "greeter".to_string());
-    path.with_file_name(format!(".{name}.{}.tmp", std::process::id()))
+    let ext = path
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    path.with_file_name(format!(".{stem}.{}.tmp{ext}", std::process::id()))
 }
 
 /// Ошибка доступа с человеческим объяснением: без sudo и без «попробуйте
@@ -257,18 +262,13 @@ mod tests {
         std::fs::create_dir_all(&data).expect("каталог");
         std::fs::write(
             config::config_path(&data),
-            r#"{"language": "ru", "dim": 0.7, "card_plate": 0.4, "font": "Fira Code"}"#,
+            r#"{"language": "ru", "dim": 0.7, "font": "Fira Code"}"#,
         )
         .expect("конфиг");
 
         sync(&data, &home).expect("синхронизация");
         let config = config::load(&data);
         assert!((config.dim - 0.7).abs() < 1e-6, "{}", config.dim);
-        assert!(
-            (config.card_plate - 0.4).abs() < 1e-6,
-            "{}",
-            config.card_plate
-        );
         assert_eq!(config.font, "Fira Code");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -303,5 +303,16 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).expect("чтение"), "{}");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Временный файл обязан сохранить расширение: `vipsthumbnail` и `magick`
+    /// выбирают формат по нему, и без `.png` фон не конвертировался.
+    #[test]
+    fn the_temp_file_keeps_the_extension() {
+        let target = Path::new("/var/lib/hudbar-greeter/background.png");
+        let tmp = temp_path(target);
+        assert_eq!(tmp.extension().and_then(|ext| ext.to_str()), Some("png"));
+        assert_eq!(tmp.parent(), target.parent());
+        assert_ne!(tmp, target);
     }
 }

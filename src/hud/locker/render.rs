@@ -1,43 +1,41 @@
-//! Кадр экрана блокировки: обои, карточка Hudbar, имя, пароль и подсказки.
+//! Кадр экрана блокировки: обои, крупные часы и одно поле пароля.
 //!
-//! Тот же расчёт, что у экрана входа: `greeter::layout` и общие примитивы
-//! `card_frame`/`canvas`/`text`. Отличие одно — вместо кнопки входа кнопка
-//! «Разблокировать», а имя пользователя только показывается.
+//! Карточки и подвала нет: на затемнённых обоях остаются часы с датой и поле,
+//! под ним — сообщение о неверном пароле. Поле рисуется теми же примитивами,
+//! что поля экрана входа.
 
 use chrono::{DateTime, Local};
 
-use crate::card_frame;
+use crate::canvas::composite;
+use crate::geom::Rect;
 use crate::greeter::config::Config;
 use crate::greeter::image::Background;
-use crate::greeter::layout;
 use crate::greeter::panel;
 use crate::greeter::render::{
-    paint_background_dim, paint_button, paint_card_plate, paint_clock, paint_field,
-    paint_field_text,
+    clock_width, paint_background_dim, paint_clock, paint_field, paint_field_text,
 };
 use crate::settings::Language;
 use crate::text::{Align, SCALE, TextPainter};
-use crate::ui_tokens::{UiPalette, type_scale};
+use crate::ui_tokens::{UiPalette, spacing, type_scale};
 
-use super::strings;
+use super::{layout, strings};
 
 /// Что показать в кадре. Пароль сюда не попадает — только его длина.
 pub struct View<'a> {
     pub lang: Language,
     pub now: DateTime<Local>,
-    pub username: &'a str,
     pub password_chars: usize,
     pub caps: bool,
     /// Ошибка проверки: текст и признак «опасное».
     pub message: Option<(&'a str, bool)>,
-    /// PAM уже думает; кнопка и строка сообщения это показывают.
+    /// PAM уже думает; поле и строка сообщения это показывают.
     pub busy: bool,
-    /// 0 — обычный кадр, 1 — карточка уже ушла и замок можно снимать.
+    /// 0 — обычный кадр, 1 — композиция уже ушла и замок можно снимать.
     pub leaving: f32,
 }
 
-/// Отступ вокруг карточки в слое ухода: рамка рисуется со сглаживанием, и
-/// без запаса её крайние пиксели обрезались бы.
+/// Отступ вокруг композиции в слое ухода: поле рисуется со сглаживанием, и
+/// без запаса его крайние пиксели обрезались бы.
 const LAYER_PAD: f32 = 2.0;
 
 /// Кадр целиком. `background` загружен вызывающим: файл не читается на
@@ -54,133 +52,145 @@ pub fn draw(
         pixmap.width() as f32 / SCALE,
         pixmap.height() as f32 / SCALE,
     );
-    let card = layout::card(size);
+    let field = layout::field(size);
     let leaving = view.leaving.clamp(0.0, 1.0);
 
-    // Затемнение снимается вместе с карточкой: к моменту разблокировки обои
+    // Затемнение снимается вместе с композицией: к моменту разблокировки обои
     // уже светлые, и рабочий стол не бьёт по глазам сменой яркости.
     paint_background_dim(pixmap, ui, background, config.dim * (1.0 - leaving));
     if leaving > 0.0 {
-        paint_leaving(pixmap, text, ui, config, view, card, leaving);
+        paint_leaving(pixmap, text, ui, view, field, leaving);
     } else {
-        paint_card(pixmap, text, ui, config, view, card);
+        paint_clock_block(pixmap, text, ui, view, field);
+        paint_field_block(pixmap, text, ui, view, field);
     }
 }
 
-/// Уход после верного пароля: карточка гаснет и чуть увеличивается, а слой
-/// рисуется отдельно, поэтому под ней остаются обои, а не дыра.
+/// Уход после верного пароля: часы и поле гаснут и чуть увеличиваются, а
+/// слой рисуется отдельно, поэтому под ними остаются обои, а не дыра.
 fn paint_leaving(
     pixmap: &mut tiny_skia::Pixmap,
     text: &mut TextPainter,
     ui: &UiPalette,
-    config: &Config,
     view: &View<'_>,
-    card: crate::geom::Rect,
+    field: Rect,
     leaving: f32,
 ) {
     let alpha = 1.0 - leaving;
     let scale = 1.0 + crate::anim::EXIT_SCALE * leaving;
-    let layer_w = ((card.w + LAYER_PAD * 2.0) * SCALE) as u32;
-    let layer_h = ((card.h + LAYER_PAD * 2.0) * SCALE) as u32;
-    let Some(mut layer) = tiny_skia::Pixmap::new(layer_w, layer_h) else {
+    let top = layout::clock(field).y - LAYER_PAD;
+    let left = field.x - LAYER_PAD;
+    let width = field.w + LAYER_PAD * 2.0;
+    let height = layout::of(field).message.bottom() + LAYER_PAD - top;
+    let Some(mut layer) = tiny_skia::Pixmap::new((width * SCALE) as u32, (height * SCALE) as u32)
+    else {
         return;
     };
     layer.fill(tiny_skia::Color::TRANSPARENT);
-    paint_card(
-        &mut layer,
-        text,
-        ui,
-        config,
-        view,
-        crate::geom::Rect::new(LAYER_PAD, LAYER_PAD, card.w, card.h),
-    );
-    crate::canvas::composite(
-        pixmap,
-        &layer,
-        ((card.x - LAYER_PAD) * SCALE, (card.y - LAYER_PAD) * SCALE),
-        alpha,
-        scale,
-    );
+    let local = shift(field, -left, -top);
+    paint_clock_block(&mut layer, text, ui, view, local);
+    paint_field_block(&mut layer, text, ui, view, local);
+    composite(pixmap, &layer, (left * SCALE, top * SCALE), alpha, scale);
 }
 
-/// Содержимое карточки: подложка, рамка, поля, кнопка и подвал.
-fn paint_card(
+/// Прямоугольник со сдвигом: слой рисуется в своих координатах.
+fn shift(rect: Rect, dx: f32, dy: f32) -> Rect {
+    Rect::new(rect.x + dx, rect.y + dy, rect.w, rect.h)
+}
+
+/// Часы и дата на обоях: крупные цифры по центру поля.
+fn paint_clock_block(
     pixmap: &mut tiny_skia::Pixmap,
     text: &mut TextPainter,
     ui: &UiPalette,
-    config: &Config,
     view: &View<'_>,
-    card: crate::geom::Rect,
+    field: Rect,
 ) {
     let ts = type_scale();
-    let rows = layout::of(card);
-    let t = strings::text(view.lang);
-
-    paint_card_plate(pixmap, ui, card, config.card_plate);
-    card_frame::card(pixmap, card, ui);
-
-    text.paint_boxed(
-        pixmap,
-        t.title,
-        ts.caption,
-        ui.muted,
-        rows.title,
-        Align::Start,
-    );
-    paint_clock(pixmap, text, ui, view.now, ts.display, rows.clock);
+    let size = layout::clock_size();
+    let clock = layout::clock(field);
+    let width = clock_width(text, size);
+    let clock = Rect::new(clock.x + (clock.w - width) / 2.0, clock.y, width, clock.h);
+    paint_clock(pixmap, text, ui, view.now, size, clock);
     text.paint_boxed(
         pixmap,
         &panel::date_line(view.lang, view.now),
         ts.label,
         ui.muted,
-        rows.date,
-        Align::Start,
+        layout::date(field),
+        Align::Center,
     );
+}
 
-    text.paint_boxed(
-        pixmap,
-        t.user,
-        ts.caption,
-        ui.muted,
-        rows.user_label,
-        Align::Start,
-    );
-    paint_field(pixmap, ui, rows.user_box, false);
-    paint_field_text(pixmap, text, ui, rows.user_box, view.username, None, false);
+/// Поле пароля: заглушка или точки, курсор, Caps Lock и строка сообщения.
+fn paint_field_block(
+    pixmap: &mut tiny_skia::Pixmap,
+    text: &mut TextPainter,
+    ui: &UiPalette,
+    view: &View<'_>,
+    field: Rect,
+) {
+    let ts = type_scale();
+    let rows = layout::of(field);
+    let focused = !view.busy;
+    let t = strings::text(view.lang);
+    paint_field(pixmap, ui, field, focused);
 
-    text.paint_boxed(
-        pixmap,
-        t.password,
-        ts.caption,
-        ui.muted,
-        rows.password_label,
-        Align::Start,
-    );
-    if view.caps {
-        text.paint(pixmap, t.caps, ts.caption, ui.danger, rows.caps, Align::End);
+    let caps_w = if view.caps {
+        text.text_width(t.caps, ts.caption) + spacing::SM
+    } else {
+        0.0
+    };
+    let input = Rect::new(field.x, field.y, (field.w - caps_w).max(0.0), field.h);
+    if view.password_chars == 0 {
+        if focused {
+            text.paint_boxed(
+                pixmap,
+                t.password,
+                ts.label,
+                ui.text_disabled,
+                Rect::new(
+                    input.x + spacing::MD,
+                    input.y,
+                    (input.w - spacing::MD * 2.0).max(0.0),
+                    input.h,
+                ),
+                Align::Start,
+            );
+        }
+    } else {
+        paint_field_text(
+            pixmap,
+            text,
+            ui,
+            input,
+            "",
+            Some(view.password_chars),
+            focused,
+        );
     }
-    paint_field(pixmap, ui, rows.password_box, !view.busy);
-    paint_field_text(
-        pixmap,
-        text,
-        ui,
-        rows.password_box,
-        "",
-        Some(view.password_chars),
-        !view.busy,
-    );
-
-    // Строка сообщения: место занято всегда, карточка не прыгает.
-    if view.busy {
+    if view.caps {
         text.paint_boxed(
             pixmap,
-            t.checking,
+            t.caps,
             ts.caption,
-            ui.muted,
-            rows.message,
-            Align::Start,
+            ui.danger,
+            Rect::new(
+                rows.caps.x,
+                rows.caps.y,
+                rows.caps.w - spacing::MD,
+                rows.caps.h,
+            ),
+            Align::End,
         );
-    } else if let Some((line, danger)) = view.message {
+    }
+
+    let line = if view.busy {
+        Some((t.checking, false))
+    } else {
+        view.message
+    };
+    if let Some((line, danger)) = line {
         text.paint_boxed(
             pixmap,
             line,
@@ -190,18 +200,6 @@ fn paint_card(
             Align::Start,
         );
     }
-
-    let button = if view.busy { t.checking } else { t.unlock };
-    paint_button(pixmap, text, ui, rows.button, button);
-
-    // Подсказки начинаются на PAD, как поля; разделитель — на всю карточку.
-    card_frame::footer_inset(pixmap, text, rows.footer, ui, t.hints, None, layout::PAD);
-}
-
-/// Ширина подсказок при кегле подвала — для проверки, что они влезают.
-#[cfg(test)]
-fn hints_width(text: &mut TextPainter, lang: Language) -> f32 {
-    text.text_width(strings::text(lang).hints, type_scale().caption)
 }
 
 #[cfg(test)]
@@ -209,18 +207,16 @@ mod tests {
     use super::*;
     use crate::greeter::config::Config;
     use crate::palette::Palette;
-    use crate::settings::Language;
-    use crate::ui_tokens::{spacing, ui_palette};
+    use crate::ui_tokens::ui_palette;
     use chrono::TimeZone;
 
-    fn view<'a>(username: &'a str) -> View<'a> {
+    fn view() -> View<'static> {
         View {
             lang: Language::Ru,
             now: Local
                 .with_ymd_and_hms(2026, 10, 29, 12, 30, 0)
                 .single()
                 .expect("дата"),
-            username,
             password_chars: 4,
             caps: false,
             message: None,
@@ -235,55 +231,56 @@ mod tests {
         (pixmap, TextPainter::new(&crate::ui_tokens::font_name()))
     }
 
-    /// Кадр рисуется без Wayland и без файлов.
+    fn centre(pixmap: &tiny_skia::Pixmap, rect: Rect) -> tiny_skia::ColorU8 {
+        pixmap
+            .pixel(
+                ((rect.x + rect.w / 2.0) * SCALE) as u32,
+                ((rect.y + rect.h / 2.0) * SCALE) as u32,
+            )
+            .expect("пиксель")
+            .demultiply()
+    }
+
+    /// Кадр рисуется без Wayland и без файлов: в центре поля не `base`.
     #[test]
     fn a_lock_frame_is_drawn_without_wayland() {
         let (mut pixmap, mut text) = frame();
         let ui = ui_palette(Palette::default());
-        let v = view("mihail");
+        let v = view();
         draw(&mut pixmap, &mut text, &ui, &Config::default(), None, &v);
-        let card = layout::card((1920.0, 1080.0));
-        let pixel = pixmap
-            .pixel(
-                ((card.x + card.w / 2.0) * SCALE) as u32,
-                ((card.y + card.h / 2.0) * SCALE) as u32,
-            )
-            .expect("пиксель");
-        assert!(pixel.alpha() > 0, "карточка нарисована");
-    }
-
-    /// К концу ухода карточки нет: в её центре остаётся фон. Если бы слой
-    /// не гас, замок снимался бы с видимой карточкой на экране.
-    #[test]
-    fn the_card_is_gone_at_the_end_of_the_exit() {
-        let (mut pixmap, mut text) = frame();
-        let ui = ui_palette(Palette::default());
-        let mut v = view("mihail");
-        v.leaving = 1.0;
-        draw(&mut pixmap, &mut text, &ui, &Config::default(), None, &v);
-
-        let card = layout::card((1920.0, 1080.0));
-        let pixel = pixmap
-            .pixel(
-                ((card.x + card.w / 2.0) * SCALE) as u32,
-                ((card.y + card.h / 2.0) * SCALE) as u32,
-            )
-            .expect("пиксель")
-            .demultiply();
-        assert_eq!(
+        let pixel = centre(&pixmap, layout::field((1920.0, 1080.0)));
+        assert_ne!(
             (pixel.red(), pixel.green(), pixel.blue()),
             (ui.base.0, ui.base.1, ui.base.2),
-            "в центре карточки должен быть только фон"
+            "поле нарисовано"
         );
     }
 
-    /// На середине ухода кадр отличается от финального: карточка гаснет
+    /// К концу ухода композиции нет: в центре поля остаётся фон. Если бы слой
+    /// не гас, замок снимался бы с видимым полем на экране.
+    #[test]
+    fn the_field_is_gone_at_the_end_of_the_exit() {
+        let (mut pixmap, mut text) = frame();
+        let ui = ui_palette(Palette::default());
+        let mut v = view();
+        v.leaving = 1.0;
+        draw(&mut pixmap, &mut text, &ui, &Config::default(), None, &v);
+
+        let pixel = centre(&pixmap, layout::field((1920.0, 1080.0)));
+        assert_eq!(
+            (pixel.red(), pixel.green(), pixel.blue()),
+            (ui.base.0, ui.base.1, ui.base.2),
+            "в центре поля должен быть только фон"
+        );
+    }
+
+    /// На середине ухода кадр отличается от финального: композиция гаснет
     /// постепенно, а не исчезает одним переключением.
     #[test]
-    fn the_card_is_still_visible_halfway_through_the_exit() {
+    fn the_field_is_still_visible_halfway_through_the_exit() {
         let ui = ui_palette(Palette::default());
         let (mut halfway, mut halfway_text) = frame();
-        let mut v = view("mihail");
+        let mut v = view();
         v.leaving = 0.5;
         draw(
             &mut halfway,
@@ -308,19 +305,16 @@ mod tests {
         assert_ne!(
             halfway.data(),
             finished.data(),
-            "в середине ухода карточка ещё должна быть видна"
+            "в середине ухода поле ещё должно быть видно"
         );
     }
 
-    /// Подсказки влезают в карточку при левом отступе полей и правом LG:
-    /// иначе подвал заканчивается многоточием.
+    /// Часы влезают в полосу над полем: иначе крупная строка вылезла бы за
+    /// края и не отцентрировалась.
     #[test]
-    fn hints_fit_the_card_for_both_languages() {
+    fn the_clock_fits_the_band_above_the_field() {
         let mut text = TextPainter::new(&crate::ui_tokens::font_name());
-        let available = layout::CARD_W - layout::PAD - spacing::LG;
-        for lang in [Language::Ru, Language::En] {
-            let width = hints_width(&mut text, lang);
-            assert!(width <= available, "{lang:?}: {width} > {available}");
-        }
+        let width = clock_width(&mut text, layout::clock_size());
+        assert!(width <= layout::FIELD_W);
     }
 }

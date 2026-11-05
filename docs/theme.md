@@ -25,7 +25,7 @@
 | `hud-lock-rs` | `~/.config/hudbar/colors.css`, `~/.config/wallpaper` | при каждой блокировке |
 | clipse | `~/.config/clipse/theme.json` | при следующем запуске |
 | cal | `~/.local/bin/cal.sh` | при следующем запуске |
-| greetd (`hud-greeter-rs`) | `/var/lib/hudbar-greeter/colors.css` | `hud-greeter-rs --sync` от пользователя |
+| greetd (`hud-greeter-rs`) | `/var/lib/hudbar-greeter/colors.css` | при следующей смене обоев: `wall.sh` зовёт `--sync` |
 | greetd (`tuigreet`, запасной) | `/etc/tuigreet/config.toml` | статическая тема, только root |
 
 Файлы matugen-шаблонов и готовые куски для установки — `contrib/theme/`.

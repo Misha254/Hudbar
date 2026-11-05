@@ -332,7 +332,6 @@ struct GreeterApp {
     username: String,
     focus: Field,
     power: bool,
-    battery: Option<panel::Battery>,
     /// Сообщение, которого нет у автомата: нет сеансов, сломанный systemctl.
     notice: Option<String>,
     /// Последняя показанная минута: по её смене кадр перерисовывается.
@@ -351,24 +350,12 @@ impl GreeterApp {
         self.sessions.get(self.session_index)
     }
 
-    fn session_name(&self) -> String {
-        self.session()
-            .map(|session| session.name.clone())
-            .unwrap_or_else(|| strings::text(self.lang).session_unknown.to_string())
-    }
-
-    /// Перерисовка раз в минуту, чтобы часы не стояли. Батарея читается на
-    /// каждом тике: это два `read_to_string` из sysfs, дешевле лишнего кадра.
+    /// Перерисовка раз в минуту, чтобы часы не стояли.
     fn tick(&mut self) {
         let now = chrono::Local::now();
         let clock = panel::big_clock(now);
         if clock != self.last_clock {
             self.last_clock = clock;
-            self.ctx.dirty = true;
-        }
-        let battery = panel::battery();
-        if battery != self.battery {
-            self.battery = battery;
             self.ctx.dirty = true;
         }
     }
@@ -630,11 +617,11 @@ impl GreeterApp {
         if self.power || self.leaving.is_some() {
             return;
         }
-        let card = layout::card((self.ctx.width as f32, self.ctx.height as f32));
-        let rows = layout::of(card);
-        if rows.user_box.contains(x, y) {
+        let field = layout::field((self.ctx.width as f32, self.ctx.height as f32));
+        let rows = layout::of(field);
+        if rows.field_user.contains(x, y) {
             self.focus = Field::User;
-        } else if rows.password_box.contains(x, y) {
+        } else if rows.field_password.contains(x, y) {
             self.focus = Field::Password;
         } else if rows.button.contains(x, y) {
             self.submit();
@@ -670,7 +657,6 @@ impl GreeterApp {
                     .message()
                     .map(|line| (line.text.clone(), line.kind))
             });
-        let session = self.session_name();
         let view = View {
             lang: self.lang,
             now: chrono::Local::now(),
@@ -678,11 +664,9 @@ impl GreeterApp {
             password_chars: self.login.password_chars(),
             focus: self.focus,
             caps: self.mods.caps_lock,
-            session: &session,
             message: message.as_ref().map(|(text, kind)| (text.as_str(), *kind)),
             stage: self.login.stage(),
             power: self.power,
-            battery: self.battery,
             leaving: self.exit_progress,
         };
         render::draw(
@@ -767,13 +751,6 @@ fn screenshot(cli: &Cli, out: &Path) -> Result<(), String> {
         Variant::Caps => ("mihail", 4, Field::Password, true, false, None),
         Variant::Power => ("mihail", 4, Field::Password, false, true, None),
     };
-    let sessions = sessions::list();
-    let session_name = sessions
-        .iter()
-        .find(|session| session.name.to_lowercase().contains("niri"))
-        .map(|session| session.name.clone())
-        .unwrap_or_else(|| t.session_unknown.to_string());
-
     let view = View {
         lang,
         now: chrono::Local::now(),
@@ -781,11 +758,9 @@ fn screenshot(cli: &Cli, out: &Path) -> Result<(), String> {
         password_chars,
         focus,
         caps,
-        session: &session_name,
         message,
         stage: Stage::Idle,
         power,
-        battery: panel::battery(),
         leaving: 0.0,
     };
     let mut pixmap = tiny_skia::Pixmap::new(FALLBACK_W * SCALE as u32, FALLBACK_H * SCALE as u32)
@@ -938,7 +913,6 @@ fn run(cli: &Cli, preview: bool) -> Result<(), String> {
         username,
         focus,
         power: false,
-        battery: panel::battery(),
         notice,
         last_clock: panel::big_clock(chrono::Local::now()),
         state_path,
