@@ -1,0 +1,34 @@
+// Бинды HUDbar для niri.
+//
+// Подключение — одной строкой в ~/.config/niri/config.kdl:
+//   include "~/.config/niri/hudbar.kdl"
+//
+// Клавиши взяты из рабочей конфигурации. Если что-то занято, замени; чужие
+// бинды и настройки мониторов сюда намеренно не входят. repeat=false нужен
+// окнам HUDbar: иначе удержание клавиши открывает их пачками.
+
+binds {
+    // Меню: корень, питание и конфиги.
+    KP_Left repeat=false hotkey-overlay-title="Меню HUD" { spawn-sh "~/.local/bin/hud-menu"; }
+    super+alt+Space repeat=false hotkey-overlay-title="Меню HUD" { spawn-sh "~/.local/bin/hud-menu"; }
+    super+P repeat=false hotkey-overlay-title="Питание" { spawn-sh "~/.local/bin/hud-menu power"; }
+    super+Escape repeat=false hotkey-overlay-title="Конфиги" { spawn-sh "~/.local/bin/hud-menu system/control"; }
+
+    // Окна.
+    super+D hotkey-overlay-title="Приложения" { spawn-sh "~/.local/bin/hud-apps"; }
+    super+Z repeat=false hotkey-overlay-title="Обои" { spawn-sh "~/.local/bin/hud-wallpaper"; }
+    KP_7 repeat=false hotkey-overlay-title="VPN" { spawn-sh "~/.local/bin/hud-vpn"; }
+
+    // Слои HUDbar не видны niri close-window, поэтому hud-close: он закрывает
+    // верхнее окно HUDbar, а без открытых передаёт close-window в niri.
+    super+Q repeat=false hotkey-overlay-title="Закрыть окно" { spawn-sh "~/.local/bin/hud-close"; }
+
+    // Справка по биндам.
+    super+Shift+Slash hotkey-overlay-title="Бинды niri" { spawn-sh "~/.local/bin/hud-keybinds"; }
+    KP_9 hotkey-overlay-title="Бинды yazi" { spawn-sh "~/.local/bin/hud-yazibinds"; }
+
+    // Быстрые действия, если нужны:
+    // super+shift+d hotkey-overlay-title="Не беспокоить" { spawn-sh "~/.local/bin/hud-menu --action system/dnd"; }
+    // KP_5 hotkey-overlay-title="Кофе-мод" { spawn-sh "~/.local/bin/hud-menu --action system/coffee"; }
+    // KP_0 hotkey-overlay-title="Питание: переключение" { spawn-sh "~/.local/bin/hud-menu --action system/power-profile"; }
+}
