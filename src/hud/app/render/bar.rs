@@ -114,7 +114,10 @@ impl App {
         let width = self.width as f32 * k;
         let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
 
-        pixmap.fill(p.base.with_a(0.8).to_tiny());
+        // В энергосбережении размытие под панелью выключено, и полупрозрачный
+        // фон только мешал бы читать текст: окно становится непрозрачным.
+        let alpha = if self.power_saver { 1.0 } else { 0.8 };
+        pixmap.fill(p.base.with_a(alpha).to_tiny());
 
         let theme = self.theme();
         let chip_y = theme.chip_inset * k;

@@ -92,6 +92,9 @@ pub struct App {
     pub now: std::time::Instant,
     /// Настройки анимаций из `settings.json`.
     pub anim: anim::AnimSettings,
+    /// Профиль питания «Энергосбережение»: окна рисуются непрозрачными.
+    /// Обновляется главным циклом, а не читается в каждом кадре.
+    pub power_saver: bool,
     pub mods: Modifiers,
 }
 

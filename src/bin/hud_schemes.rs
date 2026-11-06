@@ -312,7 +312,13 @@ impl SchemesApp {
         let mut canvas =
             wallpaper::view::Canvas::new(&mut pixmap, &mut self.painter, &mut self.icons, self.ui);
         paint(&mut canvas, card, &self.model, self.lang, highlight);
-        wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
+        // В энергосбережении размытие под окном выключено, поэтому карточка
+        // непрозрачна: полупрозрачная мешала бы читать текст.
+        if power_profile::saver() {
+            crate::canvas::make_opaque(&mut pixmap, card);
+        } else {
+            wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
+        }
         layer::fade(&mut pixmap, openness);
 
         let stride = (pw * 4) as i32;

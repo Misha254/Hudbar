@@ -31,6 +31,8 @@ pub mod osd;
 // Меню HUDbar: модель (M1) и отрисовка (M2). Окно появится в M4.
 #[allow(dead_code)]
 pub mod menu;
+// Эффекты окон niri по профилю питания: размытие и прозрачность.
+pub mod niri_effects;
 pub mod palette;
 // Не каждый бинарь использует автоповтор: панели список не листать.
 #[allow(dead_code)]

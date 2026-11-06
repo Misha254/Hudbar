@@ -215,7 +215,8 @@ impl App {
 
         let bw = 1.0 * k;
         let border = p.primary.with_a(0.35);
-        fill_rect(pixmap, 0.0, dy, w, content_h, p.base.with_a(0.98));
+        let panel_alpha = if self.power_saver { 1.0 } else { 0.98 };
+        fill_rect(pixmap, 0.0, dy, w, content_h, p.base.with_a(panel_alpha));
         fill_rect(pixmap, 0.0, dy, w, bw, border);
         fill_rect(pixmap, 0.0, dy + content_h - bw, w, bw, border);
         fill_rect(pixmap, 0.0, dy, bw, content_h, border);

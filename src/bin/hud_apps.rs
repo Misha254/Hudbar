@@ -388,7 +388,13 @@ impl AppsApp {
                 self.ctx.height as f32,
             )
         };
-        view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
+        // В энергосбережении размытие под окном выключено, поэтому карточка
+        // непрозрачна: полупрозрачная мешала бы читать текст.
+        if power_profile::saver() {
+            canvas::make_opaque(&mut pixmap, card);
+        } else {
+            view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
+        }
         if let Some((mix, old_height)) = switching {
             let top = (view::HEADER_H * SCALE) as u32;
             let bottom = ((self.ctx.height as f32 - view::FOOTER_H) * SCALE).max(0.0) as u32;

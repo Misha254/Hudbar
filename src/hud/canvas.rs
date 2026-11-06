@@ -225,6 +225,38 @@ pub fn crossfade(
     }
 }
 
+/// Делает карточку непрозрачной. Буфер премультиплицирован, поэтому цвет
+/// делится на альфу, а альфа ставится в 255: иначе при `a = 255` пиксель
+/// потемнел бы на коэффициент прозрачности. Нужно в энергосбережении, когда
+/// размытие под окном выключено и полупрозрачная карточка только мешает.
+pub fn make_opaque(pixmap: &mut tiny_skia::Pixmap, card: Rect) {
+    let width = pixmap.width() as i32;
+    let height = pixmap.height() as i32;
+    let x0 = (card.x * SCALE).floor() as i32;
+    let y0 = (card.y * SCALE).floor() as i32;
+    let x1 = (card.right() * SCALE).ceil() as i32;
+    let y1 = (card.bottom() * SCALE).ceil() as i32;
+    let pixels = pixmap.pixels_mut();
+    for y in y0.max(0)..y1.min(height) {
+        for x in x0.max(0)..x1.min(width) {
+            let pixel = &mut pixels[y as usize * width as usize + x as usize];
+            let alpha = pixel.alpha();
+            if alpha == 0 {
+                continue;
+            }
+            let channel = |value: u8| (value as u32 * 255 / alpha as u32).min(255) as u8;
+            if let Some(opaque) = tiny_skia::PremultipliedColorU8::from_rgba(
+                channel(pixel.red()),
+                channel(pixel.green()),
+                channel(pixel.blue()),
+                255,
+            ) {
+                *pixel = opaque;
+            }
+        }
+    }
+}
+
 /// Запись холста в PNG — одна на все снимки: меню, приложения и окно обоев.
 ///
 /// Копий было три, и различались они только текстом ошибок; теперь «не создался
@@ -408,6 +440,20 @@ mod tests {
         );
         let footer = target.pixel(0, 5).expect("пиксель").demultiply();
         assert_eq!(footer.red(), 200, "подвал не смешивается");
+    }
+
+    /// Непрозрачность возвращает цвету исходную яркость: премультиплицированный
+    /// пиксель делится на свою альфу, а не просто получает `a = 255`.
+    #[test]
+    fn making_a_card_opaque_keeps_its_color() {
+        let mut pixmap = tiny_skia::Pixmap::new(2, 2).expect("буфер");
+        pixmap.fill(Rgba(200, 100, 50, 204).to_tiny());
+        make_opaque(&mut pixmap, Rect::new(0.0, 0.0, 2.0, 2.0));
+        let pixel = pixmap.pixel(0, 0).expect("пиксель").demultiply();
+        assert_eq!(pixel.alpha(), 255);
+        assert!((199..=201).contains(&pixel.red()), "цвет тот же: {pixel:?}");
+        assert!((99..=101).contains(&pixel.green()));
+        assert!((49..=51).contains(&pixel.blue()));
     }
 
     /// Снимок читается обратно: запись кладёт RGBA как есть, и тем же форматом
