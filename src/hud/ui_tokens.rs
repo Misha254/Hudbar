@@ -246,12 +246,19 @@ fn danger_color(error: palette::Rgba, text: palette::Rgba, panel: palette::Rgba)
 
 /// Палитра окна: цвета берутся из matugen.
 pub fn ui_palette(p: palette::Palette) -> UiPalette {
-    let panel = mix(p.base, p.secondary, 0.10).with_a(BG_ALPHA);
+    ui_palette_alpha(p, BG_ALPHA)
+}
+
+/// Палитра окна с заданной плотностью фона. В энергосбережении размытия под
+/// окном нет, поэтому окна берут `1.0`: карточка рисуется сразу непрозрачной,
+/// без отдельного прохода по готовому холсту на каждый кадр.
+pub fn ui_palette_alpha(p: palette::Palette, bg: f32) -> UiPalette {
+    let panel = mix(p.base, p.secondary, 0.10).with_a(bg);
     let danger = danger_color(p.error, p.text, panel);
     let base = UiPalette {
-        base: p.base.with_a(BG_ALPHA),
+        base: p.base.with_a(bg),
         panel,
-        idle_panel: mix(p.base, p.secondary, 0.05).with_a(BG_ALPHA),
+        idle_panel: mix(p.base, p.secondary, 0.05).with_a(bg),
         // Рамка карточки — не украшение, а граница слоя: у слоя ровно размер
         // карточки, тени нет, и отделяет её только эта линия. На 0.35 к
         // акценту она давала 1.98:1 и не отделяла совсем; 0.45 давало
@@ -581,6 +588,21 @@ mod tests {
         assert!(
             worst >= 3.0,
             "худшая пара схем должна держать порог, а не средняя: {worst}"
+        );
+    }
+
+    /// Энергосбережение просит непрозрачный фон: окно рисуется сразу плотным,
+    /// без отдельного прохода по готовому холсту.
+    #[test]
+    fn the_opaque_palette_has_no_transparent_background() {
+        let ui = ui_palette_alpha(palette::Palette::default(), 1.0);
+        assert_eq!(ui.base.3, 255, "фон окна");
+        assert_eq!(ui.panel.3, 255, "панель");
+        assert_eq!(ui.idle_panel.3, 255, "панель без фокуса");
+        assert_eq!(
+            ui_palette(palette::Palette::default()).base.3,
+            (BG_ALPHA * 255.0) as u8,
+            "обычный профиль остаётся прозрачным"
         );
     }
 

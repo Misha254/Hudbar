@@ -151,6 +151,9 @@ struct WpApp {
     icons: TextPainter,
     state: State,
     ui: ui_tokens::UiPalette,
+    /// Готовая подложка карточки: она не меняется, а заливка со скруглением
+    /// каждый кадр стоила 9 мс.
+    bg: Option<tiny_skia::Pixmap>,
     lang: settings::Language,
     loader: Arc<Loader<FsSource>>,
     /// Скользящая рамка выбранной ячейки: состояние живёт здесь, а `view`
@@ -161,6 +164,7 @@ struct WpApp {
     /// Карта появления вооружена после первого кадра: до него всё, что есть в
     /// кэше, готово было к открытию и показывается сразу.
     fade_armed: bool,
+    saver: bool,
     scroll_acc: f32,
     exit: Arc<AtomicBool>,
 }
@@ -341,8 +345,28 @@ impl WpApp {
         let Some(mut pixmap) = tiny_skia::Pixmap::new(pw, ph) else {
             return;
         };
-        pixmap.fill(tiny_skia::Color::TRANSPARENT);
         let card = Self::card();
+        // Подложка зависит только от размера и палитры: рисуем один раз и
+        // копируем. Копия 9 МБ дешевле заливки пути со сглаживанием каждый
+        // кадр.
+        if self
+            .bg
+            .as_ref()
+            .is_none_or(|bg| bg.width() != pw || bg.height() != ph)
+            && let Some(mut cache) = tiny_skia::Pixmap::new(pw, ph)
+        {
+            cache.fill(tiny_skia::Color::TRANSPARENT);
+            wallpaper::view::draw_background(&mut cache, card, self.ui);
+            self.bg = Some(cache);
+        }
+        match self
+            .bg
+            .as_ref()
+            .filter(|bg| bg.width() == pw && bg.height() == ph)
+        {
+            Some(bg) => pixmap.data_mut().copy_from_slice(bg.data()),
+            None => pixmap.fill(tiny_skia::Color::TRANSPARENT),
+        }
         let provider: &dyn wallpaper::thumb::Provider = &*self.loader;
         let frame = wallpaper::view::Frame {
             state: &self.state,
@@ -355,14 +379,7 @@ impl WpApp {
         };
         let mut canvas =
             wallpaper::view::Canvas::new(&mut pixmap, &mut self.painter, &mut self.icons, self.ui);
-        wallpaper::view::draw_card(&mut canvas, &frame);
-        // В энергосбережении размытие под окном выключено, поэтому карточка
-        // непрозрачна: полупрозрачная мешала бы читать текст.
-        if power_profile::saver() {
-            crate::canvas::make_opaque(&mut pixmap, card);
-        } else {
-            wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
-        }
+        wallpaper::view::draw_content(&mut canvas, &frame);
         layer::fade(&mut pixmap, openness);
 
         let stride = (pw * 4) as i32;
@@ -376,8 +393,28 @@ impl WpApp {
         };
         let (dst, _) = canvas.as_chunks_mut::<4>();
         let (src, _) = pixmap.data().as_chunks::<4>();
-        for (out, input) in dst.iter_mut().zip(src.iter()) {
-            *out = [input[2], input[1], input[0], input[3]];
+        // Плотность карточки в обычном профиле — тот же множитель, что давал
+        // `apply_alpha`, но применённый здесь: отдельный проход по кадру
+        // 1920×1200 стоил до 7 мс и на быстром листании был заметен.
+        let alpha = if self.saver {
+            256
+        } else {
+            (wallpaper::view::CARD_ALPHA.clamp(0.0, 1.0) * 256.0).round() as u32
+        };
+        if alpha == 256 {
+            for (out, input) in dst.iter_mut().zip(src.iter()) {
+                *out = [input[2], input[1], input[0], input[3]];
+            }
+        } else {
+            let scale = |channel: u8| ((((channel as u32) * alpha) + 128) >> 8) as u8;
+            for (out, input) in dst.iter_mut().zip(src.iter()) {
+                *out = [
+                    scale(input[2]),
+                    scale(input[1]),
+                    scale(input[0]),
+                    scale(input[3]),
+                ];
+            }
         }
         let surface = self.ctx.layer.wl_surface();
         surface.set_buffer_scale(SCALE as i32);
@@ -789,7 +826,13 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
     };
     let started = std::time::Instant::now();
     let palette = palette::load();
-    let ui = ui_tokens::ui_palette(palette);
+    // В энергосбережении карточка непрозрачна с самого начала: отдельный
+    // проход по готовому холсту стоил 36 мс на кадр.
+    let saver = power_profile::saver();
+    let ui = ui_tokens::ui_palette_alpha(
+        palette,
+        if saver { 1.0 } else { ui_tokens::BG_ALPHA },
+    );
 
     // Модель заводится до слоя, но размер фиксирован карточкой — первый commit
     // идёт с ним же, нулей протокол не увидит.
@@ -829,11 +872,13 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
         icons: TextPainter::new(settings_icons::FONT),
         state,
         ui,
+        bg: None,
         lang,
         loader,
         cell_frame: wallpaper::frame::Frame::new(started),
         thumb_fade: wallpaper::frame::Fade::new(),
         fade_armed: false,
+        saver,
         scroll_acc: 0.0,
         exit: Arc::new(AtomicBool::new(false)),
     };

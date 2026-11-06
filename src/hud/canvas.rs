@@ -236,23 +236,27 @@ pub fn make_opaque(pixmap: &mut tiny_skia::Pixmap, card: Rect) {
     let y0 = (card.y * SCALE).floor() as i32;
     let x1 = (card.right() * SCALE).ceil() as i32;
     let y1 = (card.bottom() * SCALE).ceil() as i32;
-    let pixels = pixmap.pixels_mut();
+    // 1/альфа в 1/65536: деление на каждый канал превращало проход по кадру
+    // 1920×1200 в 36 мс и делало окна рывками.
+    let mut reciprocal = [0u32; 256];
+    for alpha in 1..=255u32 {
+        reciprocal[alpha as usize] = (255 << 16) / alpha;
+    }
+    let data = pixmap.data_mut();
     for y in y0.max(0)..y1.min(height) {
-        for x in x0.max(0)..x1.min(width) {
-            let pixel = &mut pixels[y as usize * width as usize + x as usize];
-            let alpha = pixel.alpha();
-            if alpha == 0 {
+        let start = (y as usize * width as usize + x0.max(0) as usize) * 4;
+        let end = (y as usize * width as usize + x1.min(width) as usize) * 4;
+        for pixel in data[start..end].as_chunks_mut::<4>().0 {
+            let alpha = pixel[3] as usize;
+            if alpha == 0 || alpha == 255 {
                 continue;
             }
-            let channel = |value: u8| (value as u32 * 255 / alpha as u32).min(255) as u8;
-            if let Some(opaque) = tiny_skia::PremultipliedColorU8::from_rgba(
-                channel(pixel.red()),
-                channel(pixel.green()),
-                channel(pixel.blue()),
-                255,
-            ) {
-                *pixel = opaque;
+            let factor = reciprocal[alpha];
+            for channel in &mut pixel[..3] {
+                let value = (*channel as u32 * factor + 32768) >> 16;
+                *channel = value.min(255) as u8;
             }
+            pixel[3] = 255;
         }
     }
 }

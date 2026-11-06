@@ -59,12 +59,20 @@ pub struct TextBox {
 
 type ShapedText = (TextBox, Vec<(CacheKey, i32, i32)>);
 
+/// Раскладка строки и «возраст» последнего обращения: по нему кэш вытесняет
+/// то, что давно не рисовалось, а не очищается целиком.
+struct ShapedEntry {
+    used: u64,
+    text: ShapedText,
+}
+
 /// Владеет шрифтом и кэшем раскладки; сам измеряет и рисует текст.
 pub struct TextPainter {
     font_system: FontSystem,
     swash: SwashCache,
     font: String,
-    shaped: HashMap<(String, u32), ShapedText>,
+    shaped: HashMap<(String, u32), ShapedEntry>,
+    tick: u64,
 }
 
 impl TextPainter {
@@ -74,6 +82,7 @@ impl TextPainter {
             swash: SwashCache::new(),
             font: font.to_string(),
             shaped: HashMap::new(),
+            tick: 0,
         }
     }
 
@@ -87,8 +96,10 @@ impl TextPainter {
     /// только те пиксели, которые действительно будут нарисованы.
     fn shape(&mut self, text: &str, size: f32) -> ShapedText {
         let key = (text.to_string(), size.to_bits());
-        if let Some(cached) = self.shaped.get(&key) {
-            return cached.clone();
+        if let Some(cached) = self.shaped.get_mut(&key) {
+            self.tick += 1;
+            cached.used = self.tick;
+            return cached.text.clone();
         }
         let metrics = Metrics::new(size * SCALE, size * SCALE);
         let mut buffer = Buffer::new_empty(metrics);
@@ -115,7 +126,9 @@ impl TextPainter {
         let mut left = f32::INFINITY;
         let mut right = f32::NEG_INFINITY;
         for (key, gx, y) in &glyphs {
-            if let Some(image) = self.swash.get_image_uncached(&mut self.font_system, *key)
+            // Кэш, а не голая растеризация: те же глифы тут же пойдут в
+            // `blend`, и без кэша swash рисовал маску дважды за кадр.
+            if let Some(image) = self.swash.get_image(&mut self.font_system, *key)
                 && matches!(image.content, SwashContent::Mask)
             {
                 let top_edge = *y as f32 - image.placement.top as f32;
@@ -145,10 +158,25 @@ impl TextPainter {
             }
         };
         let result = (measured, glyphs);
-        if self.shaped.len() >= SHAPED_CACHE_LIMIT {
-            self.shaped.clear();
+        // Вытесняется одна самая старая строка: очистка всего кэша на быстром
+        // листании возвращала раскладку целого экрана сразу и давала рывок.
+        if self.shaped.len() >= SHAPED_CACHE_LIMIT
+            && let Some(oldest) = self
+                .shaped
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| key.clone())
+        {
+            self.shaped.remove(&oldest);
         }
-        self.shaped.insert(key, result.clone());
+        self.tick += 1;
+        self.shaped.insert(
+            key,
+            ShapedEntry {
+                used: self.tick,
+                text: result.clone(),
+            },
+        );
         result
     }
 
@@ -244,17 +272,32 @@ impl TextPainter {
     /// Обрезает текст с многоточием, если он шире полосы. Логика жила в
     /// `paint_boxed`; теперь её используют оба paint-режима.
     fn truncate_to(&mut self, text: &str, size: f32, width: f32) -> String {
-        let mut shown = text.to_string();
-        if self.text_width(&shown, size) > width {
-            while !shown.is_empty() {
-                let candidate = format!("{shown}…");
-                if self.text_width(&candidate, size) <= width {
-                    shown = candidate;
-                    break;
-                }
-                shown.pop();
+        if self.text_width(text, size) <= width {
+            return text.to_string();
+        }
+        // Длина обрезки ищется двоичным поиском: посимвольный перебор
+        // раскладывал каждое промежуточное имя и на длинных файлах давал
+        // стомиллисекундный рывок.
+        let chars: Vec<char> = text.chars().collect();
+        let fits = |me: &mut Self, take: usize| {
+            let mut candidate: String = chars[..take].iter().collect();
+            candidate.push('…');
+            me.text_width(&candidate, size) <= width
+        };
+        if !fits(self, 0) {
+            return String::new();
+        }
+        let (mut lo, mut hi) = (0usize, chars.len());
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if fits(self, mid) {
+                lo = mid;
+            } else {
+                hi = mid;
             }
         }
+        let mut shown: String = chars[..lo].iter().collect();
+        shown.push('…');
         shown
     }
 
@@ -281,7 +324,7 @@ impl TextPainter {
         baseline: f32,
     ) {
         for (key, gx, gy) in glyphs {
-            if let Some(image) = self.swash.get_image_uncached(&mut self.font_system, key)
+            if let Some(image) = self.swash.get_image(&mut self.font_system, key)
                 && matches!(image.content, SwashContent::Mask)
             {
                 // Логические координаты умножаем на SCALE один раз, глифы уже
@@ -374,5 +417,30 @@ mod tests {
             painter.shared_baseline(desc_band, SIZE),
             "общая линейка зависит от полосы — строки разъедутся"
         );
+    }
+
+    /// Обрезка берёт самый длинный префикс, который ещё влезает: двоичный
+    /// поиск не должен ни оставлять лишнего, ни резать раньше времени.
+    #[test]
+    fn truncation_keeps_the_longest_fitting_prefix() {
+        let mut painter = TextPainter::new(FONT);
+        let full = "very_long_wallpaper_name_2024.png";
+        let width = painter.text_width("very_long_w…", SIZE);
+        let shown = painter.truncate_to(full, SIZE, width);
+        assert!(shown.ends_with('…'), "многоточие на месте: {shown}");
+        assert!(
+            painter.text_width(&shown, SIZE) <= width,
+            "обрезанный текст влезает: {shown}"
+        );
+        let chars: Vec<char> = full.chars().collect();
+        let kept = shown.chars().count() - 1;
+        if kept < chars.len() {
+            let mut longer: String = chars[..=kept].iter().collect();
+            longer.push('…');
+            assert!(
+                painter.text_width(&longer, SIZE) > width,
+                "следующий символ уже не влезал бы: {longer}"
+            );
+        }
     }
 }
