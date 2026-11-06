@@ -1117,7 +1117,10 @@ mod tests {
         };
         blit_thumb(&mut canvas, Rect::new(0.0, 0.0, 8.0, 8.0), &thumb, 1.0);
         let at = |x: u32, y: u32| canvas.pixmap.pixel(x, y).expect("пиксель").demultiply();
-        assert_eq!((at(2, 2).red(), at(2, 2).green(), at(2, 2).blue()), (255, 0, 0));
+        assert_eq!(
+            (at(2, 2).red(), at(2, 2).green(), at(2, 2).blue()),
+            (255, 0, 0)
+        );
         assert_eq!((at(13, 2).red(), at(13, 2).green()), (0, 255));
         assert_eq!((at(2, 13).red(), at(2, 13).blue()), (0, 255));
         assert_eq!(at(13, 13).red(), 255, "правый нижний — белый");

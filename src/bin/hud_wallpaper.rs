@@ -829,10 +829,7 @@ fn event_loop(folder: Option<&str>) -> Result<(), String> {
     // В энергосбережении карточка непрозрачна с самого начала: отдельный
     // проход по готовому холсту стоил 36 мс на кадр.
     let saver = power_profile::saver();
-    let ui = ui_tokens::ui_palette_alpha(
-        palette,
-        if saver { 1.0 } else { ui_tokens::BG_ALPHA },
-    );
+    let ui = ui_tokens::ui_palette_alpha(palette, if saver { 1.0 } else { ui_tokens::BG_ALPHA });
 
     // Модель заводится до слоя, но размер фиксирован карточкой — первый commit
     // идёт с ним же, нулей протокол не увидит.
