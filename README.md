@@ -79,7 +79,7 @@ cd Hudbar
 [`contrib/zen`](contrib/zen/README.md).
 
 Обои в репозиторий не входят: `hud-wallpapers` скачивает набор (около 1.9 ГБ) из
-последнего релиза в `~/wallpapers`.
+релиза `v0.18.15` в `~/wallpapers`.
 
 Готовые бинды niri — [`contrib/niri/hudbar.kdl`](contrib/niri/hudbar.kdl). Скопируйте файл
 в `~/.config/niri/` и добавьте `include "~/.config/niri/hudbar.kdl"` в `config.kdl`;

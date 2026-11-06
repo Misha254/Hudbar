@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Скачивает набор обоев Hudbar из последнего релиза в ~/wallpapers.
+# Скачивает набор обоев Hudbar из релиза v0.18.15 в ~/wallpapers.
 #
 # Архив весит около 1.9 ГБ и распаковывается поверх текущих файлов; уже
 # существующие обои с теми же именами будут заменены. Только этим скриптом:
 # в git они не лежат, чтобы не раздувать репозиторий.
+#
+# Тег зафиксирован: набор обоев не меняется от релиза к релизу, а в новых
+# релизах ассета нет — `latest` указывал бы на релиз без архива.
 set -euo pipefail
 
-url=${HUDBAR_WALLPAPERS_URL:-https://github.com/Misha254/Hudbar/releases/latest/download/wallpapers.tar.zst}
+url=${HUDBAR_WALLPAPERS_URL:-https://github.com/Misha254/Hudbar/releases/download/v0.18.15/wallpapers.tar.zst}
 dest="$HOME/wallpapers"
 
 command -v curl >/dev/null 2>&1 || {
