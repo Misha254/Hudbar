@@ -19,6 +19,10 @@ binds {
     super+Z repeat=false hotkey-overlay-title="Обои" { spawn-sh "~/.local/bin/hud-wallpaper"; }
     KP_7 repeat=false hotkey-overlay-title="VPN" { spawn-sh "~/.local/bin/hud-vpn"; }
 
+    // Zen Browser: для него ставится живая тема (./install.sh --zen).
+    // Обычная установка вместо flatpak: spawn "zen";
+    KP_1 hotkey-overlay-title="Zen Browser" { spawn "flatpak" "run" "app.zen_browser.zen"; }
+
     // Слои HUDbar не видны niri close-window, поэтому hud-close: он закрывает
     // верхнее окно HUDbar, а без открытых передаёт close-window в niri.
     super+Q repeat=false hotkey-overlay-title="Закрыть окно" { spawn-sh "~/.local/bin/hud-close"; }
