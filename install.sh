@@ -8,11 +8,13 @@ STATE_HOME=${XDG_STATE_HOME:-"$HOME/.local/state"}
 BACKUP_ROOT=${HUD_BACKUP_DIR:-"$STATE_HOME/hudbar/backups/$(date +%Y%m%d-%H%M%S)"}
 DRY_RUN=0
 FORCE=0
+ZEN=0
 
 usage() {
-    printf 'Usage: %s [--dry-run] [--force]\n' "$0"
+    printf 'Usage: %s [--dry-run] [--force] [--zen]\n' "$0"
     printf '\nInstalls hudbar binaries and the repository-owned default config.\n'
     printf 'Existing files are backed up before replacement.\n'
+    printf '\n  --zen   also install the live Zen Browser theme (see contrib/zen)\n'
 }
 
 log() {
@@ -38,6 +40,7 @@ while (($#)); do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --force) FORCE=1 ;;
+        --zen) ZEN=1 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
@@ -87,7 +90,7 @@ for binary in hudbar hud-menu-rs hud-apps-rs hud-keybinds-rs hud-yazibinds-rs hu
     install_file "$ROOT_DIR/target/release/$binary" "$PREFIX/bin/$binary" 0755
 done
 
-for script in hud-menu hud-apps hud-keybinds hud-yazibinds hud-vpn hud-wallpaper hud-setting hud-update hud-close; do
+for script in hud-menu hud-apps hud-keybinds hud-yazibinds hud-vpn hud-wallpaper hud-wallpapers hud-setting hud-update hud-close; do
     install_file "$ROOT_DIR/scripts/$script" "$PREFIX/bin/$script" 0755
 done
 install_file "$ROOT_DIR/scripts/hud-migrate-settings" "$PREFIX/bin/hud-migrate-settings" 0755
@@ -106,6 +109,15 @@ install_file "$ROOT_DIR/docs/settings.schema.json" "$CONFIG_HOME/hudbar/settings
 
 install_file "$ROOT_DIR/config/hudbar/colors.css" "$CONFIG_HOME/hudbar/colors.css"
 install_file "$ROOT_DIR/config/hudbar/font" "$CONFIG_HOME/hudbar/font"
+
+# Тема Zen — отдельный шаг: она меняет профиль браузера и flatpak-разрешения.
+# Без флага установщик браузер не трогает.
+if (( ZEN )); then
+    zen_args=()
+    (( DRY_RUN )) && zen_args+=(--dry-run)
+    (( FORCE )) && zen_args+=(--force)
+    "$ROOT_DIR/contrib/zen/install.sh" "${zen_args[@]}"
+fi
 
 if (( DRY_RUN )); then
     log "dry run complete"

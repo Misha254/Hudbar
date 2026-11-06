@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | niri | `~/.config/niri/colors.kdl` | подключается из `config.kdl`; niri перечитывает конфиг сам |
 | HUDbar | `~/.config/hudbar/colors.css` | панель следит за mtime и подхватывает на лету |
+| Zen Browser | `<профиль>/chrome/omafox.css`, `<профиль>/matugen-theme.json` | расширение Omafox меняет Firefox-тему на лету; установка — `contrib/zen/` |
 | kitty | `~/.config/kitty/colors.conf` | `include` в `kitty.conf`; новые окна и `ctrl+shift+f5` |
 | dunst | `~/.config/dunst/dunstrc` | `dunstctl reload` или перезапуск демона |
 | rofi | `~/.config/rofi/colors.rasi` | при следующем запуске |
@@ -111,4 +112,10 @@ GTK-подобный, а не Breeze: это осознанный обмен, qt
   старте; HUDbar, niri и dunst перечитывают файлы сами.
 - **`prefers-color-scheme` не переключается.** Тема всегда тёмная, поэтому
   `color-scheme` в gsettings остаётся `prefer-dark`.
-- **Zen Browser** в этой работе не участвует: отложен в ROADMAP, D.
+- **Zen Browser: живая тема через расширение.** Zen не перечитывает
+  `userChrome.css` и перекрывает Firefox-тему своей; поэтому matugen пишет
+  JSON, native-host отдаёт его подписанному расширению Omafox, а оно меняет
+  тему на лету. Мост `--lwt-*` → `--zen-*` статический. Установка:
+  `./install.sh --zen` или `contrib/zen/install.sh`; подробности и откат —
+  `contrib/zen/README.md`. Изменения затрагивают профиль браузера, поэтому
+  без флага `--zen` установщик его не трогает.

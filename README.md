@@ -79,6 +79,13 @@ cd Hudbar
 резервную копию в `~/.local/state/hudbar/backups/`. Конфигурацию niri, rofi и dunst он
 не трогает.
 
+Живая тема Zen Browser ставится отдельным флагом: `./install.sh --zen`. Он меняет профиль
+браузера, поэтому без флага установщик Zen не трогает; подробности и откат —
+[`contrib/zen`](contrib/zen/README.md).
+
+Обои в репозиторий не входят: `hud-wallpapers` скачивает набор (около 1.9 ГБ) из
+последнего релиза в `~/wallpapers`.
+
 Для Arch Linux есть пакет:
 
 ```bash
