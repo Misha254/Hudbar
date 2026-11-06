@@ -98,6 +98,15 @@ super+alt+Space repeat=false hotkey-overlay-title="Меню HUD" { spawn-sh "~/.
 super+P repeat=false hotkey-overlay-title="Питание" { spawn-sh "~/.local/bin/hud-menu power"; }
 ```
 
+Окна HUDbar — слои, и `close-window` в niri их не видит: `Super+Q` закроет
+только обычное окно. Чтобы та же клавиша закрывала и окно HUDbar, бинд зовёт
+`hud-close`: он находит верхнее открытое окно по pid-файлу и закрывает его, а
+без открытых окон передаёт `close-window` в niri.
+
+```kdl
+super+Q repeat=false hotkey-overlay-title="Закрыть окно" { spawn-sh "~/.local/bin/hud-close"; }
+```
+
 ## 3. Прямой вход в раздел
 
 Обёртка передаёт аргументы бинарнику, поэтому раздел можно открыть сразу:
