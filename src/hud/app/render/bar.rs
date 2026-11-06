@@ -289,25 +289,24 @@ impl App {
                 .battery_wh
                 .map(|wh| format!("{wh:.1} Wh"))
                 .unwrap_or_else(|| format!("{pct}%"));
-            let (text, color, bg, with_icon) = if sys.charging {
+            let (text, color, bg) = if sys.charging {
                 (
                     format!("{I_PLUG}{}{value}", self.icon_gap()),
                     p.text,
                     chip_bg,
-                    false,
                 )
             } else if pct <= 15 {
                 let (color, bg) = low_battery_style(p, chip_bg);
-                (value, color, bg, true)
+                (value, color, bg)
             } else if pct <= 30 {
-                (value, p.text.with_a(0.75), chip_bg, true)
+                (value, p.text.with_a(0.75), chip_bg)
             } else {
-                (value, p.text, chip_bg, true)
+                (value, p.text, chip_bg)
             };
             let mut c = Cell::new(text, color);
-            if with_icon {
-                c.bat = Some(pct);
-            }
+            // Уровень рисуется и на зарядке: вилка говорит только «идёт заряд»,
+            // а без иконки от батареи остаётся одно число Wh без доли.
+            c.bat = Some(pct);
             let mut cells = vec![c];
             if let Some((hours, minutes)) = sys.bat_time {
                 let mut dot = Cell::new("·".to_string(), p.text.with_a(0.3));
