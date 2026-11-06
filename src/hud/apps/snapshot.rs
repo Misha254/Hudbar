@@ -7,7 +7,7 @@
 //! к вёрстке.
 //!
 //! Запуск:
-//!   hud-apps-rs --snapshot <default|search|empty|pinned> <out.png>
+//!   hud-apps-rs --snapshot <default|list|search|empty|pinned> <out.png>
 
 use std::path::Path;
 
@@ -25,7 +25,9 @@ use super::view;
 /// Разбор аргументов `--snapshot` и запись PNG.
 pub fn run(args: &[String]) -> Result<(), String> {
     if args.len() < 2 {
-        return Err("hud-apps-rs --snapshot <default|search|empty|pinned> <out.png>".to_string());
+        return Err(
+            "hud-apps-rs --snapshot <default|list|search|empty|pinned> <out.png>".to_string(),
+        );
     }
     let mode = args[0].as_str();
     let out = args[1].as_str();
@@ -39,6 +41,11 @@ fn scene(mode: &str) -> Result<Model, String> {
     let mut model = Model::open(view::MAX_ROWS, Language::Ru);
     match mode {
         "default" => {}
+        "list" => {
+            // Живое окно открывается плитками; список — для проверки вёрстки
+            // секций и подсказок.
+            model.toggle_view();
+        }
         "search" => {
             // Буква, которая есть в названии почти любого приложения: список
             // остаётся длиннее окна, и видно и поиск, и прокрутку.
@@ -68,7 +75,7 @@ fn scene(mode: &str) -> Result<Model, String> {
 /// Кадр окна в буфер. Иконки грузятся до отрисовки: первый кадр должен быть
 /// готовым, иначе снимок покажет заглушки там, где окно покажет иконки.
 pub fn render(model: &Model, base: Palette) -> tiny_skia::Pixmap {
-    let (width, height) = view::layer_size(model.visible().len());
+    let (width, height) = view::layer_size(model);
     let mut pixmap = tiny_skia::Pixmap::new(
         (width as f32 * SCALE) as u32,
         (height as f32 * SCALE) as u32,
@@ -137,7 +144,7 @@ mod tests {
     #[test]
     fn a_snapshot_of_a_synthetic_list_renders() {
         let pixmap = render(&model(), palette::Palette::default());
-        let (width, height) = view::layer_size(model().visible().len());
+        let (width, height) = view::layer_size(&model());
         assert_eq!(pixmap.width(), (width as f32 * SCALE) as u32);
         assert_eq!(pixmap.height(), (height as f32 * SCALE) as u32);
         // Карточка непрозрачна в центре: пустой кадр означал бы, что ничего

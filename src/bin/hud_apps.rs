@@ -20,7 +20,7 @@
 //! Запуск:
 //!   hud-apps-rs                     — открыть окно; повторный вызов закрывает
 //!   hud-apps-rs --help              — справка
-//!   hud-apps-rs --snapshot <mode> <out.png>
+//!   hud-apps-rs --snapshot <default|list|search|empty|pinned> <out.png>
 
 use std::os::fd::AsFd;
 use std::sync::Arc;
@@ -139,12 +139,6 @@ const NAMESPACE: &str = "hudapps";
 const PID_FILE: &str = "hudbar-apps.pid";
 /// Ширина окна равна ширине карточки: окно и есть карточка.
 const WIDTH: u32 = view::CARD_W as u32;
-/// Высота, которой заведомо хватает под любую карточку: нужна только для
-/// размера пула буферов.
-const MAX_H: u32 =
-    view::HEADER_H as u32 + (view::ROW_H * view::MAX_ROWS as f32) as u32 + view::FOOTER_H as u32;
-/// Строк на страницу прокрутки: сколько влезает в карточку целиком.
-const PAGE: isize = view::MAX_ROWS as isize;
 
 const USAGE: &str = "\
 hud-apps-rs — лаунчер приложений
@@ -187,18 +181,13 @@ impl AppsApp {
     /// Прямоугольник карточки в окне: окно и есть карточка, поэтому она
     /// начинается в нуле.
     fn card(&self) -> Rect {
-        Rect::new(
-            0.0,
-            0.0,
-            WIDTH as f32,
-            view::card_height(view::rows_shown(self.model.visible().len())),
-        )
+        Rect::new(0.0, 0.0, WIDTH as f32, view::card_height(&self.model))
     }
 
     /// Размер, который просит модель. Считается из карточки, поэтому поиск и
     /// пустой список дают верную высоту.
     fn wanted_size(&self) -> (u32, u32) {
-        view::layer_size(self.model.visible().len())
+        view::layer_size(&self.model)
     }
 
     /// Обновляет размер слоя, если карточка изменила высоту: вход в поиск,
@@ -218,10 +207,15 @@ impl AppsApp {
         match input {
             Input::Ignore => {}
             Input::Move(delta) => self.model.move_sel(delta),
-            Input::Page(delta) => self.model.page(delta * PAGE),
+            Input::MoveCol(delta) => self.model.move_col(delta),
+            Input::Page(delta) => self.model.page(delta),
             Input::Jump(end) => self.model.jump(end),
             Input::Activate => self.activate(),
             Input::Pin => self.toggle_pin(),
+            Input::Reorder(delta) => {
+                self.model.move_pinned(delta);
+            }
+            Input::ToggleView => self.model.toggle_view(),
             Input::Close => self.close(),
             Input::Erase => self.model.backspace(),
             Input::ClearQuery => self.model.clear_query(),
@@ -268,8 +262,7 @@ impl AppsApp {
 
     /// Клик по строке: выбрать и сразу запустить, как в списках файлов.
     fn click(&mut self, x: f32, y: f32) {
-        let rows = view::rows_shown(self.model.visible().len());
-        if let Some(index) = view::row_at(&self.model, self.card(), rows, x, y) {
+        if let Some(index) = view::row_at(&self.model, self.card(), x, y) {
             self.model.select(index);
             self.hover = Some(index);
             self.activate();
@@ -278,14 +271,18 @@ impl AppsApp {
 
     /// Разбирает клавишу и применяет команду. Вынесено, чтобы нажатие и
     /// повтор шли одним кодом.
-    fn handle_key(&mut self, event: KeyEvent) {
-        let key = menu::input::event(
+    fn key_of(&self, event: &KeyEvent) -> menu::input::KeyEvent {
+        menu::input::event(
             event.keysym.into(),
             event.utf8.as_deref(),
             self.mods.ctrl,
             self.mods.shift,
             self.mods.logo,
-        );
+        )
+    }
+
+    fn handle_key(&mut self, event: KeyEvent) {
+        let key = self.key_of(&event);
         let input = keys::translate(key, self.model.query());
         debug_log(&format!("команда {input:?}"));
         self.apply(input);
@@ -416,7 +413,11 @@ impl KeyboardHandler for AppsApp {
         _: u32,
         event: KeyEvent,
     ) {
-        self.repeat.press(&event);
+        // Повтор нужен только навигации: удержанный Tab переключал бы вид
+        // пачкой, а Enter запускал бы приложение много раз.
+        if keys::repeats(self.key_of(&event).key) {
+            self.repeat.press(&event);
+        }
         self.handle_key(event);
     }
 
@@ -483,9 +484,7 @@ impl PointerHandler for AppsApp {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     // Указатель только подсвечивает: случайное движение мыши не
                     // должно двигать выбор.
-                    let rows = view::rows_shown(self.model.visible().len());
-                    let hover =
-                        view::row_at(&self.model, self.card(), rows, position.0, position.1);
+                    let hover = view::row_at(&self.model, self.card(), position.0, position.1);
                     if hover != self.hover {
                         self.hover = hover;
                         self.ctx.dirty = true;
@@ -759,7 +758,7 @@ fn event_loop() -> Result<(), String> {
         model.total(),
         model.pinned().len()
     ));
-    let (start_w, start_h) = view::layer_size(model.visible().len());
+    let (start_w, start_h) = view::layer_size(&model);
 
     let ctx = layer::open(
         &compositor,
@@ -770,7 +769,7 @@ fn event_loop() -> Result<(), String> {
             namespace: Some(NAMESPACE),
             width: start_w,
             height: start_h,
-            max_height: MAX_H,
+            max_height: view::max_card_height() as u32,
             scale: SCALE as u32,
         },
         started,
@@ -833,7 +832,10 @@ fn event_loop() -> Result<(), String> {
             app.draw();
         }
         // Повтор удержанной стрелки: композитор его не шлёт, крутим сами.
-        while let Some(event) = app.repeat.poll() {
+        while !app.exit.load(Ordering::Relaxed) && !SIGNAL_EXIT.load(Ordering::Relaxed) {
+            let Some(event) = app.repeat.poll() else {
+                break;
+            };
             app.handle_key(event);
             if app.ctx.configured {
                 app.ctx.dirty = false;

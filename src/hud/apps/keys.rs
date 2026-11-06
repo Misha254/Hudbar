@@ -14,6 +14,8 @@ pub enum Input {
     Ignore,
     /// Сдвинуть выбор на столько строк.
     Move(isize),
+    /// Сдвинуть выбор на столько плиток внутри ряда сетки.
+    MoveCol(isize),
     /// Прокрутить список на страницу.
     Page(isize),
     /// В начало или в конец.
@@ -22,6 +24,10 @@ pub enum Input {
     Activate,
     /// Закрепить или открепить выбранное приложение.
     Pin,
+    /// Переставить закреплённое приложение на столько строк.
+    Reorder(isize),
+    /// Переключить плитки и список.
+    ToggleView,
     /// Закрыть окно.
     Close,
     /// Стереть последний символ запроса.
@@ -47,10 +53,11 @@ pub fn translate(event: KeyEvent, query: &str) -> Input {
             // Закрепление: `Ctrl+P` — по первой букве слова, `Ctrl+F` оставлен
             // для мышечной памяти от прежнего окна rofi, где закрепляли им же.
             Key::Char('p') | Key::Char('P') | Key::Char('f') | Key::Char('F') => Input::Pin,
-            Key::Up | Key::Char('k') | Key::Char('K') | Key::Char('n') | Key::Char('N') => {
-                Input::Move(-1)
-            }
-            Key::Down | Key::Char('j') | Key::Char('J') => Input::Move(1),
+            // Ctrl+↑↓ — порядок закреплённых; Ctrl+K/J/N остаются навигацией.
+            Key::Up => Input::Reorder(-1),
+            Key::Down => Input::Reorder(1),
+            Key::Char('k') | Key::Char('K') | Key::Char('n') | Key::Char('N') => Input::Move(-1),
+            Key::Char('j') | Key::Char('J') => Input::Move(1),
             Key::PageUp => Input::Page(-1),
             Key::PageDown => Input::Page(1),
             Key::Home => Input::Jump(false),
@@ -63,6 +70,9 @@ pub fn translate(event: KeyEvent, query: &str) -> Input {
     match event.key {
         Key::Up => Input::Move(-1),
         Key::Down => Input::Move(1),
+        Key::Left => Input::MoveCol(-1),
+        Key::Right => Input::MoveCol(1),
+        Key::Tab => Input::ToggleView,
         Key::PageUp => Input::Page(-1),
         Key::PageDown => Input::Page(1),
         Key::Home => Input::Jump(false),
@@ -83,8 +93,18 @@ pub fn translate(event: KeyEvent, query: &str) -> Input {
             }
         }
         Key::Char(ch) => Input::Type(ch),
-        Key::Other | Key::Left | Key::Right => Input::Ignore,
+        Key::Other => Input::Ignore,
     }
+}
+
+/// Держать ли клавишу для автоповтора. Повтор нужен только навигации:
+/// удержанный `Tab` переключал бы вид пачкой, а `Enter` запускал бы приложение
+/// много раз.
+pub fn repeats(key: Key) -> bool {
+    matches!(
+        key,
+        Key::Up | Key::Down | Key::Left | Key::Right | Key::PageUp | Key::PageDown
+    )
 }
 
 #[cfg(test)]
@@ -128,8 +148,12 @@ mod tests {
         assert_eq!(translate(ctrl(Key::Char('P')), ""), Input::Pin);
         // Мышечная память rofi: там закрепляли `Ctrl+F`.
         assert_eq!(translate(ctrl(Key::Char('f')), ""), Input::Pin);
-        // Стрелка вверх осталась навигацией.
-        assert_eq!(translate(ctrl(Key::Up), ""), Input::Move(-1));
+        // Стрелки с Ctrl двигают закреплённое, а не выбор.
+        assert_eq!(translate(ctrl(Key::Up), ""), Input::Reorder(-1));
+        assert_eq!(translate(ctrl(Key::Down), ""), Input::Reorder(1));
+        // Навигация осталась на Ctrl+K/J.
+        assert_eq!(translate(ctrl(Key::Char('k')), ""), Input::Move(-1));
+        assert_eq!(translate(ctrl(Key::Char('j')), ""), Input::Move(1));
     }
 
     #[test]
@@ -165,12 +189,20 @@ mod tests {
         assert_eq!(translate(press(Key::End), ""), Input::Jump(true));
     }
 
-    /// Стрелки вбок в лаунчере ничего не делают: единственный уровень списка
-    /// уходить некуда, а `Enter` уже запускает.
+    /// Стрелки вбок двигают выбор по ряду сетки; в списочном виде модель
+    /// просто ничего не сделает. `Enter` уже запускает.
     #[test]
-    fn side_arrows_do_nothing() {
-        assert_eq!(translate(press(Key::Left), ""), Input::Ignore);
-        assert_eq!(translate(press(Key::Right), ""), Input::Ignore);
+    fn side_arrows_move_within_a_grid_row() {
+        assert_eq!(translate(press(Key::Left), ""), Input::MoveCol(-1));
+        assert_eq!(translate(press(Key::Right), ""), Input::MoveCol(1));
+        assert_eq!(translate(ctrl(Key::Left), ""), Input::Ignore);
+    }
+
+    /// `Tab` переключает плитки и список; с `Ctrl` комбинация не наша.
+    #[test]
+    fn tab_toggles_the_view() {
+        assert_eq!(translate(press(Key::Tab), ""), Input::ToggleView);
+        assert_eq!(translate(ctrl(Key::Tab), ""), Input::Ignore);
     }
 
     #[test]
@@ -187,5 +219,33 @@ mod tests {
     fn unknown_keys_are_ignored() {
         assert_eq!(translate(press(Key::Other), ""), Input::Ignore);
         assert_eq!(translate(ctrl(Key::Other), ""), Input::Ignore);
+    }
+
+    /// Автоповтор только у навигации: иначе удержание `Tab` или `Enter`
+    /// срабатывало бы пачкой.
+    #[test]
+    fn only_navigation_keys_repeat() {
+        for key in [
+            Key::Up,
+            Key::Down,
+            Key::Left,
+            Key::Right,
+            Key::PageUp,
+            Key::PageDown,
+        ] {
+            assert!(repeats(key), "{key:?} должна повторяться");
+        }
+        for key in [
+            Key::Tab,
+            Key::Enter,
+            Key::Escape,
+            Key::Backspace,
+            Key::Home,
+            Key::End,
+            Key::Char('a'),
+            Key::Other,
+        ] {
+            assert!(!repeats(key), "{key:?} повторяться не должна");
+        }
     }
 }

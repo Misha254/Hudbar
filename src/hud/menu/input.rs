@@ -25,6 +25,7 @@ pub enum Key {
     Enter,
     Backspace,
     Escape,
+    Tab,
     /// Печатный символ: уже с учётом раскладки и AltGr.
     Char(char),
     /// Клавиша без команды: буквы в комбинациях, служебные клавиши.
@@ -86,12 +87,42 @@ pub mod xkb {
     pub const PAGE_DOWN: u32 = 0xff56;
     pub const HOME: u32 = 0xff50;
     pub const END: u32 = 0xff57;
+    pub const TAB: u32 = 0xff09;
 
     pub const J: u32 = 0x006a;
     pub const K: u32 = 0x006b;
     pub const N: u32 = 0x006e;
     pub const P: u32 = 0x0070;
     pub const U: u32 = 0x0075;
+}
+
+/// Кириллица в старом диапазоне XKB: `Ctrl+З` приходит как `XK_Cyrillic_ze`,
+/// а не как код Юникода, поэтому переводим вручную.
+fn cyrillic(keysym: u32) -> Option<char> {
+    const LOW: &str = "абцдефгхийклмнопярстужвьызшэщчъ";
+    const UP: &str = "АБЦДЕФГХИЙКЛМНОПЯРСТУЖВЬЫЗШЭЩЧЪ";
+    let (table, base) = match keysym {
+        0x6c1..=0x6df => (LOW, 0x6c1),
+        0x6e1..=0x6ff => (UP, 0x6e1),
+        _ => return None,
+    };
+    table.chars().nth((keysym - base) as usize)
+}
+
+/// Буква комбинации. `Ctrl` превращает текст клавиши в управляющий символ, а
+/// русская раскладка подменяет букву кириллицей: берём keysym и приводим
+/// клавишу к QWERTY, чтобы `Ctrl+P` срабатывал в любой раскладке.
+fn combo(keysym: u32) -> Key {
+    let ch = cyrillic(keysym).or_else(|| char::from_u32(keysym).filter(char::is_ascii_graphic));
+    match ch {
+        Some(ch) => Key::Char(
+            super::super::bind_data::transliterate(&ch.to_string())
+                .chars()
+                .next()
+                .unwrap_or(ch),
+        ),
+        None => Key::Other,
+    }
 }
 
 /// Превращает XKB-код и текст клавиши в [`KeyEvent`].
@@ -113,6 +144,8 @@ pub fn event(keysym: u32, utf8: Option<&str>, ctrl: bool, shift: bool, logo: boo
         xkb::PAGE_DOWN => Key::PageDown,
         xkb::HOME => Key::Home,
         xkb::END => Key::End,
+        xkb::TAB => Key::Tab,
+        _ if ctrl => combo(keysym),
         _ => match utf8 {
             Some(text) => {
                 let mut clean = text.chars().filter(|ch| !ch.is_control());
@@ -198,7 +231,7 @@ pub fn translate(event: KeyEvent, query: &str) -> MenuInput {
             }
         }
         Key::Char(ch) => MenuInput::Type(ch),
-        Key::Other => MenuInput::Ignore,
+        Key::Other | Key::Tab => MenuInput::Ignore,
     }
 }
 
@@ -327,6 +360,22 @@ mod tests {
         );
     }
 
+    /// `Ctrl` превращает текст клавиши в управляющий символ, а русская
+    /// раскладка подменяет букву кириллицей: комбинация всё равно должна
+    /// читаться как латинская клавиша.
+    #[test]
+    fn ctrl_letters_survive_the_control_character_and_a_russian_layout() {
+        let latin = event(xkb::P, Some("\u{10}"), true, false, false);
+        assert_eq!(latin.key, Key::Char('p'));
+        assert_eq!(translate(latin, ""), MenuInput::Move(-1));
+        // `Ctrl+З` на русской раскладке — та же физическая клавиша P.
+        let cyrillic = event(0x06da, Some("\u{10}"), true, false, false);
+        assert_eq!(cyrillic.key, Key::Char('p'));
+        assert_eq!(translate(cyrillic, ""), MenuInput::Move(-1));
+        let upper = event(0x0050, Some("\u{10}"), true, true, false);
+        assert_eq!(upper.key, Key::Char('P'));
+    }
+
     #[test]
     fn printable_characters_go_into_the_query() {
         assert_eq!(translate(press(Key::Char('щ')), ""), MenuInput::Type('щ'));
@@ -382,6 +431,7 @@ mod tests {
             (xkb::PAGE_DOWN, Key::PageDown),
             (xkb::HOME, Key::Home),
             (xkb::END, Key::End),
+            (xkb::TAB, Key::Tab),
             (xkb::BACKSPACE, Key::Backspace),
         ] {
             assert_eq!(event(code, None, false, false, false).key, key);

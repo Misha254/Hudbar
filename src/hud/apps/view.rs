@@ -1,17 +1,18 @@
-//! Отрисовка окна приложений: карточка, шапка с поиском, строки с иконками,
-//! подвал.
+//! Отрисовка окна приложений: карточка, шапка с поиском, строки с иконками
+//! или сетка плиток, подвал.
 //!
 //! Геометрия и цвета взяты у карточки меню (`menu::view`), поэтому окно
 //! выглядит частью того же HUD, а не отдельной программой: та же ширина, та же
 //! высота шапки и подвала, тот же ход подсветки, тот же ползунок прокрутки.
 //!
-//! Отличие одно — вместо глифа Nerd Font в строке настоящая иконка
-//! приложения. Заглушка на её месте — кружок: он означает «иконка ещё едет»
-//! и не выдаётся ни за букву, ни за значок категории.
+//! Отличие одно — вместо глифа Nerd Font настоящая иконка приложения. В сетке
+//! подписей нет: имя выбранного приложения показывает подвал. Заглушка на месте
+//! иконки — кружок: он означает «иконка ещё едет» и не выдаётся ни за букву, ни
+//! за значок категории.
 
 use super::super::menu::view::RowsHighlight;
 use super::icons::{self, Loader};
-use super::model::{Model, Row};
+use super::model::{GRID_COLS, MAX_TILE_ROWS, MIN_TILE_ROWS, Model, Row, ViewMode};
 
 pub use super::super::canvas::{fill_rect, fill_round_rect, stroke_rect};
 use super::super::geom::Rect;
@@ -37,6 +38,15 @@ pub const FOOTER_H: f32 = 40.0;
 pub const ROW_H: f32 = 40.0;
 /// Иконка приложения в строке.
 pub const ICON: f32 = 26.0;
+/// Плитка сетки: 4 колонки по 90 px плюс три зазора по 16 — ровно ширина
+/// карточки без внутренних отступов.
+pub const TILE: f32 = 90.0;
+/// Зазор между плитками — тот же внутренний отступ карточки.
+pub const TILE_GAP: f32 = spacing::LG;
+/// Иконка на плитке: крупнее строковой, но с полем под подсветку и булавку.
+pub const TILE_ICON: f32 = 44.0;
+/// Вертикальный отступ сетки от шапки и подвала.
+pub const GRID_PAD_Y: f32 = spacing::LG;
 /// Строк меньше минимума не рисуем: карточка не должна схлопываться под
 /// короткий список.
 pub const MIN_ROWS: usize = 5;
@@ -73,34 +83,111 @@ pub fn rows_shown(count: usize) -> usize {
     count.clamp(MIN_ROWS, MAX_ROWS)
 }
 
-/// Высота карточки по числу нарисованных строк.
-pub fn card_height(rows: usize) -> f32 {
-    HEADER_H + rows as f32 * ROW_H + FOOTER_H
+/// Сколько рядов плиток рисуется при таком количестве приложений.
+pub fn tile_rows_shown(count: usize) -> usize {
+    count
+        .div_ceil(GRID_COLS)
+        .clamp(MIN_TILE_ROWS, MAX_TILE_ROWS)
+}
+
+/// Высота ряда плиток.
+fn grid_height(rows: usize) -> f32 {
+    if rows == 0 {
+        0.0
+    } else {
+        rows as f32 * TILE + (rows.saturating_sub(1)) as f32 * TILE_GAP
+    }
+}
+
+/// Высота карточки под текущий вид.
+pub fn card_height(model: &Model) -> f32 {
+    match model.view() {
+        ViewMode::List => HEADER_H + rows_shown(model.visible().len()) as f32 * ROW_H + FOOTER_H,
+        ViewMode::Tiles => {
+            HEADER_H
+                + GRID_PAD_Y
+                + grid_height(tile_rows_shown(model.total()))
+                + GRID_PAD_Y
+                + FOOTER_H
+        }
+    }
+}
+
+/// Потолок высоты карточки: по нему считается пул буферов слоя.
+pub fn max_card_height() -> f32 {
+    let list = HEADER_H + MAX_ROWS as f32 * ROW_H + FOOTER_H;
+    let tiles = HEADER_H + GRID_PAD_Y + grid_height(MAX_TILE_ROWS) + GRID_PAD_Y + FOOTER_H;
+    if tiles > list { tiles } else { list }
 }
 
 /// Размер слоя: окно равно карточке. Ширина постоянная, высота зависит от
-/// списка — вход в поиск и очистка меняют её.
-pub fn layer_size(rows: usize) -> (u32, u32) {
-    let shown = rows_shown(rows);
-    (CARD_W as u32, card_height(shown).round() as u32)
+/// списка — вход в поиск и смена вида меняют её.
+pub fn layer_size(model: &Model) -> (u32, u32) {
+    (CARD_W as u32, card_height(model).round() as u32)
 }
 
 /// Прямоугольник списка внутри карточки.
-pub fn list_rect(card: Rect, rows: usize) -> Rect {
-    Rect::new(card.x, card.y + HEADER_H, card.w, rows as f32 * ROW_H)
+pub fn list_rect(card: Rect, model: &Model) -> Rect {
+    match model.view() {
+        ViewMode::List => Rect::new(
+            card.x,
+            card.y + HEADER_H,
+            card.w,
+            rows_shown(model.visible().len()) as f32 * ROW_H,
+        ),
+        ViewMode::Tiles => Rect::new(
+            card.x + PAD,
+            card.y + HEADER_H + GRID_PAD_Y,
+            card.w - PAD * 2.0,
+            grid_height(tile_rows_shown(model.total())),
+        ),
+    }
 }
 
-/// Строка под точкой. Возвращает абсолютный индекс строки модели, а не
+/// Прямоугольник плитки по её месту в видимом окне.
+fn tile_rect(list: Rect, slot: usize) -> Rect {
+    let row = slot / GRID_COLS;
+    let col = slot % GRID_COLS;
+    Rect::new(
+        list.x + col as f32 * (TILE + TILE_GAP),
+        list.y + row as f32 * (TILE + TILE_GAP),
+        TILE,
+        TILE,
+    )
+}
+
+/// Элемент под точкой. Возвращает абсолютный индекс строки модели, а не
 /// индекс видимого окна: с прокруткой это разные вещи, и клик по нижней строке
-/// обязан выбрать именно её.
-pub fn row_at(model: &Model, card: Rect, rows: usize, x: f32, y: f32) -> Option<usize> {
-    let list = list_rect(card, rows);
+/// обязан выбрать именно её. В сетке зазор между плитками не попадает ни в одну.
+pub fn row_at(model: &Model, card: Rect, x: f32, y: f32) -> Option<usize> {
+    let list = list_rect(card, model);
     if !list.contains(x, y) {
         return None;
     }
-    let slot = ((y - list.y) / ROW_H).floor() as usize;
+    let slot = match model.view() {
+        ViewMode::List => ((y - list.y) / ROW_H).floor() as usize,
+        ViewMode::Tiles => {
+            let step = TILE + TILE_GAP;
+            let col = ((x - list.x) / step).floor() as usize;
+            let row = ((y - list.y) / step).floor() as usize;
+            if col >= GRID_COLS {
+                return None;
+            }
+            let slot = row * GRID_COLS + col;
+            let rect = tile_rect(list, slot);
+            if x >= rect.right() || y >= rect.bottom() {
+                return None;
+            }
+            slot
+        }
+    };
     let index = model.top() + slot;
-    (index < model.total()).then_some(index)
+    // Заголовки секций и пустые клетки сетки — не приложения: клик по ним
+    // ничего не выбирает.
+    match model.rows().get(index) {
+        Some(row) => model.app_at(row).map(|_| index),
+        None => None,
+    }
 }
 
 /// Прямоугольник поля поиска: прижат к правому краю шапки.
@@ -147,11 +234,13 @@ pub fn render_window(
     loader: &Loader,
     highlight: RowsHighlight,
 ) -> Rect {
-    let rows = rows_shown(model.visible().len());
-    let frame = Rect::new(0.0, 0.0, CARD_W, card_height(rows));
+    let frame = Rect::new(0.0, 0.0, CARD_W, card_height(model));
     card(view, frame);
     header(view, frame, model);
-    rows_view(view, frame, model, loader, rows, highlight);
+    match model.view() {
+        ViewMode::List => rows_view(view, frame, model, loader, highlight),
+        ViewMode::Tiles => tiles_view(view, frame, model, loader, highlight),
+    }
     footer(view, frame, model);
     frame
 }
@@ -297,11 +386,11 @@ fn rows_view(
     card: Rect,
     model: &Model,
     loader: &Loader,
-    rows: usize,
     highlight: RowsHighlight,
 ) {
     let visible = model.visible();
-    let list = list_rect(card, rows);
+    let rows = rows_shown(visible.len());
+    let list = list_rect(card, model);
     let selected = model.selected();
     if let Some(position) = highlight.sliding
         && !visible.is_empty()
@@ -317,6 +406,7 @@ fn rows_view(
         let absolute = model.top() + slot;
         match row {
             Row::Section(title) => section_row(view, rect, title),
+            Row::Blank => {}
             Row::App(_) => {
                 let Some(app) = model.app_at(row) else {
                     continue;
@@ -339,7 +429,13 @@ fn rows_view(
             }
         }
     }
-    if let Some(track) = scrollbar_rect(list, model.total(), model.top()) {
+    if let Some(track) = scrollbar_rect(
+        list,
+        card.right(),
+        model.total(),
+        model.top(),
+        visible.len(),
+    ) {
         fill_rect(
             view.pixmap,
             track.x * SCALE,
@@ -378,6 +474,162 @@ fn section_row(view: &mut AppsView<'_>, rect: Rect, title: &str) {
         ),
         Align::Start,
     );
+}
+
+/// Сетка плиток: только иконки, закреплённые идут первыми, блоки разделены
+/// подписью с линией.
+fn tiles_view(
+    view: &mut AppsView<'_>,
+    card: Rect,
+    model: &Model,
+    loader: &Loader,
+    highlight: RowsHighlight,
+) {
+    let list = list_rect(card, model);
+    let visible = model.visible();
+    let selected = model.selected();
+    for (slot, row) in visible.iter().enumerate() {
+        let Some(app) = model.app_at(row) else {
+            continue;
+        };
+        let absolute = model.top() + slot;
+        let is_selected = absolute == selected;
+        let hover = !is_selected && absolute == highlight.hover.unwrap_or(usize::MAX);
+        tile(
+            view,
+            tile_rect(list, slot),
+            app,
+            loader,
+            model.is_pinned(&app.id),
+            is_selected,
+            hover,
+        );
+    }
+    // Граница блоков: закреплённые кончаются на границе ряда, и разделитель
+    // садится в существующий зазор, не раздвигая сетку.
+    let scrollbar = scrollbar_rect(
+        list,
+        card.right(),
+        model.total(),
+        model.top(),
+        visible.len(),
+    );
+    if let Some(at) = model.tiles_break() {
+        let break_row = at / GRID_COLS;
+        let top_row = model.top() / GRID_COLS;
+        if break_row > top_row && break_row < top_row + tile_rows_shown(model.total()) {
+            let y = list.y + break_row as f32 * (TILE + TILE_GAP) - TILE_GAP / 2.0;
+            tiles_divider(view, list, y, model.lang());
+        }
+    }
+    if let Some(track) = scrollbar {
+        fill_rect(
+            view.pixmap,
+            track.x * SCALE,
+            track.y * SCALE,
+            track.w * SCALE,
+            track.h * SCALE,
+            view.ui.muted,
+        );
+    }
+    if model.total() == 0 {
+        let notice = match model.lang() {
+            Language::Ru => "Ничего не найдено",
+            Language::En => "Nothing found",
+        };
+        view.painter.paint_boxed(
+            view.pixmap,
+            notice,
+            view.scale.label,
+            view.ui.muted,
+            Rect::new(list.x, list.y, list.w, list.h.max(TILE)),
+            Align::Center,
+        );
+    }
+}
+
+/// Разделитель блоков сетки: подпись и тонкая линия в зазоре между рядами.
+fn tiles_divider(view: &mut AppsView<'_>, list: Rect, y: f32, lang: Language) {
+    let label = match lang {
+        Language::Ru => "Все приложения",
+        Language::En => "All apps",
+    };
+    let size = view.scale.caption;
+    let width = view.painter.text_width(label, size);
+    view.painter.paint_boxed(
+        view.pixmap,
+        label,
+        size,
+        view.ui.muted,
+        Rect::new(list.x, y - TILE_GAP / 2.0, width, TILE_GAP),
+        Align::Start,
+    );
+    let x = list.x + width + spacing::SM;
+    fill_rect(
+        view.pixmap,
+        x * SCALE,
+        (y - 0.5) * SCALE,
+        (list.right() - x) * SCALE,
+        SCALE,
+        view.ui.border,
+    );
+}
+
+/// Плитка приложения: иконка на подложке, булавка у закреплённых.
+fn tile(
+    view: &mut AppsView<'_>,
+    rect: Rect,
+    app: &super::scan::App,
+    loader: &Loader,
+    pinned: bool,
+    selected: bool,
+    hover: bool,
+) {
+    let color = if selected {
+        view.ui.accent
+    } else if hover {
+        view.ui.hover_bg
+    } else {
+        view.ui.idle_panel
+    };
+    fill_round_rect(
+        view.pixmap,
+        rect.x * SCALE,
+        rect.y * SCALE,
+        rect.w * SCALE,
+        rect.h * SCALE,
+        radius(radii::MD) * SCALE,
+        color,
+    );
+    let icon = Rect::new(
+        rect.x + (TILE - TILE_ICON) / 2.0,
+        rect.y + (TILE - TILE_ICON) / 2.0,
+        TILE_ICON,
+        TILE_ICON,
+    );
+    match loader.get(&app.icon) {
+        Some(bitmap) => icons::blit(view.pixmap, &bitmap, icon.x, icon.y, TILE_ICON),
+        None => placeholder(
+            view,
+            icon,
+            if selected { 1.0 } else { 0.0 },
+            loader.has_failed(&app.icon),
+        ),
+    }
+    if pinned {
+        view.icons.paint(
+            view.pixmap,
+            settings_icons::PIN,
+            view.scale.caption,
+            if selected {
+                view.ui.on_primary
+            } else {
+                view.ui.muted
+            },
+            Rect::new(rect.right() - 18.0, rect.y + 4.0, 14.0, 14.0),
+            Align::Center,
+        );
+    }
 }
 
 /// Рисовать ли булавку на строке.
@@ -531,49 +783,77 @@ pub fn placeholder_share(near: f32) -> f32 {
     near.clamp(0.0, 1.0) * PLACEHOLDER_MIX
 }
 
-/// Полоса прокрутки у правого края списка. Показывается только когда список
+/// Полоса прокрутки в поле карточки справа. Показывается только когда список
 /// длиннее окна: до этого подвал со счётчиком и так говорит, сколько строк.
-fn scrollbar_rect(list: Rect, total: usize, top: usize) -> Option<Rect> {
-    let shown = total.min(MAX_ROWS);
-    if total <= MAX_ROWS || shown == 0 {
+/// `right` — край карточки: в сетке полоса не должна лежать поверх последней
+/// колонки плиток.
+fn scrollbar_rect(
+    list: Rect,
+    right: f32,
+    total: usize,
+    top: usize,
+    visible: usize,
+) -> Option<Rect> {
+    if total <= visible || visible == 0 {
         return None;
     }
-    let thumb_h = (list.h * shown as f32 / total as f32).max(SCROLLBAR_W * 2.0);
-    let travel = list.h - thumb_h;
-    let offset = if total > shown {
-        travel * (top as f32 / (total - shown) as f32).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
+    let thumb_h = (list.h * visible as f32 / total as f32).max(SCROLLBAR_W * 2.0);
+    let travel = (list.h - thumb_h).max(0.0);
+    let offset = travel * (top as f32 / (total - visible) as f32).clamp(0.0, 1.0);
     Some(Rect::new(
-        list.right() - SCROLLBAR_INSET - SCROLLBAR_W,
+        right - SCROLLBAR_INSET - SCROLLBAR_W,
         list.y + offset,
         SCROLLBAR_W,
-        thumb_h,
+        thumb_h.min(list.h),
     ))
 }
 
-/// Подсказки подвала в трёх уровнях: полные, средние и одни клавиши.
+/// Подсказки подвала в трёх уровнях: полные, средние и одни клавиши. Набор
+/// зависит от вида: в сетке место занимают стрелки по ряду и `Tab`, в списке —
+/// закрепление.
 ///
 /// Уровни те же, что у `menu::view::layout_hints`: берётся первый влезший, и
 /// подсказки сокращаются, а не обрезаются многоточием — обрезанная подсказка
 /// читается как «ещё что-то есть» и вводит в заблуждение.
-pub fn hint_levels(lang: Language) -> [&'static [&'static str]; 3] {
-    match lang {
-        Language::Ru => [
+pub fn hint_levels(mode: ViewMode, lang: Language) -> [&'static [&'static str]; 3] {
+    match (mode, lang) {
+        (ViewMode::List, Language::Ru) => [
             &[
                 "↑↓ выбор",
                 "Enter запуск",
-                "Ctrl+P закрепить",
+                "Tab плитки",
+                "Ctrl+P",
                 "Esc закрыть",
             ],
-            &["↑↓ выбор", "Enter запуск", "Ctrl+P", "Esc"],
-            &["Ctrl+P", "Esc"],
+            &["↑↓ выбор", "Enter", "Tab", "Ctrl+P", "Esc"],
+            &["Tab", "Esc"],
         ],
-        Language::En => [
-            &["↑↓ select", "Enter launch", "Ctrl+P pin", "Esc close"],
-            &["↑↓ select", "Enter launch", "Ctrl+P", "Esc"],
-            &["Ctrl+P", "Esc"],
+        (ViewMode::List, Language::En) => [
+            &[
+                "↑↓ select",
+                "Enter launch",
+                "Tab tiles",
+                "Ctrl+P",
+                "Esc close",
+            ],
+            &["↑↓ select", "Enter", "Tab", "Ctrl+P", "Esc"],
+            &["Tab", "Esc"],
+        ],
+        (ViewMode::Tiles, Language::Ru) => [
+            &[
+                "стрелки",
+                "Enter запуск",
+                "Ctrl+P",
+                "Tab список",
+                "Esc закрыть",
+            ],
+            &["стрелки", "Enter", "Ctrl+P", "Tab", "Esc"],
+            &["Tab", "Esc"],
+        ],
+        (ViewMode::Tiles, Language::En) => [
+            &["arrows", "Enter launch", "Ctrl+P", "Tab list", "Esc close"],
+            &["arrows", "Enter", "Ctrl+P", "Tab", "Esc"],
+            &["Tab", "Esc"],
         ],
     }
 }
@@ -582,6 +862,10 @@ pub fn hint_levels(lang: Language) -> [&'static [&'static str]; 3] {
 /// одну больше, а карточка та же, и на `LG` четвёртая строка не влезала ни в
 /// каком виде.
 const HINT_GAP: f32 = spacing::MD;
+
+/// Сколько подвала отдаётся имени выбранной плитки. Длинное имя обрезается
+/// многоточием: лучше узнать приложение по началу, чем остаться без подсказок.
+const NAME_MAX_W: f32 = 144.0;
 
 /// Ширина подсказок уровня: сумма текстов и промежутков между ними.
 fn hints_width(view: &mut AppsView<'_>, hints: &[&str]) -> f32 {
@@ -597,8 +881,13 @@ fn hints_width(view: &mut AppsView<'_>, hints: &[&str]) -> f32 {
 
 /// Подсказки, которые влезают в отведённую ширину: уровень целиком, а если не
 /// влезает даже последний — по одной, пока место есть.
-fn fit_hints(view: &mut AppsView<'_>, available: f32, lang: Language) -> Vec<&'static str> {
-    let levels = hint_levels(lang);
+fn fit_hints(
+    view: &mut AppsView<'_>,
+    available: f32,
+    mode: ViewMode,
+    lang: Language,
+) -> Vec<&'static str> {
+    let levels = hint_levels(mode, lang);
     for level in levels {
         if hints_width(view, level) <= available {
             return level.to_vec();
@@ -643,7 +932,7 @@ fn footer(view: &mut AppsView<'_>, card: Rect, model: &Model) {
         right_zone <= rect.w,
         "правая зона не должна быть шире подвала"
     );
-    let hints = fit_hints(view, available, model.lang());
+    let hints = fit_hints(view, available, model.view(), model.lang());
     let mut x = rect.x + PAD;
     for hint in hints {
         let width = view.painter.text_width(hint, view.scale.caption);
@@ -657,23 +946,23 @@ fn footer(view: &mut AppsView<'_>, card: Rect, model: &Model) {
         );
         x += width + spacing::LG;
     }
-    // Справа: результат действия, а пока его нет — счётчик «выбрано n из m».
-    let status = model.status().unwrap_or_default();
-    let counter = if status.is_empty() {
-        counter(model)
+    // Справа: результат действия; в сетке — имя выбранной плитки (иконки
+    // подписаны не бывают), в списке — счётчик «выбрано n из m».
+    let (text, is_status) = right_label(model);
+    let color = if is_status {
+        view.ui.accent
+    } else if model.view() == ViewMode::Tiles {
+        view.ui.text
     } else {
-        String::new()
+        view.ui.muted
     };
     let mut right = rect.right() - PAD;
-    for (text, color) in [(status, view.ui.accent), (counter.as_str(), view.ui.muted)] {
-        if text.is_empty() {
-            continue;
-        }
-        let width = view.painter.text_width(text, view.scale.caption);
+    if !text.is_empty() {
+        let width = right_text_width(view, model, &text, is_status);
         right -= width;
         view.painter.paint_boxed(
             view.pixmap,
-            text,
+            &text,
             view.scale.caption,
             color,
             Rect::new(right, band.y, width, band.h),
@@ -681,7 +970,7 @@ fn footer(view: &mut AppsView<'_>, card: Rect, model: &Model) {
         );
         right -= spacing::SM;
     }
-    if !status.is_empty() {
+    if is_status {
         // Точка состояния перед текстом: на ошибке запуска она читается
         // быстрее, чем сама строка.
         let dot = 6.0_f32;
@@ -694,6 +983,23 @@ fn footer(view: &mut AppsView<'_>, card: Rect, model: &Model) {
             dot * SCALE,
             view.ui.accent,
         );
+    }
+}
+
+/// Текст правой зоны подвала и признак «это статус»: у статуса есть точка.
+fn right_label(model: &Model) -> (String, bool) {
+    if let Some(status) = model.status() {
+        return (status.to_string(), true);
+    }
+    match model.view() {
+        ViewMode::Tiles => (
+            model
+                .selected_app()
+                .map(|app| app.name.clone())
+                .unwrap_or_default(),
+            false,
+        ),
+        ViewMode::List => (counter(model), false),
     }
 }
 
@@ -729,24 +1035,25 @@ fn status_samples(lang: Language) -> [&'static str; 2] {
     }
 }
 
-/// Ширина того, что на самом деле нарисовано справа: счётчик или статус плюс
-/// точка состояния.
+/// Ширина того, что на самом деле нарисовано справа: статус, имя плитки или
+/// счётчик плюс точка состояния.
 fn actual_right_width(view: &mut AppsView<'_>, model: &Model) -> f32 {
-    let status = model.status().unwrap_or_default();
-    let text = if status.is_empty() {
-        counter(model)
-    } else {
-        status.to_string()
-    };
+    let (text, is_status) = right_label(model);
     if text.is_empty() {
         return 0.0;
     }
-    let dot = if status.is_empty() {
-        0.0
+    let dot = if is_status { 6.0 + spacing::XS } else { 0.0 };
+    right_text_width(view, model, &text, is_status) + dot + spacing::SM
+}
+
+/// Ширина правого текста с учётом потолка для имени плитки.
+fn right_text_width(view: &mut AppsView<'_>, model: &Model, text: &str, is_status: bool) -> f32 {
+    let width = view.painter.text_width(text, view.scale.caption);
+    if model.view() == ViewMode::Tiles && !is_status {
+        width.min(NAME_MAX_W)
     } else {
-        6.0 + spacing::XS
-    };
-    view.painter.text_width(&text, view.scale.caption) + dot + spacing::SM
+        width
+    }
 }
 
 /// «Выбрано n из m»: позиция среди приложений и их число. Заголовки секций в
@@ -890,24 +1197,27 @@ mod tests {
 
     // ───────────────────────── подвал ─────────────────────────
 
-    /// Подсказки укладываются в карточку 440 px целиком, на обоих языках: если
-    /// нет — окно начало бы прятать половину подсказок по умолчанию.
+    /// Подсказки укладываются в карточку 440 px целиком, на обоих языках и в
+    /// обоих видах: если нет — окно начало бы прятать половину подсказок по
+    /// умолчанию.
     #[test]
-    fn the_full_hint_level_fits_the_card_in_both_languages() {
+    fn the_full_hint_level_fits_the_card_in_both_languages_and_views() {
         let mut view = view_for();
-        for lang in [Language::Ru, Language::En] {
-            let levels = hint_levels(lang);
-            let full = hints_width(&mut view, levels[0]);
-            assert!(
-                full <= CARD_W - PAD * 2.0,
-                "{lang:?}: полный уровень не влезает: {full}"
-            );
-            let shown = fit_hints(&mut view, CARD_W - PAD * 2.0, lang);
-            assert_eq!(
-                shown,
-                levels[0].to_vec(),
-                "{lang:?}: в карточку влезает полный уровень, а показан не он"
-            );
+        for mode in [ViewMode::List, ViewMode::Tiles] {
+            for lang in [Language::Ru, Language::En] {
+                let levels = hint_levels(mode, lang);
+                let full = hints_width(&mut view, levels[0]);
+                assert!(
+                    full <= CARD_W - PAD * 2.0,
+                    "{mode:?}/{lang:?}: полный уровень не влезает: {full}"
+                );
+                let shown = fit_hints(&mut view, CARD_W - PAD * 2.0, mode, lang);
+                assert_eq!(
+                    shown,
+                    levels[0].to_vec(),
+                    "{mode:?}/{lang:?}: в карточку влезает полный уровень, а показан не он"
+                );
+            }
         }
     }
 
@@ -916,25 +1226,25 @@ mod tests {
     #[test]
     fn the_hints_shrink_instead_of_being_cut() {
         let mut view = view_for();
-        let levels = hint_levels(Language::Ru);
+        let levels = hint_levels(ViewMode::List, Language::Ru);
         let medium = hints_width(&mut view, levels[1]);
         let tight = medium + 1.0;
         assert_eq!(
-            fit_hints(&mut view, tight, Language::Ru),
+            fit_hints(&mut view, tight, ViewMode::List, Language::Ru),
             levels[1].to_vec(),
             "на ширине между уровнями берётся средний"
         );
 
         // Уже не влезает даже самый короткий набор — берётся то, что влезло.
         let shortest = hints_width(&mut view, levels[2]);
-        let shown = fit_hints(&mut view, shortest - 4.0, Language::Ru);
-        assert_eq!(shown, vec!["Ctrl+P"]);
+        let shown = fit_hints(&mut view, shortest - 4.0, ViewMode::List, Language::Ru);
+        assert_eq!(shown, vec!["Tab"]);
         assert!(
             hints_width(&mut view, &shown) <= shortest - 4.0,
             "подсказки не выходят за отведённую ширину"
         );
         // Совсем без места не рисуем ничего, но и не рисуем за краем карточки.
-        assert!(fit_hints(&mut view, 0.0, Language::Ru).is_empty());
+        assert!(fit_hints(&mut view, 0.0, ViewMode::List, Language::Ru).is_empty());
     }
 
     /// Правая зона зарезервирована по образцам — счётчику и короткому статусу, —
@@ -977,7 +1287,7 @@ mod tests {
             "статус должен помещаться: {zone} < {status_width}"
         );
         let available = CARD_W - PAD * 2.0 - zone - spacing::LG;
-        let shown = fit_hints(&mut view, available, model.lang());
+        let shown = fit_hints(&mut view, available, model.view(), model.lang());
         assert!(
             hints_width(&mut view, &shown) <= available,
             "подсказки обязаны уместиться рядом с длинным статусом"
@@ -985,24 +1295,41 @@ mod tests {
     }
 
     /// Обычное состояние: полный набор не влезает, средний — да, и именно он
-    /// показывается. Обе новые подсказки на месте.
+    /// показывается. Переключение вида и закрепление на месте.
     #[test]
-    fn the_footer_shows_the_new_hints_at_card_width() {
+    fn the_footer_shows_the_medium_hints_at_card_width() {
         let mut view = view_for();
         let model = two_sections();
         let zone = right_zone_width(&mut view, &model);
         let available = CARD_W - PAD * 2.0 - zone - spacing::LG;
-        let shown = fit_hints(&mut view, available, model.lang());
-        let levels = hint_levels(Language::Ru);
+        let shown = fit_hints(&mut view, available, model.view(), model.lang());
+        let levels = hint_levels(ViewMode::List, Language::Ru);
         assert_eq!(
             shown, levels[1],
             "средний уровень должен влезать при 440 px"
         );
         assert!(shown.contains(&"↑↓ выбор"));
-        assert!(shown.contains(&"Enter запуск"));
+        assert!(shown.contains(&"Ctrl+P"));
+        assert!(shown.contains(&"Tab"));
         assert!(
             hints_width(&mut view, levels[0]) > available,
             "полный уровень на карточке не помещается — иначе проверка выше врала бы"
+        );
+    }
+
+    /// Длинное имя плитки в подвале не съедает подсказки целиком: оно
+    /// обрезается, а Ctrl+P и Tab остаются на месте.
+    #[test]
+    fn a_long_tile_name_still_leaves_the_hints() {
+        let mut view = view_for();
+        let mut model = model(vec![app("a", "AppImageLauncher Settings")], Vec::new());
+        model.toggle_view();
+        let zone = right_zone_width(&mut view, &model);
+        let available = CARD_W - PAD * 2.0 - zone - spacing::LG;
+        let shown = fit_hints(&mut view, available, model.view(), model.lang());
+        assert!(
+            shown.contains(&"Ctrl+P") && shown.contains(&"Tab"),
+            "подсказки схлопнулись из-за имени: {shown:?}"
         );
     }
 
@@ -1140,21 +1467,28 @@ mod tests {
         );
         assert_eq!(rows_shown(MAX_ROWS), MAX_ROWS);
         assert_eq!(rows_shown(100), MAX_ROWS, "длинный список прокручивается");
-        assert!(card_height(MAX_ROWS) > card_height(MIN_ROWS));
+        assert_eq!(tile_rows_shown(1), MIN_TILE_ROWS);
+        assert_eq!(tile_rows_shown(100), MAX_TILE_ROWS);
+        assert!(
+            card_height(&model(many(100), Vec::new())) > card_height(&model(many(1), Vec::new()))
+        );
     }
 
     #[test]
     fn the_layer_size_matches_the_card() {
-        let (width, height) = layer_size(3);
+        let short = model(many(1), Vec::new());
+        let (width, height) = layer_size(&short);
         assert_eq!(width, CARD_W as u32);
-        assert_eq!(height, card_height(MIN_ROWS) as u32);
-        let (_, tall) = layer_size(MAX_ROWS);
+        assert_eq!(height, card_height(&short).round() as u32);
+        let tall = model(many(100), Vec::new());
+        let (_, tall) = layer_size(&tall);
         assert!(tall > height);
     }
 
     #[test]
     fn the_search_field_is_pinned_to_the_right_of_the_header() {
-        let card = Rect::new(0.0, 0.0, CARD_W, card_height(MAX_ROWS));
+        let model = model(many(1), Vec::new());
+        let card = Rect::new(0.0, 0.0, CARD_W, card_height(&model));
         let field = search_rect(Rect::new(card.x, card.y, card.w, HEADER_H));
         assert_eq!(field.right(), card.right() - PAD);
         assert!(field.w <= SEARCH_W);
@@ -1166,33 +1500,117 @@ mod tests {
     #[test]
     fn a_click_picks_the_row_under_the_pointer() {
         let mut model = model(many(20), Vec::new());
-        let card = Rect::new(0.0, 0.0, CARD_W, card_height(MAX_ROWS));
-        let rows = MAX_ROWS;
+        let card = Rect::new(0.0, 0.0, CARD_W, card_height(&model));
 
-        let list = list_rect(card, rows);
-        let hit = row_at(&model, card, rows, 10.0, list.y + ROW_H * 1.5).expect("строка");
+        let list = list_rect(card, &model);
+        let hit = row_at(&model, card, 10.0, list.y + ROW_H * 1.5).expect("строка");
         assert_eq!(hit, 1);
 
         model.select(5);
         assert_eq!(model.top(), 0);
         model.select(12);
         assert_eq!(model.top(), 3);
-        let hit = row_at(&model, card, rows, 10.0, list.y + 2.0).expect("строка");
+        let hit = row_at(&model, card, 10.0, list.y + 2.0).expect("строка");
         assert_eq!(hit, 3, "первая видимая строка — это top");
 
-        assert!(row_at(&model, card, rows, 10.0, card.bottom() - 5.0).is_none());
-        assert!(
-            row_at(&model, card, rows, 10.0, 2.0).is_none(),
-            "клик в шапку"
-        );
+        assert!(row_at(&model, card, 10.0, card.bottom() - 5.0).is_none());
+        assert!(row_at(&model, card, 10.0, 2.0).is_none(), "клик в шапку");
     }
 
     #[test]
     fn a_click_below_the_last_row_hits_nothing() {
         let model = model(vec![app("a", "A")], Vec::new());
-        let card = Rect::new(0.0, 0.0, CARD_W, card_height(MIN_ROWS));
-        let list = list_rect(card, MIN_ROWS);
-        assert!(row_at(&model, card, MIN_ROWS, 10.0, list.y + ROW_H * 3.5).is_none());
+        let card = Rect::new(0.0, 0.0, CARD_W, card_height(&model));
+        let list = list_rect(card, &model);
+        assert!(row_at(&model, card, 10.0, list.y + ROW_H * 3.5).is_none());
+    }
+
+    /// Четыре плитки и три зазора должны ровно заполнить ширину карточки без
+    /// отступов: иначе сетка съедет вправо или не влезет в последнюю колонку.
+    #[test]
+    fn four_tiles_fit_the_card_exactly() {
+        let row = GRID_COLS as f32 * TILE + (GRID_COLS - 1) as f32 * TILE_GAP;
+        assert_eq!(row, CARD_W - PAD * 2.0);
+    }
+
+    /// Клик по плитке выбирает её, клик в зазор — ничего: иначе запускалось бы
+    /// приложение, по которому не попали.
+    #[test]
+    fn a_click_picks_the_tile_under_the_pointer() {
+        let mut model = model(many(20), Vec::new());
+        model.toggle_view();
+        let card = Rect::new(0.0, 0.0, CARD_W, card_height(&model));
+        let list = list_rect(card, &model);
+        let step = TILE + TILE_GAP;
+
+        let hit = row_at(&model, card, list.x + TILE / 2.0, list.y + TILE / 2.0).expect("плитка");
+        assert_eq!(hit, 0);
+        let hit = row_at(&model, card, list.x + step + 1.0, list.y + 1.0).expect("плитка");
+        assert_eq!(hit, 1);
+        let hit =
+            row_at(&model, card, list.x + 3.0 * step + 1.0, list.y + step + 1.0).expect("плитка");
+        assert_eq!(hit, GRID_COLS + 3);
+        assert!(
+            row_at(&model, card, list.x + TILE + 1.0, list.y + TILE / 2.0).is_none(),
+            "зазор между плитками — не плитка"
+        );
+        assert!(row_at(&model, card, list.x + 1.0, 2.0).is_none(), "шапка");
+
+        model.select(19);
+        assert_eq!(model.top(), GRID_COLS);
+        let hit = row_at(&model, card, list.x + 1.0, list.y + 1.0).expect("плитка");
+        assert_eq!(hit, model.top(), "клик по первой видимой плите — это top");
+    }
+
+    /// Ползунок живёт в поле карточки справа и не ложится на последнюю колонку
+    /// плиток.
+    #[test]
+    fn the_scrollbar_does_not_cover_the_tiles() {
+        let mut model = model(many(40), Vec::new());
+        model.toggle_view();
+        let card = Rect::new(0.0, 0.0, CARD_W, card_height(&model));
+        let list = list_rect(card, &model);
+        let track = scrollbar_rect(
+            list,
+            card.right(),
+            model.total(),
+            model.top(),
+            model.visible().len(),
+        )
+        .expect("список длиннее окна");
+        assert!(track.x >= list.right(), "ползунок за сеткой");
+    }
+
+    /// Пустая клетка после ряда закреплённых не кликается: она не приложение,
+    /// и запускать по ней нечего.
+    #[test]
+    fn a_click_on_the_padding_cell_does_nothing() {
+        let pinned = vec!["app0".to_string(), "app1".to_string(), "app2".to_string()];
+        let mut model = model(many(20), pinned);
+        model.toggle_view();
+        let card = Rect::new(0.0, 0.0, CARD_W, card_height(&model));
+        let list = list_rect(card, &model);
+        let x = list.x + 3.0 * (TILE + TILE_GAP) + TILE / 2.0;
+        assert!(row_at(&model, card, x, list.y + TILE / 2.0).is_none());
+    }
+
+    /// В сетке подпись выбранного приложения живёт в подвале: на плитках
+    /// только иконки, и без подписи одинаковые значки не различить.
+    #[test]
+    fn the_tiles_footer_names_the_selected_app() {
+        let mut model = model(vec![app("a", "Alpha"), app("b", "Beta")], Vec::new());
+        model.toggle_view();
+        model.select(1);
+        assert_eq!(right_label(&model), ("Beta".to_string(), false));
+        model.set_status("Закреплено: Beta".to_string());
+        assert_eq!(right_label(&model), ("Закреплено: Beta".to_string(), true));
+
+        // Имя плитки обрезается по потолку, статус — нет: длинный статус
+        // сужает подсказки, но не теряет текст.
+        let mut view = view_for();
+        let long = "Очень длинное имя приложения, которое не влезет";
+        assert_eq!(right_text_width(&mut view, &model, long, false), NAME_MAX_W);
+        assert!(right_text_width(&mut view, &model, long, true) > NAME_MAX_W);
     }
 
     #[test]
