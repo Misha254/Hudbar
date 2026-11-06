@@ -174,6 +174,57 @@ pub fn composite(
     target.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
 }
 
+/// Перекрёстное проявление двух кадров: `target` уже содержит новый кадр,
+/// `old` — прежний. Вес `mix` равен 0 для старого и 1 для нового; кадры
+/// премультиплицированы, поэтому каналы смешиваются как есть, без деления на
+/// альфу. Меняются только строки `top..bottom` — шапка и подвал остаются от
+/// нового кадра, иначе их текст двоился бы при разной высоте окон.
+///
+/// Строки ниже `old_bottom` старому кадру не принадлежат (у него там подвал и
+/// прозрачность): новый кадр там проявляется с нуля, а не подмешивается к
+/// старым пикселям.
+pub fn crossfade(
+    target: &mut tiny_skia::Pixmap,
+    old: &tiny_skia::Pixmap,
+    mix: f32,
+    top: u32,
+    bottom: u32,
+    old_bottom: u32,
+) {
+    let mix = mix.clamp(0.0, 1.0);
+    if mix >= 1.0 {
+        return;
+    }
+    let width = target.width() as usize;
+    let height = target.height() as usize;
+    let (old_width, old_height) = (old.width() as usize, old.height() as usize);
+    let top = (top as usize).min(height);
+    let bottom = (bottom as usize).min(height);
+    let old_bottom = (old_bottom as usize).min(old_height);
+    let keep = (mix * 255.0).round() as u32;
+    let drop = 255 - keep;
+    let stride = width * 4;
+    let shared = width.min(old_width) * 4;
+    let old_stride = old_width * 4;
+    let target_data = target.data_mut();
+    let old_data = old.data();
+    for y in top..bottom {
+        let row = y * stride;
+        if y < old_bottom {
+            let old_row = y * old_stride;
+            for i in 0..shared {
+                let new = target_data[row + i] as u32;
+                let previous = old_data[old_row + i] as u32;
+                target_data[row + i] = ((new * keep + previous * drop + 127) / 255) as u8;
+            }
+        } else {
+            for value in target_data[row..row + shared].iter_mut() {
+                *value = (*value as u32 * keep / 255) as u8;
+            }
+        }
+    }
+}
+
 /// Запись холста в PNG — одна на все снимки: меню, приложения и окно обоев.
 ///
 /// Копий было три, и различались они только текстом ошибок; теперь «не создался
@@ -330,6 +381,33 @@ mod tests {
             0,
             "слой увеличен ровно вдвое, а не на весь кадр"
         );
+    }
+
+    /// Перекрёстное проявление: в полосе кадры смешиваются, шапка и подвал
+    /// остаются новыми, а ниже старого кадра новый проявляется с нуля.
+    #[test]
+    fn a_crossfade_blends_only_the_body_and_keeps_the_frame_edges() {
+        let mut target = tiny_skia::Pixmap::new(1, 6).expect("буфер");
+        target.fill(Rgba(200, 100, 50, 255).to_tiny());
+        let mut old = tiny_skia::Pixmap::new(1, 6).expect("буфер");
+        old.fill(Rgba(0, 0, 0, 255).to_tiny());
+
+        crossfade(&mut target, &old, 0.5, 1, 5, 4);
+
+        let top = target.pixel(0, 0).expect("пиксель").demultiply();
+        assert_eq!(top.red(), 200, "шапка не смешивается");
+        let middle = target.pixel(0, 2).expect("пиксель").demultiply();
+        assert!(
+            (95..=105).contains(&middle.red()),
+            "половина нового кадра: {middle:?}"
+        );
+        let below = target.pixel(0, 4).expect("пиксель").demultiply();
+        assert!(
+            (120..=136).contains(&below.alpha()) && (195..=205).contains(&below.red()),
+            "ниже старого кадра новый проявляется с нуля: {below:?}"
+        );
+        let footer = target.pixel(0, 5).expect("пиксель").demultiply();
+        assert_eq!(footer.red(), 200, "подвал не смешивается");
     }
 
     /// Снимок читается обратно: запись кладёт RGBA как есть, и тем же форматом

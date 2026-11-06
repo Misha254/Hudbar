@@ -43,6 +43,9 @@ pub const ICON: f32 = 26.0;
 pub const TILE: f32 = 90.0;
 /// Зазор между плитками — тот же внутренний отступ карточки.
 pub const TILE_GAP: f32 = spacing::LG;
+/// Добавка к зазору перед рядом после разделителя секций: подпись «Все
+/// приложения» не должна упираться в плитки сверху и снизу.
+pub const SECTION_EXTRA: f32 = spacing::LG;
 /// Иконка на плитке: крупнее строковой, но с полем под подсветку и булавку.
 pub const TILE_ICON: f32 = 44.0;
 /// Вертикальный отступ сетки от шапки и подвала.
@@ -90,13 +93,39 @@ pub fn tile_rows_shown(count: usize) -> usize {
         .clamp(MIN_TILE_ROWS, MAX_TILE_ROWS)
 }
 
-/// Высота ряда плиток.
+/// Высота ряда плиток без добавки у разделителя.
 fn grid_height(rows: usize) -> f32 {
     if rows == 0 {
         0.0
     } else {
         rows as f32 * TILE + (rows.saturating_sub(1)) as f32 * TILE_GAP
     }
+}
+
+/// Ряд сетки, перед которым стоит разделитель секций.
+fn break_row(model: &Model) -> Option<usize> {
+    model.tiles_break().map(|at| at / GRID_COLS)
+}
+
+/// Добавка к зазору перед видимым рядом `row` (ряд считается от `top`).
+/// Разделитель, уехавший за верх окна, места в кадре не занимает.
+fn section_extra(model: &Model, row: usize) -> f32 {
+    let first = model.top() / GRID_COLS;
+    match break_row(model) {
+        Some(br) if br > first && br <= first + row => SECTION_EXTRA,
+        _ => 0.0,
+    }
+}
+
+/// Высота видимой сетки. Добавка у разделителя входит всегда, когда он есть:
+/// иначе при прокрутке, уводящей подпись за верх, окно меняло бы высоту.
+fn grid_height_in_window(model: &Model, rows: usize) -> f32 {
+    let extra = if model.tiles_break().is_some() {
+        SECTION_EXTRA
+    } else {
+        0.0
+    };
+    grid_height(rows) + extra
 }
 
 /// Высота карточки под текущий вид.
@@ -106,7 +135,7 @@ pub fn card_height(model: &Model) -> f32 {
         ViewMode::Tiles => {
             HEADER_H
                 + GRID_PAD_Y
-                + grid_height(tile_rows_shown(model.total()))
+                + grid_height_in_window(model, tile_rows_shown(model.total()))
                 + GRID_PAD_Y
                 + FOOTER_H
         }
@@ -116,7 +145,8 @@ pub fn card_height(model: &Model) -> f32 {
 /// Потолок высоты карточки: по нему считается пул буферов слоя.
 pub fn max_card_height() -> f32 {
     let list = HEADER_H + MAX_ROWS as f32 * ROW_H + FOOTER_H;
-    let tiles = HEADER_H + GRID_PAD_Y + grid_height(MAX_TILE_ROWS) + GRID_PAD_Y + FOOTER_H;
+    let tiles =
+        HEADER_H + GRID_PAD_Y + grid_height(MAX_TILE_ROWS) + SECTION_EXTRA + GRID_PAD_Y + FOOTER_H;
     if tiles > list { tiles } else { list }
 }
 
@@ -139,18 +169,18 @@ pub fn list_rect(card: Rect, model: &Model) -> Rect {
             card.x + PAD,
             card.y + HEADER_H + GRID_PAD_Y,
             card.w - PAD * 2.0,
-            grid_height(tile_rows_shown(model.total())),
+            grid_height_in_window(model, tile_rows_shown(model.total())),
         ),
     }
 }
 
 /// Прямоугольник плитки по её месту в видимом окне.
-fn tile_rect(list: Rect, slot: usize) -> Rect {
+fn tile_rect(list: Rect, slot: usize, model: &Model) -> Rect {
     let row = slot / GRID_COLS;
     let col = slot % GRID_COLS;
     Rect::new(
         list.x + col as f32 * (TILE + TILE_GAP),
-        list.y + row as f32 * (TILE + TILE_GAP),
+        list.y + row as f32 * (TILE + TILE_GAP) + section_extra(model, row),
         TILE,
         TILE,
     )
@@ -169,13 +199,24 @@ pub fn row_at(model: &Model, card: Rect, x: f32, y: f32) -> Option<usize> {
         ViewMode::Tiles => {
             let step = TILE + TILE_GAP;
             let col = ((x - list.x) / step).floor() as usize;
-            let row = ((y - list.y) / step).floor() as usize;
             if col >= GRID_COLS {
                 return None;
             }
+            // Ряды не равномерны из-за разделителя секций: ищем ряд, в
+            // который попал `y`. Зазор и подпись не принадлежат ни одной плите.
+            let rows = tile_rows_shown(model.total());
+            let mut found = None;
+            for row in 0..rows {
+                let top = list.y + row as f32 * step + section_extra(model, row);
+                if y >= top && y < top + TILE {
+                    found = Some(row);
+                    break;
+                }
+            }
+            let row = found?;
             let slot = row * GRID_COLS + col;
-            let rect = tile_rect(list, slot);
-            if x >= rect.right() || y >= rect.bottom() {
+            let rect = tile_rect(list, slot, model);
+            if x >= rect.right() {
                 return None;
             }
             slot
@@ -225,6 +266,10 @@ fn highlight_band(view: &mut AppsView<'_>, rect: Rect) {
 
 /// Рисует окно целиком и возвращает прямоугольник карточки.
 ///
+/// `height` — текущая высота окна, а не расчётная высота карточки: во время
+/// переключения вида и поиска слой едет к новой высоте, и подвал должен идти
+/// вместе с ним, а не ждать последнего кадра. В покое значения совпадают.
+///
 /// `highlight` — скользящая полоса в строках экрана (`None`, пока подсветка не
 /// начала ход), `hover` — строка под указателем: она подсвечивается, но не
 /// выбирается, как и в меню.
@@ -233,8 +278,9 @@ pub fn render_window(
     model: &Model,
     loader: &Loader,
     highlight: RowsHighlight,
+    height: f32,
 ) -> Rect {
-    let frame = Rect::new(0.0, 0.0, CARD_W, card_height(model));
+    let frame = Rect::new(0.0, 0.0, CARD_W, height);
     card(view, frame);
     header(view, frame, model);
     match model.view() {
@@ -497,7 +543,7 @@ fn tiles_view(
         let hover = !is_selected && absolute == highlight.hover.unwrap_or(usize::MAX);
         tile(
             view,
-            tile_rect(list, slot),
+            tile_rect(list, slot, model),
             app,
             loader,
             model.is_pinned(&app.id),
@@ -518,8 +564,10 @@ fn tiles_view(
         let break_row = at / GRID_COLS;
         let top_row = model.top() / GRID_COLS;
         if break_row > top_row && break_row < top_row + tile_rows_shown(model.total()) {
-            let y = list.y + break_row as f32 * (TILE + TILE_GAP) - TILE_GAP / 2.0;
-            tiles_divider(view, list, y, model.lang());
+            let row = break_row - top_row;
+            let row_y = list.y + row as f32 * (TILE + TILE_GAP) + SECTION_EXTRA;
+            let band = TILE_GAP + SECTION_EXTRA;
+            tiles_divider(view, list, row_y - band / 2.0, band, model.lang());
         }
     }
     if let Some(track) = scrollbar {
@@ -549,7 +597,7 @@ fn tiles_view(
 }
 
 /// Разделитель блоков сетки: подпись и тонкая линия в зазоре между рядами.
-fn tiles_divider(view: &mut AppsView<'_>, list: Rect, y: f32, lang: Language) {
+fn tiles_divider(view: &mut AppsView<'_>, list: Rect, y: f32, band: f32, lang: Language) {
     let label = match lang {
         Language::Ru => "Все приложения",
         Language::En => "All apps",
@@ -561,7 +609,7 @@ fn tiles_divider(view: &mut AppsView<'_>, list: Rect, y: f32, lang: Language) {
         label,
         size,
         view.ui.muted,
-        Rect::new(list.x, y - TILE_GAP / 2.0, width, TILE_GAP),
+        Rect::new(list.x, y - band / 2.0, width, band),
         Align::Start,
     );
     let x = list.x + width + spacing::SM;
@@ -1592,6 +1640,45 @@ mod tests {
         let list = list_rect(card, &model);
         let x = list.x + 3.0 * (TILE + TILE_GAP) + TILE / 2.0;
         assert!(row_at(&model, card, x, list.y + TILE / 2.0).is_none());
+    }
+
+    /// Подпись «Все приложения» получает собственный зазор: ряд под ней
+    /// отодвигается, а клик в этот зазор ничего не выбирает.
+    #[test]
+    fn the_section_label_gets_its_own_gap() {
+        let pinned = vec!["app0".to_string(), "app1".to_string(), "app2".to_string()];
+        let mut grid = model(many(20), pinned);
+        grid.toggle_view();
+        let card = Rect::new(0.0, 0.0, CARD_W, card_height(&grid));
+        let list = list_rect(card, &grid);
+        let above = tile_rect(list, 0, &grid);
+        let below = tile_rect(list, GRID_COLS, &grid);
+
+        assert_eq!(
+            below.y - above.y,
+            TILE + TILE_GAP + SECTION_EXTRA,
+            "под подписью должен быть дополнительный зазор"
+        );
+        assert!(
+            row_at(&grid, card, list.x + TILE / 2.0, above.bottom() + 1.0).is_none(),
+            "зазор с подписью — не плитка"
+        );
+
+        let mut flat = model(many(20), Vec::new());
+        flat.toggle_view();
+        assert_eq!(
+            card_height(&grid),
+            card_height(&flat) + SECTION_EXTRA,
+            "разделитель удлиняет карточку ровно на свой зазор"
+        );
+
+        let height = card_height(&grid);
+        grid.select(grid.total().saturating_sub(1));
+        assert_eq!(
+            card_height(&grid),
+            height,
+            "прокрутка не должна менять высоту окна"
+        );
     }
 
     /// В сетке подпись выбранного приложения живёт в подвале: на плитках

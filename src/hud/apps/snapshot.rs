@@ -99,7 +99,13 @@ pub fn render(model: &Model, base: Palette) -> tiny_skia::Pixmap {
             ui,
             scale,
         };
-        view::render_window(&mut window, model, &loader, RowsHighlight::none())
+        view::render_window(
+            &mut window,
+            model,
+            &loader,
+            RowsHighlight::none(),
+            view::card_height(model),
+        )
     };
     view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
     pixmap
