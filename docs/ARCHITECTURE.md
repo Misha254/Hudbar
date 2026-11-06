@@ -165,7 +165,7 @@ DND, воркспейсы, элементы трея.
 | `colors.css` | `palette.rs` | каждый проход главного цикла |
 | `font` | `ui::configured_font` | один раз на старте |
 
-`settings.json` содержит секции `hudbar`, `notifications`, `osd`, `idle` и `vpn`; описание
+`settings.json` содержит секции `hudbar`, `notifications`, `osd` и `idle`; описание
 ключей, диапазонов и значений по умолчанию — в `docs/settings.schema.json`. Схема ложится рядом с
 настройками, а в установочном файле стоит ссылка `"$schema": "./settings.schema.json"`: редактор по
 ней проверяет файл и подсказывает ключи. Соответствие схемы коду держат тесты

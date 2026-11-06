@@ -299,7 +299,7 @@ fn card(view: &mut AppsView<'_>, rect: Rect) {
         rect.y * SCALE,
         rect.w * SCALE,
         rect.h * SCALE,
-        radius(radii::LG) * SCALE,
+        radius(radii::WINDOW) * SCALE,
         view.ui.panel,
     );
     stroke_rect(
@@ -870,10 +870,10 @@ pub fn hint_levels(mode: ViewMode, lang: Language) -> [&'static [&'static str]; 
                 "↑↓ выбор",
                 "Enter запуск",
                 "Tab плитки",
-                "Ctrl+P",
+                "Ctrl+F",
                 "Esc закрыть",
             ],
-            &["↑↓ выбор", "Enter", "Tab", "Ctrl+P", "Esc"],
+            &["↑↓ выбор", "Enter", "Tab", "Ctrl+F", "Esc"],
             &["Tab", "Esc"],
         ],
         (ViewMode::List, Language::En) => [
@@ -881,26 +881,26 @@ pub fn hint_levels(mode: ViewMode, lang: Language) -> [&'static [&'static str]; 
                 "↑↓ select",
                 "Enter launch",
                 "Tab tiles",
-                "Ctrl+P",
+                "Ctrl+F",
                 "Esc close",
             ],
-            &["↑↓ select", "Enter", "Tab", "Ctrl+P", "Esc"],
+            &["↑↓ select", "Enter", "Tab", "Ctrl+F", "Esc"],
             &["Tab", "Esc"],
         ],
         (ViewMode::Tiles, Language::Ru) => [
             &[
                 "стрелки",
                 "Enter запуск",
-                "Ctrl+P",
+                "Ctrl+F",
                 "Tab список",
                 "Esc закрыть",
             ],
-            &["стрелки", "Enter", "Ctrl+P", "Tab", "Esc"],
+            &["стрелки", "Enter", "Ctrl+F", "Tab", "Esc"],
             &["Tab", "Esc"],
         ],
         (ViewMode::Tiles, Language::En) => [
-            &["arrows", "Enter launch", "Ctrl+P", "Tab list", "Esc close"],
-            &["arrows", "Enter", "Ctrl+P", "Tab", "Esc"],
+            &["arrows", "Enter launch", "Ctrl+F", "Tab list", "Esc close"],
+            &["arrows", "Enter", "Ctrl+F", "Tab", "Esc"],
             &["Tab", "Esc"],
         ],
     }
@@ -1357,7 +1357,7 @@ mod tests {
             "средний уровень должен влезать при 440 px"
         );
         assert!(shown.contains(&"↑↓ выбор"));
-        assert!(shown.contains(&"Ctrl+P"));
+        assert!(shown.contains(&"Ctrl+F"));
         assert!(shown.contains(&"Tab"));
         assert!(
             hints_width(&mut view, levels[0]) > available,
@@ -1366,7 +1366,7 @@ mod tests {
     }
 
     /// Длинное имя плитки в подвале не съедает подсказки целиком: оно
-    /// обрезается, а Ctrl+P и Tab остаются на месте.
+    /// обрезается, а Ctrl+F и Tab остаются на месте.
     #[test]
     fn a_long_tile_name_still_leaves_the_hints() {
         let mut view = view_for();
@@ -1376,7 +1376,7 @@ mod tests {
         let available = CARD_W - PAD * 2.0 - zone - spacing::LG;
         let shown = fit_hints(&mut view, available, model.view(), model.lang());
         assert!(
-            shown.contains(&"Ctrl+P") && shown.contains(&"Tab"),
+            shown.contains(&"Ctrl+F") && shown.contains(&"Tab"),
             "подсказки схлопнулись из-за имени: {shown:?}"
         );
     }

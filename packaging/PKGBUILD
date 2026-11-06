@@ -10,7 +10,7 @@
 pkgname=hudbar
 pkgver=0.18.15
 pkgrel=1
-pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, VPN, экран входа и блокировки'
+pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, экран входа и блокировки'
 arch=('x86_64')
 url='https://github.com/Misha254/Hudbar'
 license=('custom')
@@ -19,7 +19,7 @@ makedepends=('cargo' 'git' 'rust')
 optdepends=(
     'niri: рабочий стол, для которого панель и написана, и композитор экрана входа'
     'greetd: экран входа hud-greeter-rs'
-    'networkmanager: чип сети, Wi-Fi и VPN (nmcli)'
+    'networkmanager: чип сети, Wi-Fi (nmcli)'
     'bluez-utils: состояние Bluetooth (bluetoothctl)'
     'pipewire: громкость и микрофон (wpctl, pactl)'
     'dunst: уведомления (dunstctl)'
@@ -41,7 +41,6 @@ _bins=(
     hud-apps-rs
     hud-keybinds-rs
     hud-yazibinds-rs
-    hud-vpn-rs
     hud-wallpaper-rs
     hud-schemes-rs
     hud-greeter-rs
@@ -52,7 +51,6 @@ _scripts=(
     hud-apps
     hud-keybinds
     hud-yazibinds
-    hud-vpn
     hud-wallpaper
     hud-setting
     hud-migrate-settings

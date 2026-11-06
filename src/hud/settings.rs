@@ -26,12 +26,6 @@ pub const IDLE_SUSPEND_DEFAULT_SECONDS: u32 = 1200;
 pub const ANIMATION_SPEED_MIN: f32 = 0.5;
 pub const ANIMATION_SPEED_MAX: f32 = 2.0;
 pub const ANIMATION_SPEED_DEFAULT: f32 = 1.0;
-/// Адрес external controller Mihomo по умолчанию.
-pub const VPN_CONTROLLER_DEFAULT: &str = "127.0.0.1:9090";
-/// Границы таймаута обращения к контроллеру.
-pub const VPN_TIMEOUT_MIN_MS: u32 = 300;
-pub const VPN_TIMEOUT_MAX_MS: u32 = 5000;
-pub const VPN_TIMEOUT_DEFAULT_MS: u32 = 1500;
 
 /// Модули панели в порядке по умолчанию. Единственный список на весь проект:
 /// и панель, и окно настроек, и `hud-setting` берут порядок отсюда.
@@ -255,10 +249,6 @@ pub struct Settings {
     pub idle_screen_off_seconds: u32,
     /// Через сколько секунд простоя ноутбук уходит в сон.
     pub idle_suspend_seconds: u32,
-    /// Адрес external controller Mihomo для VPN-окна.
-    pub vpn_controller: String,
-    /// Таймаут обращения к контроллеру.
-    pub vpn_timeout_ms: u32,
 }
 
 impl Settings {
@@ -308,16 +298,6 @@ impl Settings {
     /// Длительность окна OSD с учётом границ: значение могли прийти из правки
     /// файла руками, и панель не должна показывать окно дольше или короче
     /// пределов ползунка.
-    /// Таймаут контроллера для VPN-окна.
-    pub fn vpn_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(clamp(
-            self.vpn_timeout_ms as i64,
-            VPN_TIMEOUT_MIN_MS,
-            VPN_TIMEOUT_MAX_MS,
-        ) as u64)
-    }
-
-    /// Длительность окна OSD с учётом границ: значение могли прийти из правки
     pub fn osd_duration(&self) -> std::time::Duration {
         std::time::Duration::from_millis(clamp(
             self.osd_duration_ms as i64,
@@ -355,8 +335,6 @@ impl Default for Settings {
             animation_speed: ANIMATION_SPEED_DEFAULT,
             idle_screen_off_seconds: IDLE_SCREEN_OFF_DEFAULT_SECONDS,
             idle_suspend_seconds: IDLE_SUSPEND_DEFAULT_SECONDS,
-            vpn_controller: VPN_CONTROLLER_DEFAULT.to_string(),
-            vpn_timeout_ms: VPN_TIMEOUT_DEFAULT_MS,
         }
     }
 }
@@ -447,20 +425,6 @@ fn parse_into(settings: &mut Settings, content: &str) {
         }
     }
 
-    // Секция `vpn`: адрес и таймаут контроллера. Секрета здесь нет и быть не
-    // должно — он читается из окружения или файла, а не из `settings.json`.
-    if let Some(vpn) = value.get("vpn").and_then(Value::as_object) {
-        if let Some(controller) = vpn.get("controller").and_then(Value::as_str) {
-            let controller = controller.trim();
-            if !controller.is_empty() {
-                settings.vpn_controller = controller.to_string();
-            }
-        }
-        if let Some(timeout) = vpn.get("timeout_ms").and_then(Value::as_u64) {
-            settings.vpn_timeout_ms = clamp(timeout as i64, VPN_TIMEOUT_MIN_MS, VPN_TIMEOUT_MAX_MS);
-        }
-    }
-
     // Секция `osd` необязательна: старый файл без неё даёт значения по
     // умолчанию, поэтому включённость выключается только явным `false`.
     if let Some(osd) = value.get("osd").and_then(Value::as_object) {
@@ -499,9 +463,8 @@ mod tests {
         IDLE_SCREEN_OFF_MAX_SECONDS, IDLE_SCREEN_OFF_MIN_SECONDS, IDLE_SUSPEND_DEFAULT_SECONDS,
         IDLE_SUSPEND_MAX_SECONDS, IDLE_SUSPEND_MIN_SECONDS, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN,
         Language, MODULE_KEYS, Module, NotificationPosition, OSD_DURATION_DEFAULT_MS,
-        OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS, Settings, VPN_CONTROLLER_DEFAULT,
-        VPN_TIMEOUT_DEFAULT_MS, VPN_TIMEOUT_MAX_MS, VPN_TIMEOUT_MIN_MS, Zone, clamp_f,
-        default_module_order, normalize_module_order, parse_into,
+        OSD_DURATION_MAX_MS, OSD_DURATION_MIN_MS, Settings, Zone, clamp_f, default_module_order,
+        normalize_module_order, parse_into,
     };
 
     #[test]
@@ -861,8 +824,7 @@ mod tests {
                 "language",
                 "module_order",
                 "notifications",
-                "osd",
-                "vpn"
+                "osd"
             ],
             "секции схемы"
         );
@@ -926,11 +888,6 @@ mod tests {
             ),
             "сон ноутбука"
         );
-        assert_eq!(
-            range(&["properties", "vpn", "properties", "timeout_ms"]),
-            (VPN_TIMEOUT_MIN_MS as i64, VPN_TIMEOUT_MAX_MS as i64),
-            "таймаут контроллера"
-        );
         let speed = &properties["hudbar"]["properties"]["animation_speed"];
         assert_eq!(
             (speed["minimum"].as_f64(), speed["maximum"].as_f64()),
@@ -960,16 +917,6 @@ mod tests {
 
         // Значения по умолчанию, у которых есть имя в коде, — те же: иначе
         // отсутствие ключа и его явное значение давали бы разные настройки.
-        assert_eq!(
-            properties["vpn"]["properties"]["controller"]["default"].as_str(),
-            Some(VPN_CONTROLLER_DEFAULT),
-            "адрес контроллера"
-        );
-        assert_eq!(
-            properties["vpn"]["properties"]["timeout_ms"]["default"].as_i64(),
-            Some(VPN_TIMEOUT_DEFAULT_MS as i64),
-            "таймаут контроллера"
-        );
         assert_eq!(
             properties["osd"]["properties"]["duration_ms"]["default"].as_i64(),
             Some(OSD_DURATION_DEFAULT_MS as i64),

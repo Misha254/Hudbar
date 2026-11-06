@@ -1,5 +1,5 @@
 pkgbase = hudbar
-	pkgdesc = Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, VPN, экран входа и блокировки
+	pkgdesc = Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, экран входа и блокировки
 	pkgver = 0.18.15
 	pkgrel = 1
 	url = https://github.com/Misha254/Hudbar
@@ -16,7 +16,7 @@ pkgbase = hudbar
 	depends = systemd-libs
 	optdepends = niri: рабочий стол, для которого панель и написана, и композитор экрана входа
 	optdepends = greetd: экран входа hud-greeter-rs
-	optdepends = networkmanager: чип сети, Wi-Fi и VPN (nmcli)
+	optdepends = networkmanager: чип сети, Wi-Fi (nmcli)
 	optdepends = bluez-utils: состояние Bluetooth (bluetoothctl)
 	optdepends = pipewire: громкость и микрофон (wpctl, pactl)
 	optdepends = dunst: уведомления (dunstctl)

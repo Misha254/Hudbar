@@ -26,7 +26,6 @@
 - **Лаунчер** (`Super+D`). Закреплённые приложения, поиск и иконки SVG/PNG — без rofi и X11.
 - **Обои** (`Super+Z`). Папки, превью и применение без перезапуска сессии.
 - **Бинды** (`Super+Shift+Slash`, `KP_9`). Нативные окна для niri и yazi вместо Rofi-скриптов.
-- **VPN** (`KP_7`). Режимы и серверы Mihomo в том же стиле, что и остальные окна.
 - **Цвета matugen.** `colors.css` перечитывается на лету: тема меняется без перезапуска панели.
 - **Анимации.** Открытие, ховер и высота меню уважают `animations` и `animation_speed`;
   при выключенных анимациях всё применяется сразу.
@@ -55,13 +54,9 @@
     </td>
   </tr>
   <tr>
-    <td width="50%" align="center">
-      <a href="assets/screens/binds-yazi.webp"><img src="assets/screens/binds-yazi.webp" width="100%" alt="Бинды yazi"></a><br>
+    <td colspan="2" align="center">
+      <a href="assets/screens/binds-yazi.webp"><img src="assets/screens/binds-yazi.webp" width="50%" alt="Бинды yazi"></a><br>
       <sub><b>Бинды yazi</b> — те же клавиши, что в редакторе</sub>
-    </td>
-    <td width="50%" align="center">
-      <a href="assets/screens/vpn-menu.webp"><img src="assets/screens/vpn-menu.webp" width="100%" alt="Окно VPN"></a><br>
-      <sub><b>VPN</b> — режим, серверы, обновление</sub>
     </td>
   </tr>
 </table>
@@ -117,7 +112,7 @@ pkill -x hudbar; hudbar &
 
 | Файл | Что задаёт |
 | --- | --- |
-| `settings.json` | чипы панели, вид, уведомления, OSD, VPN |
+| `settings.json` | чипы панели, вид, уведомления, OSD |
 | `settings.schema.json` | подсказки и проверка `settings.json` в редакторе |
 | `colors.css` | палитра из шести цветов, формат matugen |
 | `font` | имя шрифта интерфейса |

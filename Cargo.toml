@@ -36,10 +36,6 @@ name = "hud-yazibinds-rs"
 path = "src/bin/hud_yazibinds.rs"
 
 [[bin]]
-name = "hud-vpn-rs"
-path = "src/bin/hud_vpn.rs"
-
-[[bin]]
 name = "hud-apps-rs"
 path = "src/bin/hud_apps.rs"
 

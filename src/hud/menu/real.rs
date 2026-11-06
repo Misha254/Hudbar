@@ -969,7 +969,7 @@ fn updates_group(lang: Language) -> Node {
     ])
 }
 
-/// Группа связи: Wi-Fi, Bluetooth и VPN собраны под одним входом, чтобы
+/// Группа связи: Wi-Fi и Bluetooth собраны под одним входом, чтобы
 /// раздел «Система» не превратился в простыню.
 fn connections_group(lang: Language) -> Node {
     let t = |ru: &'static str, en: &'static str| match lang {
@@ -1000,9 +1000,6 @@ fn connections_group(lang: Language) -> Node {
             .with_id("system/bluetooth")
             .when(has_bluetoothctl)
             .search_as(&["bluetooth", "блютуз", "bt"]),
-            Node::dynamic(settings_icons::NETWORK, t("VPN", "VPN"), ProviderKey::VPN)
-                .with_id("system/vpn")
-                .search_as(&["vpn", "прокси", "proxy", "mihomo"]),
         ],
     )
     .search_as(kw)

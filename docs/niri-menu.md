@@ -44,7 +44,7 @@ layer-rule {
 
 ```kdl
 layer-rule {
-    match namespace="^hud(bar(-tooltip|-popup)?|menu|apps|vpn|schemes)$"
+    match namespace="^hud(bar(-tooltip|-popup)?|menu|apps|schemes)$"
     background-effect { blur true saturation 0.9 xray false }
 }
 ```
@@ -197,4 +197,4 @@ rm -f "$XDG_RUNTIME_DIR/hudbar-menu.pid"
 
 - [ ] окно `hudapps` размывается тем же правилом, что меню.
 - [ ] иконки грузятся у обычных приложений; у кого иконки нет — плитка с глифом, а не пустая.
-- [ ] `Ctrl+P` закрепляет строку, булавка появляется в «Все приложения» и при поиске.
+- [ ] `Ctrl+F` закрепляет строку, булавка появляется в «Все приложения» и при поиске.

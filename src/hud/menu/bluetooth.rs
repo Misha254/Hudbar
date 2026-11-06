@@ -18,8 +18,9 @@
 //! (`Invalid command in menu main`), а фильтр `devices Paired` есть в этой же
 //! версии и отдаёт тот же список одним вызовом. Состояние `Connected` в общем
 //! выводе `devices` не печатается, поэтому оно берётся вторым фильтром того же
-//! списка. Сканирование не запускается автоматически: `scan on`
-//! меняет состояние адаптера, «Найденные» — это то, что BlueZ уже знает.
+//! списка. Сканирование не запускается автоматически: «Начать поиск» гоняет
+//! `bluetoothctl --timeout 20 scan on` и обновляет список после него.
+//! «Найденные» — это то, что BlueZ уже знает.
 //!
 //! `info <MAC>` обычный refresh не делает вовсе: один вызов на устройство —
 //! это N+1, растущий с числом гаджетов. Trusted/RSSI/Battery/Службы поэтому
@@ -55,6 +56,10 @@ const DEVICE_TIMEOUT: Duration = Duration::from_secs(8);
 /// Pairing ждёт регистрации агента и, возможно, PIN: даём больше, а не
 /// держим меню.
 const PAIR_TIMEOUT: Duration = Duration::from_secs(20);
+/// Поиск устройств — не мгновенный вызов: `bluetoothctl` держит сканирование
+/// указанное число секунд, и только потом возвращает управление.
+const SCAN_SECONDS: u64 = 20;
+const SCAN_TIMEOUT: Duration = Duration::from_secs(SCAN_SECONDS + 5);
 
 /// Состояние одного блока раздела. Отсутствие поля — не «нет», а «не знаю»:
 /// `Missing` значит «инструмента нет», `Failed` — «команда ответила не тем».
@@ -351,13 +356,18 @@ pub fn power_action(on: bool) -> Action {
     }
 }
 
-/// Начать или остановить поиск устройств: `bluetoothctl scan on|off`.
-pub fn scan_action(on: bool) -> Action {
+/// Начать поиск устройств. Однократное сканирование на [`SCAN_SECONDS`]
+/// секунд: `bluetoothctl scan on` в неинтерактивном режиме завершается сразу,
+/// и поиск гаснет вместе с процессом. `--timeout` держит его живым, а
+/// `RefreshAndRun` обновляет список уже после сканирования.
+pub fn scan_action() -> Action {
     Action::RefreshAndRun {
         command: CommandSpec::new("bluetoothctl")
+            .arg("--timeout")
+            .arg(&SCAN_SECONDS.to_string())
             .arg("scan")
-            .arg(if on { "on" } else { "off" })
-            .with_timeout(DEVICE_TIMEOUT),
+            .arg("on")
+            .with_timeout(SCAN_TIMEOUT),
         refresh: ProviderKey::BLUETOOTH,
     }
 }
@@ -768,9 +778,9 @@ pub fn build_nodes(snapshot: &BluetoothSnapshot, lang: Language) -> Vec<Node> {
     rows
 }
 
-/// Строка поиска: сама запускает и останавливает сканирование. Две строки
-/// «Начать поиск» и «Остановить поиск» повторяли одно действие двумя
-/// способами, как до этого питание адаптера.
+/// Строка поиска: запускает сканирование на [`SCAN_SECONDS`] секунд и после
+/// него обновляет список. Пока сканирование идёт, строка занята подписью
+/// «выполняется…», поэтому клик не выглядит холостым.
 fn scan_row(lang: Language, snapshot: &BluetoothSnapshot) -> Node {
     let discovering = snapshot
         .adapter
@@ -786,9 +796,9 @@ fn scan_row(lang: Language, snapshot: &BluetoothSnapshot) -> Node {
         }
         Some(false) => {
             if ru(lang) {
-                "Поиск: выкл"
+                "Начать поиск"
             } else {
-                "Scan: off"
+                "Start scan"
             }
         }
         // Строки `Discovering` просто не было в выводе: «поиск не идёт» тут
@@ -802,10 +812,12 @@ fn scan_row(lang: Language, snapshot: &BluetoothSnapshot) -> Node {
         }
     };
     match discovering {
-        Some(on) => {
-            Node::action(settings_icons::SEARCH, title, scan_action(!on)).with_id("bluetooth/scan")
+        Some(false) => {
+            Node::action(settings_icons::SEARCH, title, scan_action()).with_id("bluetooth/scan")
         }
-        None => Node::info(settings_icons::SEARCH, title).with_id("bluetooth/scan"),
+        // Идёт чужое сканирование или состояние неизвестно — запускать второй
+        // процесс нельзя, а останавливать чужой HUDbar не вправе.
+        Some(true) | None => Node::info(settings_icons::SEARCH, title).with_id("bluetooth/scan"),
     }
 }
 
@@ -1651,10 +1663,10 @@ mod tests {
         );
     }
 
-    /// Поиск — одна строка вместо «Начать»/«Остановить»: идёт — останавливает,
-    /// выключен — запускает, неизвестно — справка без команды.
+    /// Поиск — одна строка: выключен — запускает сканирование на 20 секунд,
+    /// идёт или неизвестно — справка без команды, чужой процесс не трогаем.
     #[test]
-    fn scan_row_toggles_and_stays_plain_when_unknown() {
+    fn scan_row_starts_a_timed_scan_and_stays_plain_when_unknown() {
         let snapshot = |adapter| BluetoothSnapshot {
             adapter: Block::Ready(adapter),
             known: Block::Ready(Vec::new()),
@@ -1671,11 +1683,14 @@ mod tests {
         let finding = SHOW.replace("Discovering: no", "Discovering: yes");
         let row = scan_row(Language::Ru, &snapshot(parse_adapter(&finding)));
         assert_eq!(row.title, "Поиск: идёт");
-        assert_eq!(scan(&row), ["scan", "off"]);
+        assert!(
+            matches!(row.kind, super::super::tree::NodeKind::Info),
+            "идёт чужое сканирование — команду не предлагаем"
+        );
 
         let off = scan_row(Language::Ru, &snapshot(parse_adapter(SHOW)));
-        assert_eq!(off.title, "Поиск: выкл");
-        assert_eq!(scan(&off), ["scan", "on"]);
+        assert_eq!(off.title, "Начать поиск");
+        assert_eq!(scan(&off), ["--timeout", "20", "scan", "on"]);
 
         let unknown = parse_adapter(SHOW_OFF);
         let row = scan_row(Language::Ru, &snapshot(unknown));
@@ -1883,7 +1898,7 @@ mod tests {
             ["remove", "AA:BB:CC:DD:EE:01"]
         );
         assert_eq!(argv_of(power_action(false)), ["power", "off"]);
-        assert_eq!(argv_of(scan_action(true)), ["scan", "on"]);
+        assert_eq!(argv_of(scan_action()), ["--timeout", "20", "scan", "on"]);
         let pair = argv_of(pair_action("AA:BB:CC:DD:EE:01"));
         assert!(pair.contains(&"pair".to_string()), "{pair:?}");
         assert!(pair.contains(&"NoInputNoOutput".to_string()), "{pair:?}");

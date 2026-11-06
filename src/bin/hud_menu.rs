@@ -241,7 +241,6 @@ fn spawn_provider_job(key: ProviderKey, generation: u64, lang: settings::Languag
             ProviderKey::STORAGE => {
                 JobOutcome::Provider(key, generation, menu::storage::fetch_nodes(lang))
             }
-            ProviderKey::VPN => JobOutcome::Provider(key, generation, menu::vpn::fetch_nodes(lang)),
             _ => JobOutcome::Provider(key, generation, Err("provider не реализован".to_string())),
         }),
     }

@@ -17,7 +17,6 @@ binds {
     // Окна.
     super+D hotkey-overlay-title="Приложения" { spawn-sh "~/.local/bin/hud-apps"; }
     super+Z repeat=false hotkey-overlay-title="Обои" { spawn-sh "~/.local/bin/hud-wallpaper"; }
-    KP_7 repeat=false hotkey-overlay-title="VPN" { spawn-sh "~/.local/bin/hud-vpn"; }
 
     // Zen Browser: для него ставится живая тема (./install.sh --zen).
     // Обычная установка вместо flatpak: spawn "zen";

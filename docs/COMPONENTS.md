@@ -17,7 +17,7 @@ menu (`hud-menu`): wallpapers, power, lock, capture, updates and settings. There
 control center; `Super+P` opens the Power section directly.
 
 All persistent HUD state is stored in `~/.config/hudbar/settings.json` under the `hudbar`,
-`notifications`, `osd`, `idle`, and `vpn` sections. Key names, ranges, and installer defaults are
+`notifications`, `osd`, and `idle` sections. Key names, ranges, and installer defaults are
 described by `docs/settings.schema.json`; the installer drops the schema next to the settings file,
 which points at it with a relative `$schema` key, so an editor validates and completes the file. Two
 tests keep the schema honest: one compares it with the parser (keys, ranges, enumerations), the other
@@ -33,7 +33,7 @@ directory itself go away (ROADMAP F).
 The window, its `hud-settings-rs` binary and the `hud-settings` wrapper are gone: the menu and
 the native keybind/wallpaper windows cover the settings it used to own, and nothing launched it.
 Its leftover layout modules (`settings_ui`, `settings_view`, `settings_snapshot`,
-`settings_widgets`, `ui_layout`) are gone too: the menu, wallpaper, VPN and schemes windows only
+`settings_widgets`, `ui_layout`) are gone too: the menu, wallpaper and schemes windows only
 ever used the drawing primitives, the `Rect` geometry and the font name. Those now live in
 `src/hud/canvas.rs`, `src/hud/geom.rs` and `ui_tokens::font_name`. The Wi-Fi, audio and Bluetooth
 stages it had covered are complete and live in the menu instead. `src/hud/dunst.rs`, the window's

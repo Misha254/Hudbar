@@ -110,7 +110,7 @@ impl<'a> MenuView<'a> {
             rect.y * SCALE,
             rect.w * SCALE,
             rect.h * SCALE,
-            radius(radii::LG) * SCALE,
+            radius(radii::WINDOW) * SCALE,
             self.ui.panel,
         );
         stroke_rect(

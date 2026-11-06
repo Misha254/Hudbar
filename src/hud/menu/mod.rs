@@ -50,12 +50,6 @@ pub mod tree;
 pub mod values;
 #[allow(dead_code)]
 pub mod view;
-/// VPN-раздел: режимы поверх селекторов Mihomo (модель без сети).
-#[allow(dead_code)]
-pub mod vpn;
-/// HTTP-клиент к external controller Mihomo.
-#[allow(dead_code)]
-pub mod vpn_api;
 #[allow(dead_code)]
 pub mod wifi;
 
