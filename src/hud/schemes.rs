@@ -103,19 +103,49 @@ pub fn current_wallpaper() -> Option<String> {
     (!text.is_empty()).then(|| text.to_string())
 }
 
+/// Скрытый первый аргумент: применить схему, дождавшись конца `wall.sh`.
+/// Окно схем запускает себя так после Enter — отдельный процесс переживает
+/// закрытие окна.
+pub const APPLY_ARG: &str = "--apply-scheme";
+
 /// Применяет схему к текущим обоям, не дожидаясь: пересчёт matugen занимает
 /// секунды, а окно уже закрыто. Ошибка уходит в журнал.
 pub fn apply_detached(scheme: &str) {
+    // Отдельным процессом, а не потоком: окно закрывается сразу после Enter,
+    // и поток умер бы вместе с ним, не дождавшись первого `wall.sh`.
+    let Ok(binary) = std::env::current_exe() else {
+        super::log::warn("схема не применилась: не найден свой бинарник");
+        return;
+    };
+    let result = std::process::Command::new("setsid")
+        .arg("-f")
+        .arg(binary)
+        .arg(APPLY_ARG)
+        .arg(scheme)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if let Err(error) = result {
+        super::log::warn(format!("схема не применилась: {error}"));
+    }
+}
+
+/// Применяет схему, дождавшись конца чужого запуска `wall.sh`.
+///
+/// Окно обоев запускает окно схем раньше, чем `wall.sh` доработает, а тот
+/// держит замок: второй запуск молча вышел бы ни с чем.
+pub fn apply_after_applier(scheme: &str) {
+    while super::wallpaper::applier_alive() == Some(true) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let Some(wallpaper) = current_wallpaper() else {
         super::log::warn("схема не применилась: не известны текущие обои");
         return;
     };
-    let scheme = scheme.to_string();
-    std::thread::spawn(move || {
-        if let Err(error) = super::wallpaper::apply(&wallpaper, &scheme) {
-            super::log::warn(format!("схема не применилась: {error}"));
-        }
-    });
+    if let Err(error) = super::wallpaper::apply(&wallpaper, scheme) {
+        super::log::warn(format!("схема не применилась: {error}"));
+    }
 }
 
 /// Образцы схем: из файла, если он есть, иначе зашитые значения. Файл —
