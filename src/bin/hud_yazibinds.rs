@@ -62,6 +62,9 @@ mod i18n;
 mod key_display;
 #[path = "../hud/palette.rs"]
 mod palette;
+#[allow(dead_code)]
+#[path = "../hud/power_profile.rs"]
+mod power_profile;
 #[path = "../hud/repeat.rs"]
 mod repeat;
 #[allow(dead_code)]
@@ -732,8 +735,13 @@ impl YaziApp {
         let card = geom::Rect::new(0.0, 0.0, self.width as f32, self.height as f32);
         render(&mut pixmap, card, &r, &mut self.text, &mut self.icons);
         // Плотность карточки как у меню: отрисовка идёт цветами с альфой
-        // BG_ALPHA, в конце проход домножает карточку на CARD_ALPHA.
-        card_frame::apply_card_alpha(&mut pixmap, card, card_frame::CARD_ALPHA);
+        // BG_ALPHA, в конце проход домножает карточку на CARD_ALPHA. В
+        // энергосбережении размытие выключено, и карточка непрозрачна.
+        if power_profile::saver() {
+            crate::canvas::make_opaque(&mut pixmap, card);
+        } else {
+            card_frame::apply_card_alpha(&mut pixmap, card, card_frame::CARD_ALPHA);
+        }
 
         let stride = (pw * 4) as i32;
         let Ok((buffer, canvas)) =

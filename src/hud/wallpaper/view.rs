@@ -193,12 +193,39 @@ pub fn render_window(
 
 /// Карточка в заданном месте: общая для снимка и живого окна, форка нет.
 pub fn draw_card(canvas: &mut Canvas<'_, '_>, frame: &Frame<'_>) {
+    draw_background(canvas.pixmap, frame.card, canvas.ui);
+    draw_content(canvas, frame);
+}
+
+/// Подложка карточки: заливка со скруглением и рамка. В живом окне она не
+/// меняется от кадра к кадру, поэтому рисуется один раз в кэш и дальше
+/// копируется: заливка пути со сглаживанием стоила 9 мс на кадр.
+pub fn draw_background(pixmap: &mut tiny_skia::Pixmap, card: Rect, ui: UiPalette) {
+    fill_round_rect(
+        pixmap,
+        card.x * SCALE,
+        card.y * SCALE,
+        card.w * SCALE,
+        card.h * SCALE,
+        ui_tokens::radii::LG * SCALE,
+        ui.panel,
+    );
+    stroke_rect(
+        pixmap,
+        card.x * SCALE,
+        card.y * SCALE,
+        card.w * SCALE,
+        card.h * SCALE,
+        ui.border,
+        layout::HAIRLINE * SCALE,
+    );
+}
+
+/// Содержимое поверх подложки. Отделено от неё, чтобы живое окно могло
+/// переиспользовать готовый фон.
+pub fn draw_content(canvas: &mut Canvas<'_, '_>, frame: &Frame<'_>) {
     let zones = layout::zones(frame.card);
     let ts = ui_tokens::type_scale();
-
-    // Карточка: в Normal со скруглением, в Pixel — прямоугольник.
-    canvas.fill(frame.card, ui_tokens::radii::LG, canvas.ui.panel);
-    canvas.outline(frame.card, canvas.ui.border, layout::HAIRLINE);
 
     header(canvas, frame.state, frame.card, zones, ts, frame.lang);
     zone_frames(canvas, frame.state, zones);
@@ -216,19 +243,20 @@ pub fn apply_alpha(pixmap: &mut tiny_skia::Pixmap, card: Rect, alpha: f32) {
     let y1 = ((card.y + card.h) * SCALE).round() as i32;
     let stride = pixmap.width() as i32;
     let height = pixmap.height() as i32;
+    // Целочисленное умножение вместо `f32` на каждый канал: на кадре
+    // 1920×1200 разница — 36 мс против единиц, и именно она делала листание
+    // рывками. Множитель в 1/256, чтобы 1.0 оставалась ровно 1.0.
+    let factor = (alpha.clamp(0.0, 1.0) * 256.0).round() as u32;
+    let scale = |channel: u8| ((((channel as u32) * factor) + 128) >> 8) as u8;
+    let data = pixmap.data_mut();
     for py in y0.max(0)..y1.min(height) {
-        for px in x0.max(0)..x1.min(stride) {
-            let index = (py * stride + px) as usize;
-            if let Some(pixel) = pixmap.pixels_mut().get_mut(index) {
-                let scale = |channel: u8| (channel as f32 * alpha).round().clamp(0.0, 255.0) as u8;
-                *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-                    scale(pixel.red()),
-                    scale(pixel.green()),
-                    scale(pixel.blue()),
-                    scale(pixel.alpha()),
-                )
-                .unwrap_or(*pixel);
-            }
+        let start = (py * stride + x0.max(0)) as usize * 4;
+        let end = (py * stride + x1.min(stride)) as usize * 4;
+        for pixel in data[start..end].as_chunks_mut::<4>().0 {
+            pixel[0] = scale(pixel[0]);
+            pixel[1] = scale(pixel[1]);
+            pixel[2] = scale(pixel[2]);
+            pixel[3] = scale(pixel[3]);
         }
     }
 }
@@ -601,35 +629,47 @@ fn blit_thumb(canvas: &mut Canvas<'_, '_>, rect: Rect, thumb: &thumb::Thumb, alp
     if dw <= 0 || dh <= 0 {
         return;
     }
-    let stride = canvas.pixmap.width() as i32;
+    let stride = canvas.pixmap.width();
     let height = canvas.pixmap.height() as i32;
-    for dy in 0..dh {
-        let src_y = (dy as u32 * thumb.h / dh as u32).min(thumb.h - 1);
-        let py = y0 + dy;
+    let source = &thumb.rgba;
+    let data = canvas.pixmap.data_mut();
+    // Строка источника считается один раз на ряд. Внутри ряда шаг по X идёт
+    // накопителем (`src_x += w`, вычитая `dw`) — деление на каждый пиксель
+    // было заметной частью кадра при листании.
+    for dy in 0..dh as u32 {
+        let src_y = (dy * thumb.h / dh as u32).min(thumb.h - 1);
+        let py = y0 + dy as i32;
         if py < 0 || py >= height {
             continue;
         }
-        for dx in 0..dw {
-            let src_x = (dx as u32 * thumb.w / dw as u32).min(thumb.w - 1);
-            let px = x0 + dx;
-            if px < 0 || px >= stride {
-                continue;
-            }
-            let src = ((src_y * thumb.w + src_x) * 4) as usize;
-            let dst = (py * stride + px) as usize;
-            if let Some(pixel) = canvas.pixmap.pixels_mut().get_mut(dst) {
+        let row = (py as u32 * stride) as usize * 4;
+        let src_row = (src_y * thumb.w) as usize * 4;
+        let mut src_x = 0u32;
+        let mut acc = 0u32;
+        for dx in 0..dw as u32 {
+            let px = x0 + dx as i32;
+            if px >= 0 && px < stride as i32 {
+                let src = src_row + src_x as usize * 4;
+                let dst = row + px as usize * 4;
                 // Пиксели источника непрозрачные, поэтому проявление — это
-                // ровно умножение альфы. При `alpha == 1.0` путь побитово
-                // прежний: множитель равен 255, деление даёт исходное число.
-                let a = ((thumb.rgba[src + 3] as u32) * fade / 255) as u8;
-                *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-                    thumb.rgba[src],
-                    thumb.rgba[src + 1],
-                    thumb.rgba[src + 2],
-                    a,
-                )
-                .unwrap_or(*pixel);
+                // ровно умножение альфы. При `alpha == 1.0` множитель 255, и
+                // пиксель переносится как есть.
+                let a = if fade == 255 {
+                    source[src + 3]
+                } else {
+                    (((source[src + 3] as u32 * fade * 257) + 32768) >> 16).min(255) as u8
+                };
+                data[dst] = source[src];
+                data[dst + 1] = source[src + 1];
+                data[dst + 2] = source[src + 2];
+                data[dst + 3] = a;
             }
+            acc += thumb.w;
+            while acc >= dw as u32 {
+                acc -= dw as u32;
+                src_x += 1;
+            }
+            src_x = src_x.min(thumb.w - 1);
         }
     }
 }
@@ -1051,5 +1091,39 @@ mod tests {
         let pixmap = render_window(&state, palette::Palette::default(), Language::Ru, &provider);
         assert_eq!(pixmap.width(), (layout::CARD_W * SCALE) as u32);
         assert_eq!(pixmap.height(), (layout::CARD_H * SCALE) as u32);
+    }
+
+    /// Увеличение миниатюры накопителем шага: квадранты источника обязаны
+    /// остаться на своих местах, без сдвига на пиксель.
+    #[test]
+    fn scaled_thumbnail_keeps_quadrant_order() {
+        let mut pixmap = tiny_skia::Pixmap::new(16, 16).expect("буфер");
+        pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        let mut text = TextPainter::new("JetBrainsMono Nerd Font Propo");
+        let mut icons = TextPainter::new("JetBrainsMono Nerd Font Propo");
+        let ui = ui_tokens::ui_palette(palette::Palette::default());
+        let mut canvas = Canvas {
+            pixmap: &mut pixmap,
+            text: &mut text,
+            icons: &mut icons,
+            ui,
+        };
+        let thumb = thumb::Thumb {
+            w: 2,
+            h: 2,
+            rgba: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        };
+        blit_thumb(&mut canvas, Rect::new(0.0, 0.0, 8.0, 8.0), &thumb, 1.0);
+        let at = |x: u32, y: u32| canvas.pixmap.pixel(x, y).expect("пиксель").demultiply();
+        assert_eq!(
+            (at(2, 2).red(), at(2, 2).green(), at(2, 2).blue()),
+            (255, 0, 0)
+        );
+        assert_eq!((at(13, 2).red(), at(13, 2).green()), (0, 255));
+        assert_eq!((at(2, 13).red(), at(2, 13).blue()), (0, 255));
+        assert_eq!(at(13, 13).red(), 255, "правый нижний — белый");
+        assert_eq!(at(13, 13).green(), 255);
     }
 }

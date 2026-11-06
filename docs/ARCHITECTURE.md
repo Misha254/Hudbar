@@ -28,7 +28,7 @@ StatusNotifierItem: поднимает фейковый элемент трея,
 Иконки — SVG через `resvg` и PNG, с кэшем и фоновой загрузкой; первый кадр рисуется
 сразу, с заглушками. Закреплённые лежат в `~/.config/hudbar/apps-pinned` и один раз
 переносятся из `~/.config/rofi/pinned`. Снимки без композитора:
-`hud-apps-rs --snapshot <default|search|empty|pinned> out.png`. Логика окна —
+`hud-apps-rs --snapshot <default|list|search|empty|pinned> out.png`. Логика окна —
 в `src/hud/apps/`.
 
 `src/bin/hud_keybinds.rs` и `src/bin/hud_yazibinds.rs` — нативные окна биндов niri (KP_8)

@@ -20,12 +20,7 @@ pub struct Text {
     pub password: &'static str,
     /// Акцентная кнопка.
     pub login: &'static str,
-    /// Подписи полей для подвала.
-    pub hint_login: &'static str,
-    pub hint_field: &'static str,
-    pub hint_session: &'static str,
-    pub hint_power: &'static str,
-    /// Режим питания в подвале.
+    /// Команды режима питания.
     pub power_off: &'static str,
     pub power_reboot: &'static str,
     pub power_sleep: &'static str,
@@ -46,23 +41,17 @@ pub struct Text {
     pub no_sessions: &'static str,
     /// Заглушка имени сеанса, когда списка нет.
     pub session_unknown: &'static str,
-    /// Подпись «сеанс» в подвале, когда режим питания выключен.
-    pub session_prefix: &'static str,
 }
 
 impl Text {
     /// Все строки — для теста «в английском нет кириллицы» и для проверки,
     /// что ни одна подпись не осталась пустой.
-    pub fn all(&self) -> [&'static str; 21] {
+    pub fn all(&self) -> [&'static str; 16] {
         [
             self.title,
             self.user,
             self.password,
             self.login,
-            self.hint_login,
-            self.hint_field,
-            self.hint_session,
-            self.hint_power,
             self.power_off,
             self.power_reboot,
             self.power_sleep,
@@ -75,7 +64,6 @@ impl Text {
             self.session_failed,
             self.no_sessions,
             self.session_unknown,
-            self.session_prefix,
         ]
     }
 }
@@ -85,10 +73,6 @@ pub const RU: Text = Text {
     user: "Пользователь",
     password: "Пароль",
     login: "ВОЙТИ",
-    hint_login: "ENTER ВОЙТИ",
-    hint_field: "TAB ПОЛЕ",
-    hint_session: "F2 СЕАНС",
-    hint_power: "F12 ПИТАНИЕ",
     power_off: "1 ВЫКЛЮЧИТЬ",
     power_reboot: "2 ПЕРЕЗАГРУЗКА",
     power_sleep: "3 СОН",
@@ -101,7 +85,6 @@ pub const RU: Text = Text {
     session_failed: "Сеанс не запустился",
     no_sessions: "Сеансы не найдены",
     session_unknown: "не найден",
-    session_prefix: "СЕАНС",
 };
 
 pub const EN: Text = Text {
@@ -109,10 +92,6 @@ pub const EN: Text = Text {
     user: "User",
     password: "Password",
     login: "LOG IN",
-    hint_login: "ENTER LOG IN",
-    hint_field: "TAB FIELD",
-    hint_session: "F2 SESSION",
-    hint_power: "F12 POWER",
     power_off: "1 POWER OFF",
     power_reboot: "2 REBOOT",
     power_sleep: "3 SLEEP",
@@ -125,7 +104,6 @@ pub const EN: Text = Text {
     session_failed: "Session did not start",
     no_sessions: "No sessions found",
     session_unknown: "not found",
-    session_prefix: "SESSION",
 };
 
 /// Подписи на языке окна.

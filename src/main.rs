@@ -62,6 +62,10 @@ fn main() {
     let started = std::time::Instant::now();
     // На энергосбережении анимации гаснут сами, настройку не трогаем.
     let mut anim_on = hud_settings.animations && power_profile::anim_allowed();
+    let mut power_saver = power_profile::saver();
+    if let Err(error) = hud::niri_effects::apply(power_saver) {
+        hud::log::trace(format!("эффекты питания: {error}"));
+    }
     let anim = hud::anim::AnimSettings::new(anim_on, hud_settings.animation_speed);
     let conn = Connection::connect_to_env().expect("wayland connection");
     let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
@@ -121,6 +125,7 @@ fn main() {
         popup_anim: hud::anim::Tween::settled(0.0, started),
         now: started,
         anim,
+        power_saver,
         mods: Modifiers::default(),
     };
 
@@ -154,6 +159,17 @@ fn main() {
         // возвращать их без перезапуска панели.
         if app.now.duration_since(power_check) >= std::time::Duration::from_secs(15) {
             power_check = app.now;
+            // Эффекты niri меняются вместе с профилем: отдельно от анимаций,
+            // потому что их выключает только профиль, а не настройка окна.
+            let saver = power_profile::saver();
+            if saver != power_saver {
+                power_saver = saver;
+                app.power_saver = saver;
+                if let Err(error) = hud::niri_effects::apply(saver) {
+                    hud::log::trace(format!("эффекты питания: {error}"));
+                }
+                app.shared.dirty.store(true, Ordering::Relaxed);
+            }
             let on = app.settings.animations && power_profile::anim_allowed();
             if on != anim_on {
                 anim_on = on;

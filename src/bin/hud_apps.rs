@@ -20,7 +20,7 @@
 //! Запуск:
 //!   hud-apps-rs                     — открыть окно; повторный вызов закрывает
 //!   hud-apps-rs --help              — справка
-//!   hud-apps-rs --snapshot <mode> <out.png>
+//!   hud-apps-rs --snapshot <default|list|search|empty|pinned> <out.png>
 
 use std::os::fd::AsFd;
 use std::sync::Arc;
@@ -139,12 +139,6 @@ const NAMESPACE: &str = "hudapps";
 const PID_FILE: &str = "hudbar-apps.pid";
 /// Ширина окна равна ширине карточки: окно и есть карточка.
 const WIDTH: u32 = view::CARD_W as u32;
-/// Высота, которой заведомо хватает под любую карточку: нужна только для
-/// размера пула буферов.
-const MAX_H: u32 =
-    view::HEADER_H as u32 + (view::ROW_H * view::MAX_ROWS as f32) as u32 + view::FOOTER_H as u32;
-/// Строк на страницу прокрутки: сколько влезает в карточку целиком.
-const PAGE: isize = view::MAX_ROWS as isize;
 
 const USAGE: &str = "\
 hud-apps-rs — лаунчер приложений
@@ -180,48 +174,81 @@ struct AppsApp {
     /// Остаток дробного скролла: тачпад присылает value120 меньше 120, и без
     /// накопления одно деление давало ноль строк.
     scroll_acc: f32,
+    /// Переключение списка и плиток: прежний кадр проявляется в новый.
+    switch: Option<Switch>,
+    /// Последний отданный кадр. При переключении вида он становится основой
+    /// проявления: сохранять пиксели в момент нажатия уже поздно — модель к
+    /// тому времени перестроена.
+    last_frame: Option<tiny_skia::Pixmap>,
     exit: Arc<AtomicBool>,
+}
+
+/// Переход между списком и плитками. Высота карточки у видов разная, поэтому
+/// кадры не подменяются скачком: старый проявляется в новый, пока слой едет к
+/// новой высоте.
+struct Switch {
+    from: tiny_skia::Pixmap,
+    tween: anim::Tween,
 }
 
 impl AppsApp {
     /// Прямоугольник карточки в окне: окно и есть карточка, поэтому она
     /// начинается в нуле.
     fn card(&self) -> Rect {
-        Rect::new(
-            0.0,
-            0.0,
-            WIDTH as f32,
-            view::card_height(view::rows_shown(self.model.visible().len())),
-        )
+        Rect::new(0.0, 0.0, WIDTH as f32, view::card_height(&self.model))
     }
 
     /// Размер, который просит модель. Считается из карточки, поэтому поиск и
     /// пустой список дают верную высоту.
     fn wanted_size(&self) -> (u32, u32) {
-        view::layer_size(self.model.visible().len())
+        view::layer_size(&self.model)
     }
 
-    /// Обновляет размер слоя, если карточка изменила высоту: вход в поиск,
-    /// очистка запроса, пустой результат. Слой без якорей не имеет права
-    /// получить ноль ни по одной оси — за это композитор рвёт протокол.
-    fn sync_size(&mut self) {
+    /// Передаёт размер слою. Если высота изменилась, слой поедет к ней
+    /// анимацией; повторный вызов с той же целью ничего не перезапускает.
+    /// Слой без якорей не имеет права получить ноль ни по одной оси — за это
+    /// композитор рвёт протокол.
+    fn sync_size(&mut self, now: std::time::Instant) {
         let (width, height) = self.wanted_size();
         debug_assert!(width > 0 && height > 0, "размер слоя не может быть нулевым");
-        if width == self.ctx.width && height == self.ctx.height {
-            return;
-        }
-        self.ctx.request_size(width, height);
+        self.ctx.request_height(width, height, now);
+    }
+
+    /// Переключение списка и плиток с проявлением прежнего кадра в новый.
+    /// Без анимаций длительность нулевая, и `Switch` не создаётся вовсе.
+    fn switch_view(&mut self) {
+        self.model.toggle_view();
+        let now = std::time::Instant::now();
+        let duration = self.ctx.anim.scaled(layer::RESIZE_DURATION);
+        self.switch = self
+            .last_frame
+            .as_ref()
+            .filter(|_| !duration.is_zero())
+            .map(|from| Switch {
+                from: from.clone(),
+                tween: anim::Tween::new(0.0, 1.0, now, duration, anim::ease_out_cubic),
+            });
     }
 
     /// Применяет команду ввода к модели.
     fn apply(&mut self, input: Input) {
+        // Любая другая команда меняет содержимое: проявление прежнего кадра
+        // поверх него было бы уже не переходом вида, а мусором.
+        if !matches!(input, Input::Ignore | Input::ToggleView) {
+            self.switch = None;
+        }
         match input {
             Input::Ignore => {}
             Input::Move(delta) => self.model.move_sel(delta),
-            Input::Page(delta) => self.model.page(delta * PAGE),
+            Input::MoveCol(delta) => self.model.move_col(delta),
+            Input::Page(delta) => self.model.page(delta),
             Input::Jump(end) => self.model.jump(end),
             Input::Activate => self.activate(),
             Input::Pin => self.toggle_pin(),
+            Input::Reorder(delta) => {
+                self.model.move_pinned(delta);
+            }
+            Input::ToggleView => self.switch_view(),
             Input::Close => self.close(),
             Input::Erase => self.model.backspace(),
             Input::ClearQuery => self.model.clear_query(),
@@ -268,8 +295,7 @@ impl AppsApp {
 
     /// Клик по строке: выбрать и сразу запустить, как в списках файлов.
     fn click(&mut self, x: f32, y: f32) {
-        let rows = view::rows_shown(self.model.visible().len());
-        if let Some(index) = view::row_at(&self.model, self.card(), rows, x, y) {
+        if let Some(index) = view::row_at(&self.model, self.card(), x, y) {
             self.model.select(index);
             self.hover = Some(index);
             self.activate();
@@ -278,14 +304,18 @@ impl AppsApp {
 
     /// Разбирает клавишу и применяет команду. Вынесено, чтобы нажатие и
     /// повтор шли одним кодом.
-    fn handle_key(&mut self, event: KeyEvent) {
-        let key = menu::input::event(
+    fn key_of(&self, event: &KeyEvent) -> menu::input::KeyEvent {
+        menu::input::event(
             event.keysym.into(),
             event.utf8.as_deref(),
             self.mods.ctrl,
             self.mods.shift,
             self.mods.logo,
-        );
+        )
+    }
+
+    fn handle_key(&mut self, event: KeyEvent) {
+        let key = self.key_of(&event);
         let input = keys::translate(key, self.model.query());
         debug_log(&format!("команда {input:?}"));
         self.apply(input);
@@ -311,6 +341,12 @@ impl AppsApp {
         let _frame = log::Frame::start("лаунчер");
         let now = std::time::Instant::now();
         let openness = self.ctx.openness_now(now);
+        // Проявление при переключении вида: вес прежнего кадра и его высота
+        // читаются до займа `self` на отрисовку.
+        let switching = self
+            .switch
+            .as_ref()
+            .map(|switch| (switch.tween.value(now), switch.from.height()));
         let visible = self.model.visible().len();
         // Подсветка выбранной строки. `update` идёт до чтения позиции: он может
         // запустить ход, и тогда читать надо уже новую.
@@ -349,9 +385,31 @@ impl AppsApp {
                     sliding,
                     hover: self.hover,
                 },
+                self.ctx.height as f32,
             )
         };
-        view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
+        // В энергосбережении размытие под окном выключено, поэтому карточка
+        // непрозрачна: полупрозрачная мешала бы читать текст.
+        if power_profile::saver() {
+            canvas::make_opaque(&mut pixmap, card);
+        } else {
+            view::apply_card_alpha(&mut pixmap, card, view::CARD_ALPHA);
+        }
+        if let Some((mix, old_height)) = switching {
+            let top = (view::HEADER_H * SCALE) as u32;
+            let bottom = ((self.ctx.height as f32 - view::FOOTER_H) * SCALE).max(0.0) as u32;
+            let old_bottom = old_height.saturating_sub((view::FOOTER_H * SCALE) as u32);
+            if let Some(switch) = self.switch.as_ref() {
+                canvas::crossfade(&mut pixmap, &switch.from, mix, top, bottom, old_bottom);
+            }
+        }
+        if self
+            .switch
+            .as_ref()
+            .is_some_and(|switch| switch.tween.done(now))
+        {
+            self.switch = None;
+        }
         layer::fade(&mut pixmap, openness);
 
         let stride = (pw * 4) as i32;
@@ -368,6 +426,9 @@ impl AppsApp {
         for (out, input) in dst.iter_mut().zip(src.iter()) {
             *out = [input[2], input[1], input[0], input[3]];
         }
+        // Кадр остаётся в памяти до следующего: в момент переключения вида
+        // модель уже перестроена, и взять прежнюю картинку больше неоткуда.
+        self.last_frame = Some(pixmap);
         let surface = self.ctx.layer.wl_surface();
         surface.set_buffer_scale(SCALE as i32);
         surface.damage_buffer(0, 0, pw as i32, ph as i32);
@@ -416,7 +477,11 @@ impl KeyboardHandler for AppsApp {
         _: u32,
         event: KeyEvent,
     ) {
-        self.repeat.press(&event);
+        // Повтор нужен только навигации: удержанный Tab переключал бы вид
+        // пачкой, а Enter запускал бы приложение много раз.
+        if keys::repeats(self.key_of(&event).key) {
+            self.repeat.press(&event);
+        }
         self.handle_key(event);
     }
 
@@ -483,9 +548,7 @@ impl PointerHandler for AppsApp {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     // Указатель только подсвечивает: случайное движение мыши не
                     // должно двигать выбор.
-                    let rows = view::rows_shown(self.model.visible().len());
-                    let hover =
-                        view::row_at(&self.model, self.card(), rows, position.0, position.1);
+                    let hover = view::row_at(&self.model, self.card(), position.0, position.1);
                     if hover != self.hover {
                         self.hover = hover;
                         self.ctx.dirty = true;
@@ -621,28 +684,15 @@ impl smithay_client_toolkit::shell::wlr_layer::LayerShellHandler for AppsApp {
             return;
         }
         // Нули от композитора игнорируются: слой без якорей не должен получать
-        // нулевой размер. Если композитор предлагает свой — берём его, но
-        // только если он положительный.
-        if configure.new_size.0 > 0 {
-            self.ctx.width = configure.new_size.0;
-        }
-        if configure.new_size.1 > 0 {
-            self.ctx.height = configure.new_size.1;
-        }
-        // Первый кадр рисуется по нашим размерам, а не по нулям из configure.
-        let (width, height) = self.wanted_size();
-        if self.ctx.width == 0 || self.ctx.height == 0 {
-            self.ctx.width = width;
-            self.ctx.height = height;
-        }
-        let was_configured = self.ctx.configured;
-        self.ctx.configured = true;
-        self.ctx.dirty = true;
-        // Проявление начинается на первом configure: раньше поверхность ещё не
-        // нарисована, и двигать нечего.
-        if !was_configured {
-            self.ctx.start_open(std::time::Instant::now());
-        }
+        // нулевой размер. Пока идёт анимация высоты или не подтверждён
+        // последний `set_size`, размер из configure — ответ на наш же запрос, и
+        // высоту он не откатывает. Первый configure запускает проявление.
+        let fallback = self.wanted_size();
+        self.ctx.apply_configure_animated(
+            (configure.new_size.0, configure.new_size.1),
+            fallback,
+            std::time::Instant::now(),
+        );
     }
 }
 
@@ -759,7 +809,7 @@ fn event_loop() -> Result<(), String> {
         model.total(),
         model.pinned().len()
     ));
-    let (start_w, start_h) = view::layer_size(model.visible().len());
+    let (start_w, start_h) = view::layer_size(&model);
 
     let ctx = layer::open(
         &compositor,
@@ -770,7 +820,7 @@ fn event_loop() -> Result<(), String> {
             namespace: Some(NAMESPACE),
             width: start_w,
             height: start_h,
-            max_height: MAX_H,
+            max_height: view::max_card_height() as u32,
             scale: SCALE as u32,
         },
         started,
@@ -798,9 +848,11 @@ fn event_loop() -> Result<(), String> {
         hover: None,
         palette: palette::load(),
         scroll_acc: 0.0,
+        switch: None,
+        last_frame: None,
         exit: Arc::new(AtomicBool::new(false)),
     };
-    app.sync_size();
+    app.sync_size(started);
 
     unsafe {
         let _ = nix::sys::signal::signal(
@@ -810,20 +862,27 @@ fn event_loop() -> Result<(), String> {
     }
 
     while !app.exit.load(Ordering::Relaxed) && !SIGNAL_EXIT.load(Ordering::Relaxed) {
-        app.sync_size();
         if event_queue.flush().is_err() {
             break;
         }
         let _ = event_queue.dispatch_pending(&mut app);
+        // Один момент на итерацию: проявление и высота считаются по нему,
+        // иначе разные значения читались бы в разные instants и кадр дёргался.
+        let now = std::time::Instant::now();
+        // Вид и запрос могли смениться во время dispatch: цель высоты
+        // сверяется после ввода, а тик отправляет текущий кадр анимации.
+        // Повтор с той же целью твин не перезапускает.
+        app.sync_size(now);
+        app.ctx.tick_resize(now);
         // Иконки приходят из потока: готовые ответы забираются без ожидания, и
         // окно перерисовывается, пока список меняется.
         if app.loader.take() {
             app.ctx.dirty = true;
         }
         app.request_icons();
-        let now = std::time::Instant::now();
-        // Пока идёт проявление или ход подсветки, кадр нужен каждый тик.
-        if app.ctx.animating(now) || app.highlight.animating(now) {
+        // Пока идёт проявление, ход подсветки или переход вида, кадр нужен
+        // каждый тик.
+        if app.ctx.animating(now) || app.highlight.animating(now) || app.switch.is_some() {
             app.ctx.dirty = true;
         }
         // Рисовать можно только после первого configure: буфер, приложенный
@@ -833,7 +892,10 @@ fn event_loop() -> Result<(), String> {
             app.draw();
         }
         // Повтор удержанной стрелки: композитор его не шлёт, крутим сами.
-        while let Some(event) = app.repeat.poll() {
+        while !app.exit.load(Ordering::Relaxed) && !SIGNAL_EXIT.load(Ordering::Relaxed) {
+            let Some(event) = app.repeat.poll() else {
+                break;
+            };
             app.handle_key(event);
             if app.ctx.configured {
                 app.ctx.dirty = false;
@@ -847,7 +909,10 @@ fn event_loop() -> Result<(), String> {
         // сразу, а не после следующего сообщения композитора.
         // Грязный флаг тоже будит короткий тик: недожатое проявление
         // должно дойти до непрозрачного кадра сразу, а не через простой.
-        let moving = app.ctx.animating(now) || app.highlight.animating(now) || app.ctx.dirty;
+        let moving = app.ctx.animating(now)
+            || app.highlight.animating(now)
+            || app.switch.is_some()
+            || app.ctx.dirty;
         let idle = if moving || app.loader.pending() > 0 {
             16u16
         } else {

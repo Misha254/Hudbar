@@ -114,7 +114,10 @@ impl App {
         let width = self.width as f32 * k;
         let sys = crate::hud::lock::mutex(&self.shared.sys).clone();
 
-        pixmap.fill(p.base.with_a(0.8).to_tiny());
+        // В энергосбережении размытие под панелью выключено, и полупрозрачный
+        // фон только мешал бы читать текст: окно становится непрозрачным.
+        let alpha = if self.power_saver { 1.0 } else { 0.8 };
+        pixmap.fill(p.base.with_a(alpha).to_tiny());
 
         let theme = self.theme();
         let chip_y = theme.chip_inset * k;
@@ -289,25 +292,24 @@ impl App {
                 .battery_wh
                 .map(|wh| format!("{wh:.1} Wh"))
                 .unwrap_or_else(|| format!("{pct}%"));
-            let (text, color, bg, with_icon) = if sys.charging {
+            let (text, color, bg) = if sys.charging {
                 (
                     format!("{I_PLUG}{}{value}", self.icon_gap()),
                     p.text,
                     chip_bg,
-                    false,
                 )
             } else if pct <= 15 {
                 let (color, bg) = low_battery_style(p, chip_bg);
-                (value, color, bg, true)
+                (value, color, bg)
             } else if pct <= 30 {
-                (value, p.text.with_a(0.75), chip_bg, true)
+                (value, p.text.with_a(0.75), chip_bg)
             } else {
-                (value, p.text, chip_bg, true)
+                (value, p.text, chip_bg)
             };
             let mut c = Cell::new(text, color);
-            if with_icon {
-                c.bat = Some(pct);
-            }
+            // Уровень рисуется и на зарядке: вилка говорит только «идёт заряд»,
+            // а без иконки от батареи остаётся одно число Wh без доли.
+            c.bat = Some(pct);
             let mut cells = vec![c];
             if let Some((hours, minutes)) = sys.bat_time {
                 let mut dot = Cell::new("·".to_string(), p.text.with_a(0.3));
@@ -325,6 +327,22 @@ impl App {
                 group: Group {
                     cells,
                     chip: Some((8.0, 8.0, bg)),
+                },
+            });
+        }
+
+        // Заряд наушников стоит отдельной плашкой сразу после батареи: тот же
+        // индекс в `module_order` и устойчивая сортировка держат их рядом.
+        if let Some(pct) = sys.headset_pct {
+            let color = if pct <= 15 { p.error } else { p.text };
+            let mut c = Cell::new(format!("{I_HEADSET}{}{pct}%", self.icon_gap()), color);
+            c.pad_l = 4.0;
+            c.pad_r = 4.0;
+            right.push(Slot {
+                order: self.settings.order_index("battery"),
+                group: Group {
+                    cells: vec![c],
+                    chip: Some((5.0, 5.0, chip_bg)),
                 },
             });
         }

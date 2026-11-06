@@ -46,6 +46,7 @@ pub const I_MIC: &str = "\u{f130}";
 pub const I_MIC_MUTED: &str = "\u{f131}";
 pub const I_WIFI: &str = "\u{f1eb}";
 pub const I_BT: &str = "\u{f294}";
+pub const I_HEADSET: &str = "\u{f025}";
 pub const I_PLUG: &str = "\u{f1e6}";
 pub const I_REC: &str = "\u{f044a}";
 pub const I_WEBCAM: &str = "\u{f09de}";

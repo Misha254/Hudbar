@@ -76,6 +76,30 @@ pub fn save_to(file: &Path, ids: &[String]) -> Result<(), String> {
     std::fs::rename(&tmp, file).map_err(|error| format!("не заменить {}: {error}", file.display()))
 }
 
+/// Переставляет `id` на `delta` позиций в списке. `None` — приложения нет или
+/// двигать уже некуда, так что порядок не меняется.
+pub fn moved(ids: &[String], id: &str, delta: isize) -> Option<Vec<String>> {
+    let at = ids.iter().position(|item| item == id)?;
+    let to = at as isize + delta;
+    if to < 0 || to as usize >= ids.len() {
+        return None;
+    }
+    let mut ids = ids.to_vec();
+    let id = ids.remove(at);
+    ids.insert(to as usize, id);
+    Some(ids)
+}
+
+/// Переставляет закреплённое приложение и пишет файл. Возвращает новый
+/// порядок, только если запись удалась: иначе список в памяти разошёлся бы с
+/// файлом и после перезапуска приложение вернулось бы на место.
+pub fn move_by(id: &str, delta: isize) -> Option<Vec<String>> {
+    let file = path();
+    let ids = moved(&load_from(&file), id, delta)?;
+    save_to(&file, &ids).ok()?;
+    Some(ids)
+}
+
 /// Список закреплённых из своего файла.
 pub fn load() -> Vec<String> {
     load_from(&path())
@@ -148,6 +172,24 @@ mod tests {
         assert_eq!(load_from(&file), ids);
         // Временный файл переименования не должен остаться рядом.
         assert!(!file.with_extension("tmp").exists());
+    }
+
+    /// Перестановка двигает только соседей и молчит на краях: закреплённое,
+    /// стоящее первым, вверх не уезжает.
+    #[test]
+    fn moving_swaps_neighbours_and_stops_at_the_edges() {
+        let ids: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        assert_eq!(
+            moved(&ids, "b", -1).expect("вверх"),
+            ["b", "a", "c"].map(String::from)
+        );
+        assert_eq!(
+            moved(&ids, "b", 1).expect("вниз"),
+            ["a", "c", "b"].map(String::from)
+        );
+        assert_eq!(moved(&ids, "a", -1), None, "выше первого некуда");
+        assert_eq!(moved(&ids, "c", 1), None, "ниже последнего некуда");
+        assert_eq!(moved(&ids, "x", 1), None, "незакреплённое не двигается");
     }
 
     #[test]

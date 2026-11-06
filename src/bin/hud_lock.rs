@@ -8,10 +8,11 @@
 //! протокола нет или композитор отказал, программа выходит с ошибкой, не
 //! оставляя сеанс без блокировки.
 
-use std::os::fd::AsFd;
-use std::path::PathBuf;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use chrono::Timelike;
+use nix::fcntl::OFlag;
+use nix::poll::{PollFd, PollFlags, poll};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_registry,
@@ -100,6 +101,7 @@ mod xkb {
     pub const RETURN: u32 = 0xff0d;
     pub const KP_ENTER: u32 = 0xff8d;
     pub const BACKSPACE: u32 = 0xff08;
+    pub const ESCAPE: u32 = 0xff1b;
     /// `u` в XKB — строчная независимо от Shift.
     pub const U: u32 = 0x75;
 }
@@ -151,6 +153,11 @@ struct LockApp {
     ui: UiPalette,
     config: Config,
     background: Option<Background>,
+    /// Обои, из которых берётся фон. Нужны, чтобы перечитать кэш, когда
+    /// конвертация закончится.
+    background_source: Option<locker::background::Wallpaper>,
+    /// Канал готовности фона: один байт от потока конвертации.
+    background_rx: Option<OwnedFd>,
     lang: Language,
     username: String,
     password: Secret,
@@ -194,6 +201,48 @@ impl LockApp {
         }
     }
 
+    /// Готовит PNG-кэш не-PNG обоев в отдельном потоке.
+    ///
+    /// Замок уже показан: первый кадр рисуется без фона или со старым кэшем,
+    /// а картинка подменяется, когда поток закончит. Поток не держит ссылок на
+    /// `LockApp`, поэтому блокировка и PAM от него не зависят.
+    fn refresh_background(&mut self) {
+        let Some(source) = self.background_source.clone() else {
+            return;
+        };
+        if !source.needs_conversion() {
+            return;
+        }
+        let Ok((rx, tx)) = nix::unistd::pipe2(OFlag::O_NONBLOCK | OFlag::O_CLOEXEC) else {
+            log::warn("фон замка: не создать канал готовности");
+            return;
+        };
+        std::thread::spawn(move || {
+            let status = match source.convert() {
+                Ok(()) => 1u8,
+                Err(error) => {
+                    log::warn(format!("фон замка: {error}"));
+                    2u8
+                }
+            };
+            let _ = nix::unistd::write(&tx, &[status]);
+        });
+        self.background_rx = Some(rx);
+    }
+
+    /// Поток конвертации закончил: перечитать кэш и перерисовать кадр.
+    fn background_finished(&mut self) {
+        let Some(rx) = self.background_rx.take() else {
+            return;
+        };
+        let mut status = [0u8; 1];
+        let _ = nix::unistd::read(&rx, &mut status);
+        if let Some(source) = &self.background_source {
+            self.background = source.load();
+        }
+        self.dirty = true;
+    }
+
     fn draw(&mut self) {
         if !self.dirty {
             return;
@@ -221,7 +270,6 @@ impl LockApp {
         let view = View {
             lang: self.lang,
             now: chrono::Local::now(),
-            username: &self.username,
             password_chars: self.password.chars(),
             caps: self.mods.caps_lock,
             message: self.message.map(|text| (text, true)),
@@ -303,6 +351,13 @@ impl LockApp {
         self.dirty = true;
     }
 
+    /// Очистить поле по `Esc` или `Ctrl+U`, не трогая блокировку.
+    fn clear(&mut self) {
+        self.password.clear();
+        self.message = None;
+        self.dirty = true;
+    }
+
     fn submit(&mut self, conn: &Connection) {
         if self.busy || self.leaving.is_some() || self.password.is_empty() {
             return;
@@ -373,13 +428,12 @@ impl LockApp {
         }
         let sym: u32 = event.keysym.into();
         if self.mods.ctrl && sym == xkb::U {
-            self.password.clear();
-            self.message = None;
-            self.dirty = true;
+            self.clear();
             return;
         }
         match sym {
             xkb::RETURN | xkb::KP_ENTER => self.submit(conn),
+            xkb::ESCAPE => self.clear(),
             xkb::BACKSPACE => {
                 self.password.pop();
                 self.message = None;
@@ -660,14 +714,41 @@ fn current_user() -> String {
         .unwrap_or_default()
 }
 
-fn background() -> Option<Background> {
-    let home = std::env::var_os("HOME")?;
-    let text = std::fs::read_to_string(PathBuf::from(home).join(".config/wallpaper")).ok()?;
-    let path = PathBuf::from(text.trim());
-    if !greeter::image::is_png(&path) {
-        return None;
+/// Один сон на сокете Wayland и, если фон ещё готовится, на канале его
+/// готовности. `true` — поток конвертации закончил и пора перечитать кэш.
+///
+/// `shell::poll_read` умеет ждать только сокет; замку нужен второй дескриптор,
+/// иначе картинка появилась бы с задержкой до полусекунды.
+fn wait_events(
+    queue: &mut wayland_client::EventQueue<LockApp>,
+    conn: BorrowedFd<'_>,
+    background: Option<BorrowedFd<'_>>,
+    wait: u16,
+) -> bool {
+    let Some(guard) = queue.prepare_read() else {
+        return false;
+    };
+    let mut fds = vec![PollFd::new(conn, PollFlags::POLLIN)];
+    if let Some(fd) = background {
+        fds.push(PollFd::new(fd, PollFlags::POLLIN));
     }
-    Background::load(&path)
+    let _ = poll(&mut fds, wait);
+
+    let wl_ready = fds[0]
+        .revents()
+        .is_some_and(|events| events.intersects(PollFlags::POLLIN));
+    if wl_ready {
+        let _ = guard.read();
+    } else {
+        drop(guard);
+    }
+    fds.get(1)
+        .and_then(|fd| fd.revents())
+        .is_some_and(|events| {
+            // `HUP` — поток умер, не записав байт (например, паника). Считать это
+            // готовностью обязательно: иначе poll будил бы цикл вечно.
+            events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
+        })
 }
 
 fn main() {
@@ -702,6 +783,8 @@ fn run() -> Result<(), String> {
     let loaded = settings::load();
     let lang = loaded.language;
     let anim = anim::AnimSettings::new(loaded.animations, loaded.animation_speed);
+    let background_source = locker::background::wallpaper();
+    let background = background_source.as_ref().and_then(|source| source.load());
 
     let mut app = LockApp {
         registry_state: RegistryState::new(&globals),
@@ -717,7 +800,9 @@ fn run() -> Result<(), String> {
         painter: TextPainter::new(&ui_tokens::font_name()),
         ui,
         config: Config::default(),
-        background: background(),
+        background,
+        background_source,
+        background_rx: None,
         lang,
         username: current_user(),
         password: Secret::new(),
@@ -735,6 +820,7 @@ fn run() -> Result<(), String> {
         .roundtrip(&mut app)
         .map_err(|error| format!("реестр не ответил: {error}"))?;
     app.lock(&qh)?;
+    app.refresh_background();
 
     while !app.exit {
         if event_queue.flush().is_err() {
@@ -758,7 +844,10 @@ fn run() -> Result<(), String> {
         } else {
             CLOCK_WAIT_MS
         };
-        shell::poll_read(&mut event_queue, conn.as_fd(), wait);
+        let background_fd = app.background_rx.as_ref().map(|fd| fd.as_fd());
+        if wait_events(&mut event_queue, conn.as_fd(), background_fd, wait) {
+            app.background_finished();
+        }
     }
 
     // Успешный `submit` уже снял блокировку. Если цикл закончился по другой

@@ -218,6 +218,8 @@ struct SchemesApp {
     painter: TextPainter,
     icons: TextPainter,
     model: Schemes,
+    /// Образцы схем читаются один раз, а не на каждом кадре: это файл.
+    swatches: Option<wallpaper::swatches::Swatches>,
     ui: ui_tokens::UiPalette,
     lang: Language,
     exit: Arc<AtomicBool>,
@@ -311,8 +313,21 @@ impl SchemesApp {
 
         let mut canvas =
             wallpaper::view::Canvas::new(&mut pixmap, &mut self.painter, &mut self.icons, self.ui);
-        paint(&mut canvas, card, &self.model, self.lang, highlight);
-        wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
+        paint(
+            &mut canvas,
+            card,
+            &self.model,
+            self.lang,
+            highlight,
+            self.swatches.as_ref(),
+        );
+        // В энергосбережении размытие под окном выключено, поэтому карточка
+        // непрозрачна: полупрозрачная мешала бы читать текст.
+        if power_profile::saver() {
+            crate::canvas::make_opaque(&mut pixmap, card);
+        } else {
+            wallpaper::view::apply_alpha(&mut pixmap, card, wallpaper::view::CARD_ALPHA);
+        }
         layer::fade(&mut pixmap, openness);
 
         let stride = (pw * 4) as i32;
@@ -347,6 +362,7 @@ fn paint(
     model: &Schemes,
     lang: Language,
     highlight: Option<f32>,
+    swatch_map: Option<&wallpaper::swatches::Swatches>,
 ) {
     let ts = ui_tokens::type_scale();
     let area = schemes::zone(card);
@@ -366,7 +382,6 @@ fn paint(
         Align::Start,
     );
 
-    let swatch_map = wallpaper::swatches::load();
     for (index, name) in SCHEMES.iter().enumerate() {
         let Some(line) = schemes::row(area, index) else {
             return;
@@ -387,7 +402,7 @@ fn paint(
         }
 
         // Образцы схемы: четыре точки слева, на нейтральном фоне.
-        let colors = schemes::swatches_for(name, swatch_map.as_ref());
+        let colors = schemes::swatches_for(name, swatch_map);
         let dots = schemes::row_dots(line);
         let mut x = dots.x;
         let y = dots.y;
@@ -705,6 +720,12 @@ smithay_client_toolkit::delegate_dispatch2!(SchemesApp);
 /// (`KeyboardInteractivity::Exclusive` в `layer::open`), и второе окно схем
 /// оставило бы первое висеть поверх всех остальных, не давая ими пользоваться.
 fn main() -> Result<(), String> {
+    // Скрытый режим из окна обоев: применить схему, дождавшись `wall.sh`.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(scheme) = apply_request(&args) {
+        schemes::apply_after_applier(scheme);
+        return Ok(());
+    }
     let pid_file = instance::pid_path_for(PID_FILE);
     if let instance::Startup::CloseRunning(pid) =
         instance::startup_for(PID_FILE, std::path::Path::new("/proc"))
@@ -728,6 +749,11 @@ fn main() -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
+    // Окно обоев запускает нас, не дожидаясь хвоста `wall.sh`: палитру считает
+    // matugen, и раньше неё показывать карточку не в новых цветах нельзя.
+    if !palette_ready() {
+        return Ok(());
+    }
     let conn = Connection::connect_to_env().map_err(|error| format!("нет Wayland: {error}"))?;
     let (globals, mut event_queue) =
         registry_queue_init(&conn).map_err(|error| format!("нет реестра: {error}"))?;
@@ -778,6 +804,7 @@ fn run() -> Result<(), String> {
         painter: TextPainter::new(&ui_tokens::font_name()),
         icons: TextPainter::new(settings_icons::FONT),
         model: Schemes::open(),
+        swatches: wallpaper::swatches::load(),
         ui,
         lang: loaded.language,
         exit: Arc::new(AtomicBool::new(false)),
@@ -820,4 +847,64 @@ fn run() -> Result<(), String> {
         shell::poll_read(&mut event_queue, conn.as_fd(), wait);
     }
     Ok(())
+}
+
+/// Схема из скрытого режима: `--apply-scheme <имя>`.
+fn apply_request(args: &[String]) -> Option<&str> {
+    if args.first().map(String::as_str) != Some(schemes::APPLY_ARG) {
+        return None;
+    }
+    args.get(1).map(String::as_str)
+}
+
+/// Ждёт, пока matugen перепишет палитру. Окно обоев запускает нас раньше
+/// конца `wall.sh`, но карточка должна быть уже в новых цветах.
+///
+/// `false` — смена сорвалась (процесс `wall.sh` умер, палитра не изменилась):
+/// окно не открываем, как и прежний запуск через `&&`.
+fn palette_ready() -> bool {
+    let Some(expected) = std::env::var_os("HUDBAR_PALETTE_MTIME") else {
+        return true;
+    };
+    let expected = expected.to_string_lossy().parse::<u128>().ok();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if palette_stamp() != expected {
+            return true;
+        }
+        if wallpaper::applier_alive() == Some(false) {
+            return false;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Момент правки палитры — тот же, что передал родитель.
+fn palette_stamp() -> Option<u128> {
+    palette::modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|age| age.as_nanos())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Скрытый режим узнаётся только по своему первому аргументу: иначе
+    /// обычный запуск окна молча применил бы схему вместо показа карточки.
+    #[test]
+    fn the_apply_mode_needs_its_own_first_argument() {
+        let args = |list: &[&str]| list.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            apply_request(&args(&[schemes::APPLY_ARG, "scheme-smart"])),
+            Some("scheme-smart")
+        );
+        assert_eq!(apply_request(&args(&["scheme-smart"])), None);
+        assert_eq!(apply_request(&args(&[schemes::APPLY_ARG])), None);
+        assert_eq!(apply_request(&args(&[])), None);
+    }
 }

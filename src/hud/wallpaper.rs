@@ -187,12 +187,17 @@ pub fn apply_detached(file: &str, scheme: &str) {
     });
 }
 
-/// Применяет обои и, когда смена закончилась, открывает окно выбора схемы.
+/// Применяет обои и, когда готова палитра, открывает окно выбора схемы.
 ///
 /// Работа уходит в отдельную сессию, а не в поток этого окна. Окно обоев
 /// закрывается сразу после Enter, и процесс умирал через миллисекунды, не
 /// дождавшись конца `wall.sh`: поток уносил с собой и запуск окна схем —
 /// обои менялись, а окно не появлялось.
+///
+/// `wall.sh` запускается в фоне, а не через `&&`: его хвост (`sleep 1.5`,
+/// перезапуск портала, spicetify) занимал ещё секунды и не имел отношения к
+/// схеме. Окно ждёт только новую палитру — по pid-файлу процесса, который её
+/// считает.
 ///
 /// Если смена сорвалась, окно не открывается: выбирать схему не для чего.
 pub fn apply_then_open_schemes(file: &str, scheme: &str) {
@@ -202,10 +207,17 @@ pub fn apply_then_open_schemes(file: &str, scheme: &str) {
     };
     let wall_sh = home.join(".local/bin/wall.sh");
     let schemes_bin = schemes_binary(std::env::var_os("HUDBAR_BIN_DIR"), &home);
+    // Момент палитры на старте: окно ждёт, пока он изменится.
+    let stamp = super::palette::modified()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|age| age.as_nanos().to_string())
+        .unwrap_or_default();
 
     // Аргументы идут позиционно, а не склейкой в строку: путь к обоям может
     // содержать пробелы и кавычки, и shell не должен его разбирать.
-    let script = r#""$1" --set "$2" "$3" && exec "$4""#;
+    let script = r#""$1" --set "$2" "$3" >/dev/null 2>&1 &
+export HUDBAR_APPLY_PID=$! HUDBAR_PALETTE_MTIME="$5"
+exec "$4""#;
     let result = std::process::Command::new("setsid")
         .arg("-f")
         .arg("sh")
@@ -216,6 +228,7 @@ pub fn apply_then_open_schemes(file: &str, scheme: &str) {
         .arg(file)
         .arg(scheme)
         .arg(&schemes_bin)
+        .arg(&stamp)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -224,6 +237,31 @@ pub fn apply_then_open_schemes(file: &str, scheme: &str) {
     if let Err(error) = result {
         super::log::warn(format!("смена не запущена: {error}"));
     }
+}
+
+/// Жив ли ещё процесс, который считает палитру. `None` — pid не передан.
+///
+/// Записи в `/proc` мало: `wall.sh` остаётся зомби-ребёнком окна схем и после
+/// своей смерти. Состояние `Z` и значит «уже не работает».
+pub fn applier_alive() -> Option<bool> {
+    let pid = std::env::var("HUDBAR_APPLY_PID")
+        .ok()?
+        .parse::<u32>()
+        .ok()?;
+    Some(process_state(pid).is_some_and(|state| state != 'Z'))
+}
+
+/// Состояние процесса из `/proc/<pid>/stat`: `R`, `S`, `Z`… `None` — процесса
+/// нет. Поле имени может содержать пробелы и скобки, поэтому состояние ищется
+/// после последней закрывающей скобки.
+fn process_state(pid: u32) -> Option<char> {
+    let stat = std::fs::read_to_string(
+        std::path::Path::new("/proc")
+            .join(pid.to_string())
+            .join("stat"),
+    )
+    .ok()?;
+    stat.rsplit(')').next()?.trim_start().chars().next()
 }
 
 /// Где лежит окно схем: `HUDBAR_BIN_DIR`, затем `~/.local/bin`, затем `PATH`.
@@ -247,7 +285,7 @@ fn schemes_binary(
 
 #[cfg(test)]
 mod tests {
-    use super::schemes_binary;
+    use super::{process_state, schemes_binary};
 
     #[test]
     fn schemes_binary_prefers_the_configured_directory_and_falls_back_to_path() {
@@ -270,5 +308,35 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// Зомби — уже не работа: запись в `/proc` живёт, пока процесс не пожнут,
+    /// и ожидание по одному её наличию не кончалось бы никогда.
+    #[test]
+    fn a_zombie_is_not_a_running_applier() {
+        assert_ne!(process_state(std::process::id()), Some('Z'), "текущий жив");
+
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("процесс");
+        let pid = child.id();
+        let mut state = None;
+        for _ in 0..200 {
+            state = process_state(pid);
+            if state == Some('Z') {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(state, Some('Z'), "умерший ребёнок ждёт жатвы");
+
+        child.wait().expect("дождаться");
+        assert_eq!(
+            process_state(pid),
+            None,
+            "пожатый процесс исчезает из /proc"
+        );
     }
 }

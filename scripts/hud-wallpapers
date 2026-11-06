@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Скачивает набор обоев Hudbar из последнего релиза в ~/wallpapers.
+#
+# Архив весит около 1.9 ГБ и распаковывается поверх текущих файлов; уже
+# существующие обои с теми же именами будут заменены. Только этим скриптом:
+# в git они не лежат, чтобы не раздувать репозиторий.
+set -euo pipefail
+
+url=${HUDBAR_WALLPAPERS_URL:-https://github.com/Misha254/Hudbar/releases/latest/download/wallpapers.tar.zst}
+dest="$HOME/wallpapers"
+
+command -v curl >/dev/null 2>&1 || {
+    printf 'нужен curl\n' >&2
+    exit 1
+}
+command -v zstd >/dev/null 2>&1 || {
+    printf 'нужен zstd (tar --zstd)\n' >&2
+    exit 1
+}
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+printf 'скачиваю %s\n' "$url"
+curl -fL --progress-bar "$url" -o "$tmp"
+
+printf 'распаковываю в %s\n' "$dest"
+mkdir -p "$dest"
+tar --zstd -xf "$tmp" -C "$(dirname "$dest")"
+
+printf 'готово: %s\n' "$dest"

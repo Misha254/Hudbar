@@ -251,7 +251,11 @@ impl App {
         };
         let bw = 1.0 * SCALE;
         let border = p.primary.with_a(0.35);
-        pixmap.fill(p.base.with_a(0.98).to_tiny());
+        pixmap.fill(
+            p.base
+                .with_a(if self.power_saver { 1.0 } else { 0.98 })
+                .to_tiny(),
+        );
         fill_rect(&mut pixmap, 0.0, 0.0, pw as f32, bw, border);
         fill_rect(&mut pixmap, 0.0, ph as f32 - bw, pw as f32, bw, border);
         fill_rect(&mut pixmap, 0.0, 0.0, bw, ph as f32, border);

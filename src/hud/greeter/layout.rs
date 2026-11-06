@@ -1,155 +1,154 @@
-//! Геометрия экрана входа: карточка, поля, кнопка, подвал.
+//! Геометрия экрана входа: часы и два поля прямо на обоях.
 //!
-//! Ни одного нового числа «на глаз»: ширина карточки — `card_frame::CARD_W`,
-//! отступы — `spacing`, высота строки — `spacing::XXL`, кегли — `type_scale`.
-//! Всё, что считается здесь, — производные от них, поэтому карточка входа и
-//! карточки остальных окон не разъезжаются по отступам.
+//! Карточки нет: часы, имя, пароль, кнопка и строка подсказок стоят на
+//! затемнённых обоях, как на экране блокировки. Ширина полей — как у замка,
+//! чтобы два экрана читались одним набором.
 //!
-//! Раскладка чистая: на входе размер поверхности, на выходе прямоугольники.
-//! Поэтому её проверяют тестом — без пикселей и без Wayland.
+//! Все числа — производные `spacing` и `type_scale`, как у greeter. Раскладка
+//! чистая: на входе размер поверхности, на выходе прямоугольники.
 
-use super::card_frame;
 use super::geom::Rect;
 use super::ui_tokens::{spacing, type_scale};
 
-/// Ширина карточки: та же, что у меню и окон биндов.
-pub const CARD_W: f32 = card_frame::CARD_W;
+/// Ширина поля и кнопки: уже прежней карточки, потому что рамки больше нет.
+pub const FIELD_W: f32 = 340.0;
 
-/// Отступ содержимого карточки от её края.
-pub const PAD: f32 = spacing::XL;
+/// Ширина строки подсказок: шире полей, иначе «F2 СЕАНС: niri» не влезает.
+/// Строка всё равно центрируется, и на обоях её край не заметен.
+pub const HINT_W: f32 = 440.0;
 
-/// Высота поля ввода: строка плюс половина зазора — 36 px при токенах 32 и 4.
+/// Отступ содержимого от края поверхности на маленьком экране.
+const MIN_MARGIN: f32 = spacing::MD;
+
+/// Высота поля ввода: как у замка и поля карточки меню.
 pub const FIELD_H: f32 = spacing::XXL + spacing::XS;
 
 /// Высота кнопки: крупнее поля, чтобы Enter было видно как действие.
 pub const BUTTON_H: f32 = spacing::XXL + spacing::MD;
 
-/// Полоса подписи над полем.
-pub const LABEL_H: f32 = spacing::LG + spacing::XS / 2.0;
-
-/// Высота верхней полосы: тонкая, но кликабельная глазом.
-pub const STRIP_H: f32 = spacing::XXL;
-
-/// Зазор между группами.
-const GROUP_GAP: f32 = spacing::MD;
-/// Зазор внутри группы «подпись — поле».
-const LABEL_GAP: f32 = spacing::XS;
-/// Высота строки сообщения. Место под неё reserved всегда: карточка не должна
+/// Высота строки сообщения. Место занято всегда: композиция не должна
 /// прыгать, когда PAM присылает ошибку.
 pub const MESSAGE_H: f32 = spacing::LG + spacing::SM;
 
-/// Полная высота карточки.
-pub fn card_height() -> f32 {
-    let ts = type_scale();
-    PAD
-        + ts.caption * 2.0            // «HUDBAR»
-        + spacing::SM                 // зазор под заголовком
-        + ts.display * 1.3            // часы
-        + spacing::XS + ts.label * 1.6 // дата
-        + GROUP_GAP
-        + (LABEL_H + LABEL_GAP + FIELD_H) * 2.0 // два поля
-        + spacing::SM                        // зазор под полем пароля
+/// Зазор между группами.
+const GROUP_GAP: f32 = spacing::MD;
+/// Зазор между полями: меньше группового, поля читаются одной парой.
+const FIELD_GAP: f32 = spacing::MD;
+/// Зазор между блоком часов и полями.
+const CLOCK_GAP: f32 = spacing::LG;
+
+/// Кегль часов: как на экране блокировки, а не `display` из карточки меню.
+pub fn clock_size() -> f32 {
+    type_scale().display * 1.5
+}
+
+/// Высота блока «часы + дата».
+pub fn clock_height() -> f32 {
+    clock_size() * 1.3 + spacing::XS + type_scale().label * 1.6
+}
+
+/// Высота строки подсказок.
+fn hint_height() -> f32 {
+    type_scale().caption * 1.6
+}
+
+/// Высота всей композиции: часы, два поля, сообщение, кнопка и подсказки.
+pub fn group_height() -> f32 {
+    clock_height()
+        + CLOCK_GAP
+        + FIELD_H * 2.0
+        + FIELD_GAP
+        + spacing::XS
         + MESSAGE_H
-        + spacing::XS                        // зазор до кнопки
+        + spacing::XS
         + BUTTON_H
-        + PAD
-        + card_frame::FOOTER_H
+        + GROUP_GAP
+        + hint_height()
 }
 
-/// Карточка на поверхности: по центру по горизонтали и чуть выше центра по
-/// вертикали — так её не перекрывает строка подсказок и она не «висит» внизу.
-pub fn card(size: (f32, f32)) -> Rect {
-    let height = card_height();
-    let x = ((size.0 - CARD_W) / 2.0).max(0.0);
-    // 0.42 свободного места сверху: чуть выше геометрического центра.
-    let y = ((size.1 - height) * 0.42).max(0.0);
-    Rect::new(x.round(), y.round(), CARD_W, height)
+/// Верхнее поле на поверхности: по центру по горизонтали, вся композиция
+/// чуть выше геометрического центра.
+pub fn field(size: (f32, f32)) -> Rect {
+    let width = FIELD_W.min((size.0 - MIN_MARGIN * 2.0).max(0.0));
+    let x = ((size.0 - width) / 2.0).max(0.0);
+    let top = ((size.1 - group_height()) * 0.42).max(0.0);
+    Rect::new(
+        x.round(),
+        (top + clock_height() + CLOCK_GAP).round(),
+        width,
+        FIELD_H,
+    )
 }
 
-/// Прямоугольники содержимого карточки.
+/// Полоса крупных часов над полями. Ширину задаёт поле, а текст
+/// центрируется в ней при отрисовке: ширина строки зависит от шрифта.
+pub fn clock(field: Rect) -> Rect {
+    Rect::new(
+        field.x,
+        field.y - CLOCK_GAP - clock_height(),
+        field.w,
+        clock_size() * 1.3,
+    )
+}
+
+/// Полоса даты под часами.
+pub fn date(field: Rect) -> Rect {
+    let clock = clock(field);
+    Rect::new(
+        field.x,
+        clock.bottom() + spacing::XS,
+        field.w,
+        type_scale().label * 1.6,
+    )
+}
+
+/// Прямоугольники содержимого под часами.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
-    pub card: Rect,
-    /// Мелкий заголовок «HUDBAR».
-    pub title: Rect,
-    /// Крупные часы.
-    pub clock: Rect,
-    /// Дата строкой.
-    pub date: Rect,
-    pub user_label: Rect,
-    pub user_box: Rect,
-    pub password_label: Rect,
-    /// Метка Caps Lock справа от подписи поля пароля.
+    /// Поле имени.
+    pub field_user: Rect,
+    /// Поле пароля.
+    pub field_password: Rect,
+    /// Метка Caps Lock внутри поля пароля, справа.
     pub caps: Rect,
-    pub password_box: Rect,
     /// Строка сообщения: есть всегда, рисуется не всегда.
     pub message: Rect,
     pub button: Rect,
-    /// Подвал с подсказками.
-    pub footer: Rect,
+    /// Строка подсказок: клавиши, сеанс или команды питания.
+    pub hints: Rect,
 }
 
-/// Содержимое карточки сверху вниз. Единственный расчёт вертикали: все
-/// прямоугольники выводятся из одного курсора, поэтому зазор между полями не
-/// может разъехаться.
-pub fn of(card: Rect) -> Layout {
-    let ts = type_scale();
-    let left = card.x + PAD;
-    let width = card.w - PAD * 2.0;
-    let mut y = card.y + PAD;
-
-    let title = Rect::new(left, y, width, ts.caption * 2.0);
-    y = title.bottom() + spacing::SM;
-
-    let clock = Rect::new(left, y, width, ts.display * 1.3);
-    y = clock.bottom() + spacing::XS;
-
-    let date = Rect::new(left, y, width, ts.label * 1.6);
-    y = date.bottom() + GROUP_GAP;
-
-    let user_label = Rect::new(left, y, width, LABEL_H);
-    let user_box = Rect::new(left, user_label.bottom() + LABEL_GAP, width, FIELD_H);
-    y = user_box.bottom() + GROUP_GAP;
-
-    let password_label = Rect::new(left, y, width, LABEL_H);
-    // Метка Caps Lock живёт в полосе подписи: отдельная строка под полем
-    // сдвигала бы кнопку и ломала бы «карточка не прыгает».
+/// Содержимое сверху вниз от одного курсора.
+pub fn of(field: Rect) -> Layout {
+    let field_user = field;
+    let field_password = Rect::new(field.x, field_user.bottom() + FIELD_GAP, field.w, FIELD_H);
     let caps = Rect::new(
-        password_label.right() - width * 0.5,
-        password_label.y,
-        width * 0.5,
-        password_label.h,
+        field_password.x + field_password.w * 0.5,
+        field_password.y,
+        field_password.w * 0.5 - spacing::MD,
+        field_password.h,
     );
-    let password_box = Rect::new(left, password_label.bottom() + LABEL_GAP, width, FIELD_H);
-    y = password_box.bottom() + spacing::SM;
-
-    let message = Rect::new(left, y, width, MESSAGE_H);
-    y = message.bottom() + spacing::XS;
-
-    let button = Rect::new(left, y, width, BUTTON_H);
-
-    // Подвал прижат к низу карточки, а не к кнопке: он часть рамки, как в
-    // меню и окнах биндов.
-    let footer = Rect::new(
-        card.x,
-        card.bottom() - card_frame::FOOTER_H,
-        card.w,
-        card_frame::FOOTER_H,
+    let message = Rect::new(
+        field.x,
+        field_password.bottom() + spacing::XS,
+        field.w,
+        MESSAGE_H,
+    );
+    let button = Rect::new(field.x, message.bottom() + spacing::XS, field.w, BUTTON_H);
+    let hints = Rect::new(
+        field.x + (field.w - HINT_W) / 2.0,
+        button.bottom() + GROUP_GAP,
+        HINT_W,
+        hint_height(),
     );
 
     Layout {
-        card,
-        title,
-        clock,
-        date,
-        user_label,
-        user_box,
-        password_label,
+        field_user,
+        field_password,
         caps,
-        password_box,
         message,
         button,
-        footer,
+        hints,
     }
 }
 
@@ -159,46 +158,44 @@ mod tests {
 
     const VIEW: (f32, f32) = (1920.0, 1080.0);
 
-    /// Карточка стоит по центру по горизонтали и выше центра по вертикали.
+    /// Поля по центру, часы над ними, а вся композиция — выше середины.
     #[test]
-    fn the_card_is_centred_and_sits_above_the_middle() {
-        let card = card(VIEW);
-        assert!((card.x + card.w / 2.0 - VIEW.0 / 2.0).abs() < 1.0);
-        let middle = VIEW.1 / 2.0;
+    fn the_clock_sits_above_the_centred_fields() {
+        let field = field(VIEW);
+        assert!((field.x + field.w / 2.0 - VIEW.0 / 2.0).abs() < 1.0);
+        let clock = clock(field);
+        assert!(clock.bottom() <= field.y, "часы выше полей");
+        let date = date(field);
+        assert!(date.y >= clock.bottom() && date.bottom() <= field.y);
+        let group_middle = (clock.y + field.y) / 2.0;
         assert!(
-            card.y + card.h / 2.0 < middle,
-            "центр карточки выше середины экрана"
+            group_middle < VIEW.1 / 2.0,
+            "композиция выше середины экрана"
         );
-        assert!(card.y >= 0.0);
-        assert!(card.bottom() <= VIEW.1, "карточка влезает по высоте");
+        assert!(clock.y >= 0.0);
     }
 
-    /// Маленький экран: карточка не уезжает за края и не получает
-    /// отрицательных координат.
+    /// Маленький экран: поля не уезжают за края и не получают отрицательных
+    /// координат.
     #[test]
-    fn a_small_surface_still_contains_the_card() {
-        let card = card((480.0, 400.0));
-        assert!(card.x >= 0.0);
-        assert!(card.y >= 0.0);
-        assert!(card.w <= 480.0);
+    fn a_small_surface_still_contains_the_fields() {
+        let field = field((480.0, 400.0));
+        assert!(field.x >= 0.0);
+        assert!(field.y >= 0.0);
+        assert!(field.w <= 480.0);
     }
 
-    /// Поля не пересекаются, идут сверху вниз в правильном порядке и лежат
-    /// внутри карточки. Это единственная защита от «подпись наехала на поле».
+    /// Строки не пересекаются, идут сверху вниз и лежат в пределах строки
+    /// подсказок. Это единственная защита от «сообщение наехало на кнопку».
     #[test]
-    fn the_rows_do_not_overlap_and_stay_inside_the_card() {
-        let card = card(VIEW);
-        let layout = of(card);
+    fn the_rows_do_not_overlap() {
+        let layout = of(field(VIEW));
         let rows = [
-            layout.title,
-            layout.clock,
-            layout.date,
-            layout.user_label,
-            layout.user_box,
-            layout.password_label,
-            layout.password_box,
+            layout.field_user,
+            layout.field_password,
             layout.message,
             layout.button,
+            layout.hints,
         ];
         for pair in rows.windows(2) {
             assert!(
@@ -209,47 +206,35 @@ mod tests {
             );
         }
         for row in rows {
-            assert!(row.x >= card.x - 0.01 && row.right() <= card.right() + 0.01);
-            assert!(row.y >= card.y - 0.01 && row.bottom() <= card.bottom() + 0.01);
+            assert!(row.x >= 0.0 && row.right() <= VIEW.0);
         }
-        // Подвал ниже кнопки и прижат к низу карточки.
-        assert!(layout.footer.y >= layout.button.bottom());
-        assert!((layout.footer.bottom() - card.bottom()).abs() < 0.01);
     }
 
-    /// Место под сообщение reserved всегда: размеры карточки не зависят от
-    /// того, есть ли текст ошибки.
+    /// Место под сообщение reserved всегда: высота композиции от него не
+    /// зависит.
     #[test]
     fn the_message_row_reserves_space() {
-        let layout = of(card(VIEW));
+        let layout = of(field(VIEW));
         assert!(layout.message.h >= 16.0);
-        assert!(layout.message.bottom() <= layout.button.y + 0.01);
-        assert_eq!(card_height(), of(card(VIEW)).card.h);
+        assert_eq!(group_height(), layout.hints.bottom() - clock(field(VIEW)).y);
     }
 
-    /// Метка Caps Lock стоит в полосе подписи пароля и не наезжает на неё.
+    /// Метка Caps Lock внутри поля пароля справа и не наезжает на его центр.
     #[test]
-    fn the_caps_badge_shares_the_password_label_band() {
-        let layout = of(card(VIEW));
-        assert_eq!(layout.caps.y, layout.password_label.y);
-        assert_eq!(layout.caps.h, layout.password_label.h);
-        assert!(layout.caps.right() <= layout.password_label.right() + 0.01);
+    fn the_caps_badge_lives_in_the_password_field() {
+        let layout = of(field(VIEW));
+        assert_eq!(layout.caps.y, layout.field_password.y);
+        assert_eq!(layout.caps.h, layout.field_password.h);
+        assert!(layout.caps.right() <= layout.field_password.right());
+        assert!(layout.caps.x >= layout.field_password.x + layout.field_password.w / 2.0);
     }
 
-    /// Подсказки подвала начинаются там же, где поля, — на `PAD`, а не на
-    /// меньшем отступе `card_frame::footer`. Разделитель при этом остаётся на
-    /// всю ширину карточки.
+    /// Кнопка и поля одной ширины: иначе акцентная кнопка выглядит как
+    /// отдельный элемент, а не действие над этими полями.
     #[test]
-    fn the_footer_hints_line_up_with_the_fields() {
-        let layout = of(card(VIEW));
-        let hints_x = layout.footer.x + PAD;
-        assert!(
-            (hints_x - layout.user_box.x).abs() <= 1.0,
-            "подвал {hints_x}, поля {}",
-            layout.user_box.x
-        );
-        assert!((hints_x - layout.password_box.x).abs() <= 1.0);
-        assert_eq!(layout.footer.x, layout.card.x);
-        assert_eq!(layout.footer.w, layout.card.w);
+    fn the_button_matches_the_fields() {
+        let layout = of(field(VIEW));
+        assert_eq!(layout.button.x, layout.field_user.x);
+        assert_eq!(layout.button.w, layout.field_user.w);
     }
 }

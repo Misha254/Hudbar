@@ -6,10 +6,10 @@ W5.1 (звук), W5.2a/b (Wi-Fi), W5.3a/b (Bluetooth), W5.4a/b/c (дисплеи
 W5.5 (хранилища), W5.6 (OSD громкости, микрофона и яркости), E (единая
 тема), F (доводка) — готовы, проверки зелёные.
 Крышка (logind `ignore` + `niri/lid.kdl`) и переживание панелью отключения
-выхода — сделаны. Тема Zen Browser — шаблон и запись в matugen есть.
+выхода — сделаны. D (живая тема Zen Browser) — сделана.
 
-Осталось: D (Zen — по решению отложен) и G — снапшоты btrfs и мастер
-первого запуска. Полный английский в G уже сделан.
+Осталось: G — снапшоты btrfs и мастер первого запуска. Полный английский в G
+уже сделан.
 
 ## Анимации — сделано (A1–A6)
 
@@ -70,14 +70,16 @@ W5.5 (хранилища), W5.6 (OSD громкости, микрофона и �
   числе при падении), поэтому застрять чёрным экраном нельзя; на удаление
   накладки нужен ещё и жёсткий таймер.
 
-## D. Zen Browser через matugen — отложено
+## D. Zen Browser через matugen — сделано (2026-11-06)
 
-Разведка показала, что шаблон уже есть
-(`~/.config/matugen/templates/zen-userchrome.css`) и запись в `config.toml`
-создаёт `~/.var/app/app.zen_browser.zen/.zen/s7sjt355.Default (release)/chrome/userChrome.css`
-— файл существует, путь верный. Тему по смене обоев пользователь просит пока
-не трогать. Открытое: `userChrome.css` требует перезапуска браузера, и light/dark
-через `prefers-color-scheme` не проверены.
+Статический `userChrome.css` не подходил: Zen сам объявляет те же `--zen-*`
+переменные, и без `!important` мост проигрывал, а `userChrome.css` он не
+перечитывает. Решение — Omafox: matugen пишет JSON, native-host отдаёт его
+подписанному расширению, расширение меняет Firefox-тему на лету, а
+`chrome/omafox.css` переводит `--lwt-*` в `--zen-*`. Отдельно переопределён
+inline-градиент `#zen-browser-background`, иначе фон контента оставался серым.
+Установка — `./install.sh --zen`, подробности — `contrib/zen/README.md`.
+Открытое: светлая палитра (`mode` в шаблоне зафиксирован как `dark`).
 
 ## E. Единая тема — сделано (2026-10-28)
 
@@ -150,7 +152,7 @@ nvim (lualine), zathura, spicetify, hudbar, swaylock, cal, clipse, chromium.
   (`nmc_readline_echo` в NetworkManager), pty не нужен. Догадки по слову
   `password` убраны из обоих журналов (`log::command_line`,
   `CommandSpec::log_line`): прячет пометка. Проверено живьём 15.10.2026
-  (`nmcli` 1.58.1, сеть `HONOR 200`): промпт `Password (802-11-wireless-security.psk)`
+  (`nmcli` 1.58.1, домашняя сеть): промпт `Password (802-11-wireless-security.psk)`
   прочитан из pipe, подключение прошло, а `ps` за минуту наблюдения показал
   только `nmcli --ask device wifi connect <SSID>` — пароля в `argv` не было.
 - Ограничение клонирования: `SecretData(Vec<u8>)` клонируется вместе с
