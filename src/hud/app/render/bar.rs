@@ -329,6 +329,22 @@ impl App {
             });
         }
 
+        // Заряд наушников стоит отдельной плашкой сразу после батареи: тот же
+        // индекс в `module_order` и устойчивая сортировка держат их рядом.
+        if let Some(pct) = sys.headset_pct {
+            let color = if pct <= 15 { p.error } else { p.text };
+            let mut c = Cell::new(format!("{I_HEADSET}{}{pct}%", self.icon_gap()), color);
+            c.pad_l = 4.0;
+            c.pad_r = 4.0;
+            right.push(Slot {
+                order: self.settings.order_index("battery"),
+                group: Group {
+                    cells: vec![c],
+                    chip: Some((5.0, 5.0, chip_bg)),
+                },
+            });
+        }
+
         if self.settings.system {
             let mut cells: Vec<Cell> = vec![Cell::new(
                 format!("{I_CPU}{}{}%", self.icon_gap(), sys.cpu_pct),

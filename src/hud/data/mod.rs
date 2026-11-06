@@ -26,8 +26,8 @@ pub use weather::refresh_weather;
 use audio_watch::apply as apply_audio;
 use network::{wifi, wifi_radio_on};
 use system::{
-    bat_time_now, battery, bt_on, cpu_pct, cpu_temp, dnd_paused, mem_pct, mem_used_gib,
-    recorder_on, webcam_active,
+    bat_time_now, battery, bt_headset_pct, bt_on, cpu_pct, cpu_temp, dnd_paused, mem_pct,
+    mem_used_gib, recorder_on, webcam_active,
 };
 use weather::weather_loop;
 use workspaces::niri_loop;
@@ -104,6 +104,8 @@ pub struct WeatherData {
 pub struct Sys {
     pub battery_pct: Option<u8>,
     pub battery_wh: Option<f32>,
+    /// Заряд подключённых Bluetooth-наушников, если устройство его сообщает.
+    pub headset_pct: Option<u8>,
     pub charging: bool,
     pub ac_online: bool,
     /// Остаток времени батареи: часы и минуты. Формат выбирает отрисовка,
@@ -226,6 +228,9 @@ const BATTERY_EVENT_DEBOUNCE_TICKS: u64 = 3;
 /// а его отказ не должен ни обнулять значение, ни тормозить секундный тик, на
 /// котором читаются wifi и bluetooth.
 const AUDIO_POLL_TICKS: u64 = 6;
+/// Заряд наушников меняется медленно, а `GetManagedObjects` обходит всё дерево
+/// BlueZ. Пяти секунд хватает и на появление плашки после подключения.
+const HEADSET_POLL_TICKS: u64 = 5;
 
 fn battery_refresh_due(tick: u64, pending_since: Option<u64>) -> bool {
     match pending_since {
@@ -236,6 +241,10 @@ fn battery_refresh_due(tick: u64, pending_since: Option<u64>) -> bool {
 
 fn audio_poll_due(tick: u64) -> bool {
     tick % AUDIO_POLL_TICKS == 1
+}
+
+fn headset_poll_due(tick: u64) -> bool {
+    tick % HEADSET_POLL_TICKS == 1
 }
 
 fn sys_loop(shared: Arc<Shared>) {
@@ -285,6 +294,13 @@ fn sys_loop(shared: Arc<Shared>) {
         let (wifi_up, wifi_signal, wifi_iface) = wifi();
         let wifi_en = wifi_radio_on(&wifi_iface);
         let bt = bt_on(bt_conn.as_ref());
+        // Адаптер выключен — наушников точно нет: опрос пропускаем, но плашку
+        // гасим, иначе на ней остался бы прошлый заряд.
+        let headset = if bt {
+            headset_poll_due(tick).then(|| bt_headset_pct(bt_conn.as_ref()))
+        } else {
+            Some(None)
+        };
         let extras = if tick.is_multiple_of(2) {
             Some((recorder_on(), webcam_active(), dnd_paused()))
         } else {
@@ -309,6 +325,10 @@ fn sys_loop(shared: Arc<Shared>) {
                 upd!(charging, charging);
                 upd!(ac_online, ac);
                 upd!(bat_time, bat_time);
+            }
+            // `Some(None)` — опрос был и наушников нет: плашка гаснет.
+            if let Some(pct) = headset {
+                upd!(headset_pct, pct);
             }
             if let Some((cpu, temp, mem, mem_pct)) = stats {
                 upd!(cpu_pct, cpu);
@@ -346,7 +366,7 @@ mod tests {
     use super::workspaces::parse_ws;
     use super::{
         AUDIO_POLL_TICKS, BATTERY_EVENT_DEBOUNCE_TICKS, BtDev, WifiNet, audio_poll_due,
-        battery_refresh_due,
+        battery_refresh_due, headset_poll_due,
     };
 
     #[test]
@@ -373,6 +393,13 @@ mod tests {
         assert!(!audio_poll_due(2));
         assert!(!audio_poll_due(AUDIO_POLL_TICKS));
         assert!(audio_poll_due(AUDIO_POLL_TICKS + 1), "следующий опрос");
+    }
+
+    #[test]
+    fn headset_battery_is_polled_every_few_seconds() {
+        assert!(headset_poll_due(1), "первый опрос — сразу");
+        assert!(!headset_poll_due(2));
+        assert!(headset_poll_due(6), "следующий опрос через пять секунд");
     }
 
     #[test]

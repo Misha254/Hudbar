@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -228,6 +229,49 @@ pub(super) fn rfkill_state(kind: &str) -> Option<bool> {
     found.then_some(true)
 }
 
+/// Объекты BlueZ: путь → интерфейс → свойства. Тот же вид, что отдаёт
+/// `GetManagedObjects`.
+type BluezObjects = HashMap<dbus::Path<'static>, HashMap<String, dbus::arg::PropMap>>;
+
+/// Заряд подключённой Bluetooth-гарнитуры. BlueZ заводит интерфейс `Battery1`
+/// только у устройств, которые сами сообщают процент, поэтому опрашивать
+/// `bluetoothctl` и разбирать текст не нужно.
+pub(super) fn bt_headset_pct(conn: Option<&dbus::blocking::Connection>) -> Option<u8> {
+    let conn = conn?;
+    let proxy = dbus::blocking::Proxy::new("org.bluez", "/", Duration::from_millis(250), conn);
+    let (objects,): (BluezObjects,) = proxy
+        .method_call(
+            "org.freedesktop.DBus.ObjectManager",
+            "GetManagedObjects",
+            (),
+        )
+        .ok()?;
+    headset_pct(&objects)
+}
+
+/// Берёт заряд подключённого аудиоустройства. Старшие биты `Class` — класс
+/// устройства: 4 — аудио/видео (наушники, колонки). Мышь или телефон с
+/// батареей под иконку наушников не попадут. Если аудиоустройств несколько,
+/// показывается худший заряд — обходить `HashMap` в случайном порядке нельзя.
+fn headset_pct(objects: &BluezObjects) -> Option<u8> {
+    objects
+        .values()
+        .filter_map(|interfaces| {
+            let device = interfaces.get("org.bluez.Device1")?;
+            let battery = interfaces.get("org.bluez.Battery1")?;
+            if device.get("Connected")?.0.as_u64()? == 0 {
+                return None;
+            }
+            let class = device.get("Class")?.0.as_u64()?;
+            if (class >> 8) & 0x1f != 4 {
+                return None;
+            }
+            let pct = battery.get("Percentage")?.0.as_u64()?;
+            Some(pct.min(100) as u8)
+        })
+        .min()
+}
+
 pub(super) fn bt_on(conn: Option<&dbus::blocking::Connection>) -> bool {
     if let Some(conn) = conn {
         let proxy = dbus::blocking::Proxy::new(
@@ -305,7 +349,8 @@ pub(super) fn dnd_paused() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::battery_wh;
+    use super::{BluezObjects, battery_wh, headset_pct};
+    use std::collections::HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -367,5 +412,72 @@ mod tests {
         assert_eq!(battery_wh(&p), None);
 
         fs::remove_dir_all(p).unwrap();
+    }
+
+    const HEADSET: &str = "/org/bluez/hci0/dev_3C_B0_ED_EF_EF_86";
+
+    /// Один объект BlueZ с батареей. `class` — класс устройства, как в
+    /// `org.bluez.Device1.Class`.
+    fn bluez_object(path: &str, connected: bool, class: u32, pct: u8) -> BluezObjects {
+        use dbus::arg::{PropMap, RefArg, Variant};
+
+        let mut device = PropMap::new();
+        device.insert(
+            "Connected".to_string(),
+            Variant(Box::new(connected) as Box<dyn RefArg>),
+        );
+        device.insert(
+            "Class".to_string(),
+            Variant(Box::new(class) as Box<dyn RefArg>),
+        );
+        let mut battery = PropMap::new();
+        battery.insert(
+            "Percentage".to_string(),
+            Variant(Box::new(pct) as Box<dyn RefArg>),
+        );
+
+        let mut interfaces = HashMap::new();
+        interfaces.insert("org.bluez.Device1".to_string(), device);
+        interfaces.insert("org.bluez.Battery1".to_string(), battery);
+
+        let mut objects = HashMap::new();
+        objects.insert(dbus::Path::from(path.to_string()), interfaces);
+        objects
+    }
+
+    #[test]
+    fn headset_battery_comes_from_a_connected_audio_device() {
+        let objects = bluez_object(HEADSET, true, 0x0024_0404, 55);
+        assert_eq!(headset_pct(&objects), Some(55));
+    }
+
+    #[test]
+    fn headset_battery_ignores_disconnected_devices_and_non_audio() {
+        assert_eq!(
+            headset_pct(&bluez_object(HEADSET, false, 0x0024_0404, 55)),
+            None
+        );
+        assert_eq!(
+            headset_pct(&bluez_object(HEADSET, true, 0x0000_0200, 80)),
+            None
+        );
+    }
+
+    #[test]
+    fn headset_battery_is_clamped_to_a_percentage() {
+        let objects = bluez_object(HEADSET, true, 0x0024_0404, 200);
+        assert_eq!(headset_pct(&objects), Some(100));
+    }
+
+    #[test]
+    fn the_lowest_battery_of_several_headsets_wins() {
+        let mut objects = bluez_object(HEADSET, true, 0x0024_0404, 80);
+        objects.extend(bluez_object(
+            "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
+            true,
+            0x0024_0404,
+            35,
+        ));
+        assert_eq!(headset_pct(&objects), Some(35));
     }
 }
