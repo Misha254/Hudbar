@@ -55,6 +55,8 @@ src/hud/palette.rs     цвета из colors.css
 src/hud/settings.rs    что показывать, из settings.json
 src/hud/shell.rs       общие куски цикла окон: шаг колеса, ожидание сокета, дожимание проявления
 src/hud/exec_util.rs   единая обёртка внешних команд: таймаут, группа процессов, ошибки
+src/hud/locker/auth.rs проверка пароля: выбор сервиса PAM и account-стека
+src/hud/locker/pam_ffi.rs FFI PAM: единственный unsafe-слой блокировки
 src/hud/app/mod.rs     связывает ui, render и handlers
 src/hud/app/ui.rs      константы, иконки, типы интерфейса, примитивы рисования
 src/hud/app/render/mod.rs     App и общие импорты отрисовки
