@@ -89,6 +89,7 @@ fn main() {
         sys: std::sync::Mutex::new(hud::data::Sys::default()),
         dirty: std::sync::atomic::AtomicBool::new(true),
         audio_watch_live: std::sync::atomic::AtomicBool::new(false),
+        power_event: std::sync::atomic::AtomicBool::new(false),
         wake_tx,
     });
     hud::data::spawn(shared.clone());

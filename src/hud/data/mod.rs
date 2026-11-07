@@ -167,6 +167,9 @@ pub struct Shared {
     /// тогда секундный опрос `wpctl` не нужен. Флаг ставит поток
     /// `audio_watch`; упавший поток снимает его, и опрос возвращается.
     pub audio_watch_live: AtomicBool,
+    /// Ядро прислало uevent `power_supply`: питание изменилось, пора
+    /// перечитать батарею. Ставит слушатель uevent, снимает `sys_loop`.
+    pub power_event: AtomicBool,
     pub wake_tx: OwnedFd,
 }
 
@@ -232,10 +235,10 @@ const BATTERY_EVENT_DEBOUNCE_TICKS: u64 = 3;
 /// потоке событий `wpctl` не запускается вовсе: два процесса на опрос стоят
 /// дороже всех остальных чтений вместе.
 const AUDIO_POLL_TICKS: u64 = 6;
-/// AC/зарядка: `power_state` читает ACPI-EC, одно чтение стоит десятки
-/// миллисекунд на энергосбережении. Пяти секунд хватает: смена питания —
-/// редкое событие, а после неё полный пересчёт всё равно ждёт стабилизации.
-const POWER_POLL_TICKS: u64 = 5;
+/// Запасной опрос питания, если uevent недоступен. Основной путь — событие
+/// `power_supply` от ядра: оно приходит сразу, а `power_state` читает ACPI-EC,
+/// что на энергосбережении стоит десятки миллисекунд.
+const POWER_POLL_TICKS: u64 = 30;
 /// `recorder_on` читает `/proc/*/comm` у всех процессов. Пяти секунд хватает,
 /// чтобы плашка REC появилась после старта записи.
 const RECORDER_POLL_TICKS: u64 = 5;
@@ -295,7 +298,13 @@ fn sys_loop(shared: Arc<Shared>) {
     let bt_conn = dbus::blocking::Connection::new_system().ok();
     loop {
         tick += 1;
-        // AC/Charging проверяем часто, но полный расчёт ждёт стабилизации sysfs.
+        // uevent питания приходит сразу, но `power_now` в sysfs обновляется
+        // чуть позже: событие только назначает пересчёт с той же выдержкой,
+        // что и смена, замеченная опросом.
+        if shared.power_event.swap(false, Ordering::Relaxed) {
+            battery_pending_since = Some(tick);
+        }
+        // Запасной путь, если netlink-подписка на uevent недоступна.
         if power_poll_due(tick)
             && let Some(state) = power_state()
         {
@@ -452,7 +461,7 @@ mod tests {
     fn power_and_recording_are_polled_less_often_than_every_tick() {
         assert!(power_poll_due(1), "первая проверка — сразу");
         assert!(!power_poll_due(2));
-        assert!(power_poll_due(6), "следующая через пять секунд");
+        assert!(power_poll_due(31), "запасной опрос раз в 30 секунд");
 
         assert!(recorder_poll_due(1), "первая проверка — сразу");
         assert!(!recorder_poll_due(2));

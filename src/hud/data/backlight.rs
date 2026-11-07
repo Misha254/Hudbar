@@ -1,4 +1,4 @@
-//! Яркость экрана: uevent ядра вместо опроса sysfs.
+//! Яркость экрана и события питания: uevent ядра вместо опроса sysfs.
 //!
 //! `brightnessctl` и `light` меняют `/sys/class/backlight/<устройство>/brightness`,
 //! и ядро на каждую запись шлёт `KOBJ_CHANGE` в netlink-группу uevent. Подписка
@@ -6,6 +6,10 @@
 //! `pactl subscribe`, и не тратит пробуждения в простое. Событие — только повод
 //! перечитать процент: значение берётся из sysfs, поэтому неважно, чем яркость
 //! меняли — клавишей, ползунком или записью в файл.
+//!
+//! Через тот же сокет приходят `SUBSYSTEM=power_supply`: менять питание вручную
+//! или опрашивать ACPI-EC каждые несколько секунд не нужно. Слушатель только
+//! взводит флаг, а батарею перечитывает `sys_loop` после стабилизации sysfs.
 //!
 //! Если сокет uevent открыть не удалось, остаётся прежний путь — чтение файла
 //! раз в сто миллисекунд.
@@ -18,6 +22,7 @@
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use nix::errno::Errno;
@@ -150,8 +155,16 @@ fn watch(shared: &Shared) -> bool {
     let mut buf = [0u8; 8192];
     loop {
         match recv(fd.as_raw_fd(), &mut buf, MsgFlags::empty()) {
-            Ok(size) if is_backlight_event(&buf[..size]) => refresh(shared, read()),
-            Ok(_) => {}
+            Ok(size) => {
+                let message = &buf[..size];
+                if is_backlight_event(message) {
+                    refresh(shared, read());
+                } else if is_power_event(message) {
+                    // Значение читает `sys_loop`: событие приходит до того, как
+                    // ACPI обновит `power_now`, поэтому пересчёт ждёт пару тиков.
+                    shared.power_event.store(true, Ordering::Relaxed);
+                }
+            }
             // Сигнал прервал ожидание — просто ждём следующее событие.
             Err(Errno::EINTR) => {}
             Err(_) => return true,
@@ -176,9 +189,21 @@ fn poll_sysfs(shared: &Shared) -> ! {
 /// Поля uevent разделены нулями, поэтому сравнивается поле целиком, а не
 /// подстрока: `SUBSYSTEM=backlight` не должен совпадать со случайным путём.
 fn is_backlight_event(message: &[u8]) -> bool {
+    has_subsystem(message, b"backlight")
+}
+
+/// Питание: ядро шлёт `SUBSYSTEM=power_supply`, когда меняется AC или статус
+/// батареи. Этого достаточно, чтобы не читать ACPI-EC по расписанию.
+fn is_power_event(message: &[u8]) -> bool {
+    has_subsystem(message, b"power_supply")
+}
+
+/// Поля uevent разделены нулями, поэтому сравнивается поле целиком, а не
+/// подстрока: `SUBSYSTEM=backlight` не должен совпадать со случайным путём.
+fn has_subsystem(message: &[u8], subsystem: &[u8]) -> bool {
     message
         .split(|byte| *byte == 0)
-        .any(|field| field == b"SUBSYSTEM=backlight")
+        .any(|field| field.strip_prefix(b"SUBSYSTEM=") == Some(subsystem))
 }
 
 pub fn spawn(shared: Arc<Shared>) {
@@ -339,6 +364,21 @@ mod tests {
             b"change@/devices/backlight\0ACTION=change\0"
         ));
         assert!(!is_backlight_event(b""));
+    }
+
+    #[test]
+    fn power_uevent_is_recognized_separately_from_backlight() {
+        let power = b"change@/devices/LNXSYSTM:00/ACPI0003:00/power_supply/AC\0ACTION=change\0SUBSYSTEM=power_supply\0";
+        assert!(is_power_event(power));
+        assert!(!is_backlight_event(power));
+
+        let backlight = b"change@/devices/fake\0SUBSYSTEM=backlight\0";
+        assert!(is_backlight_event(backlight));
+        assert!(!is_power_event(backlight));
+
+        assert!(!is_power_event(
+            b"change@/devices/fake\0SUBSYSTEM=power_supply_extra\0"
+        ));
     }
 
     #[test]
