@@ -10,32 +10,26 @@
 //! удался, меню показывает это в подвале.
 
 use std::process::{Command, Stdio};
+use std::time::Duration;
+
+/// Сколько ждём `pkill`/`pgrep`: они отвечают сразу, секунда — уже зависший
+/// процесс или перегруженная система.
+const SIGNAL_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Запуск приложения без ожидания: kitty, Steam, flatpak. Отдельная функция
 /// вместо `actions::spawn`, потому что здесь нужен запуск с аргументами.
 pub fn spawn_detached(program: &str, args: &[&str]) -> Result<(), String> {
-    Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
+    crate::exec_util::spawn_detached(program, args)
         .map_err(|error| format!("{program} не запустился: {error}"))
 }
 
 /// Перезапуск панели: ровно как это делает окно настроек — сначала TERM
 /// старому процессу, потом запуск нового.
 pub fn restart_hudbar() -> Result<(), String> {
-    let _ = Command::new("pkill")
-        .args(["-TERM", "-x", "hudbar"])
-        .status();
+    let _ = crate::exec_util::run_with_timeout("pkill", &["-TERM", "-x", "hudbar"], SIGNAL_TIMEOUT);
     for _ in 0..30 {
-        let alive = Command::new("pgrep")
-            .args(["-x", "hudbar"])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+        let alive =
+            crate::exec_util::run_with_timeout("pgrep", &["-x", "hudbar"], SIGNAL_TIMEOUT).is_ok();
         if !alive {
             break;
         }

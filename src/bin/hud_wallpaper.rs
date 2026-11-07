@@ -68,6 +68,9 @@ pub mod data {
     pub use super::oneshot_data as oneshot;
 }
 #[allow(dead_code)]
+#[path = "../hud/exec_util.rs"]
+mod exec_util;
+#[allow(dead_code)]
 #[path = "../hud/log.rs"]
 mod log;
 #[allow(dead_code)]

@@ -9,7 +9,11 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::Duration;
+
+/// Сколько ждём `wall.sh --set`: matugen и перезапуск портала занимают
+/// секунды, но зависший скрипт не должен держать окно вечно.
+const APPLY_TIMEOUT: Duration = Duration::from_secs(120);
 
 // Модель выбора обоев. Файл подключается в несколько бинарников через
 // `#[path]`, а Rust ищет такие подмодули рядом с самим файлом, а не в
@@ -154,26 +158,21 @@ pub fn list() -> Vec<String> {
 /// свою копию запуска скрипта. `wall.sh` пишет причину в stderr — она и
 /// возвращается, а не код выхода.
 pub fn apply(file: &str, scheme: &str) -> Result<(), String> {
-    let output = Command::new(home().join(".local/bin/wall.sh"))
-        .arg("--set")
-        .arg(file)
-        .arg(scheme)
-        .output()
-        .map_err(|error| format!("wall.sh не запустился: {error}"))?;
-    if output.status.success() {
-        return Ok(());
+    let script = home().join(".local/bin/wall.sh");
+    let script = script.to_string_lossy();
+    match crate::exec_util::run_with_timeout(&script, &["--set", file, scheme], APPLY_TIMEOUT) {
+        Ok(_) => Ok(()),
+        Err(crate::exec_util::ExecError::Exited { status, stderr, .. }) => {
+            let reason = stderr
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("неизвестная ошибка")
+                .to_string();
+            Err(format!("{reason} (код {})", status.code().unwrap_or(-1)))
+        }
+        Err(error) => Err(format!("wall.sh не запустился: {error}")),
     }
-    let reason = String::from_utf8_lossy(&output.stderr);
-    let reason = reason
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("неизвестная ошибка")
-        .to_string();
-    Err(format!(
-        "{reason} (код {})",
-        output.status.code().unwrap_or(-1)
-    ))
 }
 
 /// Применяет обои, не дожидаясь: для меню, которое не может висеть на

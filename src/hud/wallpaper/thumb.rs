@@ -16,6 +16,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc,
 };
+use std::time::Duration;
 
 /// Сколько миниатюр держит кэш в памяти: 200×112×4 ≈ 87.5 KiB на штуку,
 // 128 штук ≈ 11 МБ — в разы меньше одного кадра.
@@ -27,6 +28,9 @@ pub const THUMB_MAX_H: u32 = 128;
 /// Число рабочих потоков по умолчанию: генерация `vipsthumbnail`/`magick`
 /// тяжёлая, больше трёх нет смысла.
 pub const WORKERS: usize = 2;
+/// Потолок на одну конвертацию: битое или гигантское изображение не должно
+/// держать воркер вечно.
+const THUMB_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Миниатюра: прямые RGBA8. Фото непрозрачные, alpha всегда 255 — поэтому
 /// блит в кадр пишет пиксели напрямую без возни с premultiplied.
@@ -196,11 +200,8 @@ impl FsSource {
         } else {
             super::cache::magick(file, &tmp)
         };
-        let output = std::process::Command::new(spec.program)
-            .args(&spec.args)
-            .output()
-            .ok()?;
-        if !output.status.success() {
+        let args: Vec<&str> = spec.args.iter().map(String::as_str).collect();
+        if crate::exec_util::run_with_timeout(spec.program, &args, THUMB_TIMEOUT).is_err() {
             let _ = std::fs::remove_file(&tmp);
             return None;
         }

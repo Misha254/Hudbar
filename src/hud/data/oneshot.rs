@@ -9,10 +9,8 @@
 //! берёт их отсюда же: одна реализация вместо двух. Иначе чтение DND в меню и
 //! в панели разошлось бы при первом же изменении команды.
 
-use std::io::Read;
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Output;
+use std::time::Duration;
 
 /// Сколько ждём разовую команду. `dunstctl` и `wpctl` отвечают за миллисекунды;
 /// секунда — это уже зависший демон.
@@ -40,8 +38,13 @@ pub fn run_with_timeout_stdin(
     stdin: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<(Option<i32>, String, String), String> {
-    let (status, stdout, stderr) = run_captured(program, args, stdin, timeout)?;
-    Ok((status.code(), stdout, stderr))
+    let output = crate::exec_util::capture_with_timeout(program, args, stdin, timeout)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
 }
 
 /// Как [`run_with_timeout`], но собранным в [`Output`].
@@ -54,106 +57,8 @@ pub fn output_with_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> Result<Output, String> {
-    let (status, stdout, stderr) = run_captured(program, args, None, timeout)?;
-    Ok(Output {
-        status,
-        stdout: stdout.into_bytes(),
-        stderr: stderr.into_bytes(),
-    })
-}
-
-/// Общая механика: запуск, чтение вывода в потоках, ожидание с таймаутом и
-/// снятие процессной группы при превышении. Оба публичных входа отличаются
-/// только формой результата.
-fn run_captured(
-    program: &str,
-    args: &[&str],
-    stdin: Option<&[u8]>,
-    timeout: Duration,
-) -> Result<(ExitStatus, String, String), String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("{program} не запустился: {error}"))?;
-    // Секрет уходит в отдельном потоке: если команда не читает stdin, запись
-    // не должна вешать ожидание; pipe закроется вместе с потоком.
-    if let Some(input) = stdin.map(|input| input.to_vec())
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        std::thread::spawn(move || {
-            use std::io::Write;
-            let _ = stdin.write_all(&input);
-        });
-    }
-    // Вывод читаем в потоках: если не читать, а процесс много пишет, он
-    // заблокируется на записи и не завершится до таймаута.
-    let mut out = child.stdout.take().expect("stdout");
-    let mut err = child.stderr.take().expect("stderr");
-    let out_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = out.read_to_string(&mut buf);
-        buf
-    });
-    let err_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = err.read_to_string(&mut buf);
-        buf
-    });
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < timeout => {
-                thread::sleep(Duration::from_millis(5).min(timeout - started.elapsed()));
-            }
-            Ok(None) => {
-                stop_child(&mut child);
-                let _ = child.wait();
-                let _ = out_handle.join();
-                let _ = err_handle.join();
-                return Err(format!(
-                    "{program} не ответил за {} мс",
-                    timeout.as_millis()
-                ));
-            }
-            Err(error) => {
-                stop_child(&mut child);
-                let _ = child.wait();
-                let _ = out_handle.join();
-                let _ = err_handle.join();
-                return Err(format!("ошибка ожидания {program}: {error}"));
-            }
-        }
-    };
-    let stdout = out_handle.join().unwrap_or_default();
-    let stderr = err_handle.join().unwrap_or_default();
-    Ok((status, stdout, stderr))
-}
-
-fn stop_child(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let process_group = -(child.id() as i32);
-        let _ = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(process_group),
-            nix::sys::signal::Signal::SIGKILL,
-        );
-    }
-    let _ = child.kill();
+    crate::exec_util::capture_with_timeout(program, args, None, timeout)
+        .map_err(|error| error.to_string())
 }
 
 /// Есть ли программа в `PATH` или в `~/.local/bin`. По этому признаку меню
@@ -381,6 +286,7 @@ pub fn network_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn nmcli_terse_keeps_escaped_colons_inside_a_field() {

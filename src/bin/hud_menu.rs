@@ -79,6 +79,9 @@ mod anim;
 #[path = "../hud/canvas.rs"]
 mod canvas;
 #[allow(dead_code)]
+#[path = "../hud/exec_util.rs"]
+mod exec_util;
+#[allow(dead_code)]
 #[path = "../hud/geom.rs"]
 mod geom;
 #[allow(dead_code)]

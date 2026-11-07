@@ -45,6 +45,9 @@ mod canvas;
 #[path = "../hud/card_frame.rs"]
 mod card_frame;
 #[allow(dead_code)]
+#[path = "../hud/exec_util.rs"]
+mod exec_util;
+#[allow(dead_code)]
 #[path = "../hud/geom.rs"]
 mod geom;
 #[allow(dead_code)]

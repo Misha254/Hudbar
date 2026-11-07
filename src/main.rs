@@ -5,6 +5,12 @@ mod hud;
 #[allow(dead_code)]
 #[path = "hud/power_profile.rs"]
 mod power_profile;
+// Общая обёртка внешних команд: её зовут и панель, и окна. Как и
+// `power_profile`, объявлена у корня, потому что бинари собирают модули
+// плоским списком.
+#[allow(dead_code)]
+#[path = "hud/exec_util.rs"]
+mod exec_util;
 
 use std::os::fd::AsFd;
 use std::sync::Arc;
