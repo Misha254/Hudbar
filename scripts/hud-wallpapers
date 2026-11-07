@@ -7,6 +7,11 @@
 #
 # Тег зафиксирован: набор обоев не меняется от релиза к релизу, а в новых
 # релизах ассета нет — `latest` указывал бы на релиз без архива.
+#
+# SHA-256 архива. Пока пусто: владелец должен посчитать его один раз
+# (`sha256sum wallpapers.tar.zst`) и вписать сюда. Пока строка пуста, скрипт
+# предупреждает и распаковывает без проверки.
+walls_sha256=""
 set -euo pipefail
 
 url=${HUDBAR_WALLPAPERS_URL:-https://github.com/Misha254/Hudbar/releases/download/v0.18.15/wallpapers.tar.zst}
@@ -25,7 +30,31 @@ tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
 printf 'скачиваю %s\n' "$url"
-curl -fL --progress-bar "$url" -o "$tmp"
+http=$(curl -fL --progress-bar -w '%{http_code}' "$url" -o "$tmp") || {
+    if [ "$http" = 404 ]; then
+        printf 'архив обоев не найден (HTTP 404): %s\n' "$url" >&2
+        printf 'проверь тег в HUDBAR_WALLPAPERS_URL: в новых релизах ассета нет\n' >&2
+    else
+        printf 'не удалось скачать архив (HTTP %s): %s\n' "${http:-?}" "$url" >&2
+    fi
+    exit 1
+}
+
+if [ -n "$walls_sha256" ]; then
+    command -v sha256sum >/dev/null 2>&1 || {
+        printf 'нужен sha256sum для проверки архива\n' >&2
+        exit 1
+    }
+    actual=$(sha256sum "$tmp" | cut -d' ' -f1)
+    if [ "$actual" != "$walls_sha256" ]; then
+        printf 'SHA-256 не совпал: ожидался %s, получен %s\n' \
+            "$walls_sha256" "$actual" >&2
+        exit 1
+    fi
+    printf 'SHA-256 совпал\n'
+else
+    printf 'предупреждение: SHA-256 архива не задан, проверка пропущена\n' >&2
+fi
 
 printf 'распаковываю в %s\n' "$dest"
 mkdir -p "$dest"
