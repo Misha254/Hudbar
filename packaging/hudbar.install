@@ -10,7 +10,7 @@ _install_hint() {
     cp /usr/share/hudbar/{settings.json,settings.schema.json,colors.css,font} ~/.config/hudbar/
 
 Панель запускает композитор (niri: spawn-at-startup "hudbar"), а окна — обёртки
-hud-menu, hud-apps, hud-keybinds, hud-yazibinds, hud-vpn и hud-wallpaper.
+hud-menu, hud-apps, hud-keybinds, hud-yazibinds и hud-wallpaper.
 Бинарник ищется в HUDBAR_BIN_DIR, затем в ~/.local/bin, затем в PATH, поэтому
 отдельная переменная для пакетной установки не нужна.
 EOF

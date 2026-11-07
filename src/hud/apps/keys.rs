@@ -1,8 +1,8 @@
 //! Ввод окна приложений: клавиша превращается в команду модели.
 //!
 //! Таблица своя, а не общая с меню, по одной причине: в меню `Ctrl+P` — это
-//! «на строку вверх» (там так работает `vim`-раскладка), а в лаунчере та же
-//! клавиша закрепляет приложение. Разбирать клавиши здесь, а не в окне, —
+//! «на строку вверх» (там так работает `vim`-раскладка), а в лаунчере
+//! закрепление живёт на `Ctrl+F`. Разбирать клавиши здесь, а не в окне, —
 //! чтобы правила проверялись тестами без композитора.
 
 use super::super::menu::input::{Key, KeyEvent};
@@ -50,9 +50,8 @@ pub fn translate(event: KeyEvent, query: &str) -> Input {
     }
     if event.ctrl {
         return match event.key {
-            // Закрепление: `Ctrl+P` — по первой букве слова, `Ctrl+F` оставлен
-            // для мышечной памяти от прежнего окна rofi, где закрепляли им же.
-            Key::Char('p') | Key::Char('P') | Key::Char('f') | Key::Char('F') => Input::Pin,
+            // Закрепление: `Ctrl+F` — мышечная память от прежнего окна rofi.
+            Key::Char('f') | Key::Char('F') => Input::Pin,
             // Ctrl+↑↓ — порядок закреплённых; Ctrl+K/J/N остаются навигацией.
             Key::Up => Input::Reorder(-1),
             Key::Down => Input::Reorder(1),
@@ -140,14 +139,14 @@ mod tests {
         assert_eq!(translate(ctrl(Key::Char('k')), ""), Input::Move(-1));
     }
 
-    /// `Ctrl+P` в лаунчере — это закрепление, а не «на строку вверх», как в
-    /// меню. Расхождение намеренное: ради него у окна своя таблица.
+    /// `Ctrl+F` в лаунчере — это закрепление; `Ctrl+P` больше не дублирует
+    /// его, а остаётся свободным.
     #[test]
-    fn ctrl_p_pins_instead_of_moving_up() {
-        assert_eq!(translate(ctrl(Key::Char('p')), ""), Input::Pin);
-        assert_eq!(translate(ctrl(Key::Char('P')), ""), Input::Pin);
-        // Мышечная память rofi: там закрепляли `Ctrl+F`.
+    fn ctrl_f_pins_and_ctrl_p_is_free() {
         assert_eq!(translate(ctrl(Key::Char('f')), ""), Input::Pin);
+        assert_eq!(translate(ctrl(Key::Char('F')), ""), Input::Pin);
+        assert_eq!(translate(ctrl(Key::Char('p')), ""), Input::Ignore);
+        assert_eq!(translate(ctrl(Key::Char('P')), ""), Input::Ignore);
         // Стрелки с Ctrl двигают закреплённое, а не выбор.
         assert_eq!(translate(ctrl(Key::Up), ""), Input::Reorder(-1));
         assert_eq!(translate(ctrl(Key::Down), ""), Input::Reorder(1));

@@ -207,7 +207,7 @@ pub fn draw_background(pixmap: &mut tiny_skia::Pixmap, card: Rect, ui: UiPalette
         card.y * SCALE,
         card.w * SCALE,
         card.h * SCALE,
-        ui_tokens::radii::LG * SCALE,
+        ui_tokens::radii::WINDOW * SCALE,
         ui.panel,
     );
     stroke_rect(

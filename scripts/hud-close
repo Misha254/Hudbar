@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Закрывает открытое окно HUDbar по Super+Q.
 #
-# Меню, лаунчер, VPN, схемы и обои — слои zwlr_layer_shell, а не обычные окна:
+# Меню, лаунчер, схемы и обои — слои zwlr_layer_shell, а не обычные окна:
 # `close-window` в niri их не видит. Каждое окно держит pid-файл в
 # XDG_RUNTIME_DIR, по нему и закрываем. Если ни одно не открыто, Super+Q
 # делает то же, что раньше, — закрывает обычное окно.
@@ -10,7 +10,7 @@ set -u
 runtime="${XDG_RUNTIME_DIR:-/tmp}"
 newest=""
 newest_time=-1
-for name in hudbar-menu.pid hudbar-apps.pid hudbar-vpn.pid hudbar-schemes.pid hudbar-wallpaper.pid; do
+for name in hudbar-menu.pid hudbar-apps.pid hudbar-schemes.pid hudbar-wallpaper.pid; do
     path="$runtime/$name"
     [ -r "$path" ] || continue
     pid="$(cat "$path" 2>/dev/null)" || continue

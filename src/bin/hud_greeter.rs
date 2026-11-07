@@ -18,9 +18,9 @@
 
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -73,6 +73,9 @@ pub mod oneshot_data;
 pub mod data {
     pub use super::oneshot_data as oneshot;
 }
+#[allow(dead_code)]
+#[path = "../hud/exec_util.rs"]
+mod exec_util;
 #[allow(dead_code)]
 #[path = "../hud/greeter/mod.rs"]
 mod greeter;
@@ -497,9 +500,11 @@ impl GreeterApp {
             log::warn(format!("состояние не сохранено: {error}"));
         }
         // argv-вызов без shell: строка не проходит через интерпретатор.
-        let _ = Command::new("niri")
-            .args(["msg", "action", "quit", "--skip-confirmation"])
-            .status();
+        let _ = crate::exec_util::run_with_timeout(
+            "niri",
+            &["msg", "action", "quit", "--skip-confirmation"],
+            Duration::from_secs(5),
+        );
         self.exit.store(true, Ordering::Relaxed);
     }
 
@@ -513,9 +518,9 @@ impl GreeterApp {
             _ => return,
         };
         self.power = false;
-        match Command::new("systemctl").arg(unit).status() {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
+        match crate::exec_util::run_with_timeout("systemctl", &[unit], Duration::from_secs(30)) {
+            Ok(_) => {}
+            Err(crate::exec_util::ExecError::Exited { status, .. }) => {
                 self.notice = Some(format!("systemctl {unit}: код {status}"));
             }
             Err(error) => {

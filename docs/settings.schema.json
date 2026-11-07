@@ -79,7 +79,7 @@
         "network": {
           "type": "boolean",
           "default": true,
-          "description": "Чип сети: Wi-Fi, Bluetooth, VPN."
+          "description": "Чип сети: Wi-Fi и Bluetooth."
         },
         "dnd": {
           "type": "boolean",
@@ -164,25 +164,6 @@
           "maximum": 10800,
           "default": 1200,
           "description": "Сколько секунд без ввода уходить в сон: значение вне диапазона зажимается в 60..10800."
-        }
-      }
-    },
-    "vpn": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Контроллер Mihomo для VPN-окна. Секрета здесь нет и быть не должно: секрет читается из файла или окружения.",
-      "properties": {
-        "controller": {
-          "type": "string",
-          "default": "127.0.0.1:9090",
-          "description": "Адрес внешнего контроллера Mihomo (host:port)."
-        },
-        "timeout_ms": {
-          "type": "integer",
-          "minimum": 300,
-          "maximum": 5000,
-          "default": 1500,
-          "description": "Таймаут обращения к контроллеру: значение вне диапазона зажимается в 300..5000."
         }
       }
     }

@@ -14,6 +14,13 @@
 
 </div>
 
+## Для кого это
+
+HUDbar работает только с **niri на Wayland** и рассчитан на **Arch Linux**:
+раскладка панели и бинды заточены под автора. Остальное — чипы, вид,
+уведомления, OSD — настраивается через `~/.config/hudbar/settings.json`;
+каждое окно можно запускать отдельно, если вся панель не нужна.
+
 [![HUDbar: панель на рабочем столе](assets/screens/overview.webp)](assets/screens/overview.webp)
 
 ## Возможности
@@ -26,7 +33,6 @@
 - **Лаунчер** (`Super+D`). Закреплённые приложения, поиск и иконки SVG/PNG — без rofi и X11.
 - **Обои** (`Super+Z`). Папки, превью и применение без перезапуска сессии.
 - **Бинды** (`Super+Shift+Slash`, `KP_9`). Нативные окна для niri и yazi вместо Rofi-скриптов.
-- **VPN** (`KP_7`). Режимы и серверы Mihomo в том же стиле, что и остальные окна.
 - **Цвета matugen.** `colors.css` перечитывается на лету: тема меняется без перезапуска панели.
 - **Анимации.** Открытие, ховер и высота меню уважают `animations` и `animation_speed`;
   при выключенных анимациях всё применяется сразу.
@@ -55,13 +61,9 @@
     </td>
   </tr>
   <tr>
-    <td width="50%" align="center">
-      <a href="assets/screens/binds-yazi.webp"><img src="assets/screens/binds-yazi.webp" width="100%" alt="Бинды yazi"></a><br>
+    <td colspan="2" align="center">
+      <a href="assets/screens/binds-yazi.webp"><img src="assets/screens/binds-yazi.webp" width="50%" alt="Бинды yazi"></a><br>
       <sub><b>Бинды yazi</b> — те же клавиши, что в редакторе</sub>
-    </td>
-    <td width="50%" align="center">
-      <a href="assets/screens/vpn-menu.webp"><img src="assets/screens/vpn-menu.webp" width="100%" alt="Окно VPN"></a><br>
-      <sub><b>VPN</b> — режим, серверы, обновление</sub>
     </td>
   </tr>
 </table>
@@ -84,7 +86,7 @@ cd Hudbar
 [`contrib/zen`](contrib/zen/README.md).
 
 Обои в репозиторий не входят: `hud-wallpapers` скачивает набор (около 1.9 ГБ) из
-последнего релиза в `~/wallpapers`.
+релиза `v0.18.15` в `~/wallpapers`.
 
 Готовые бинды niri — [`contrib/niri/hudbar.kdl`](contrib/niri/hudbar.kdl). Скопируйте файл
 в `~/.config/niri/` и добавьте `include "~/.config/niri/hudbar.kdl"` в `config.kdl`;
@@ -117,7 +119,7 @@ pkill -x hudbar; hudbar &
 
 | Файл | Что задаёт |
 | --- | --- |
-| `settings.json` | чипы панели, вид, уведомления, OSD, VPN |
+| `settings.json` | чипы панели, вид, уведомления, OSD |
 | `settings.schema.json` | подсказки и проверка `settings.json` в редакторе |
 | `colors.css` | палитра из шести цветов, формат matugen |
 | `font` | имя шрифта интерфейса |
@@ -143,6 +145,13 @@ cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Лицензия
+
+Проект распространяется по лицензии [MIT](LICENSE): Copyright (c) 2026 Misha254.
+
+Код в [`contrib/zen`](contrib/zen) — расширение и native-host Omafox — имеет
+собственную лицензию, см. [`LICENSE.omafox`](contrib/zen/LICENSE.omafox).
 
 ---
 

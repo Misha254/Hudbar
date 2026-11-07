@@ -173,11 +173,10 @@ pub struct RowHighlightStyle {
 // ─────────────────────────── Каркас ───────────────────────────
 
 /// Подложка карточки и её рамка — по `MenuView::card` (menu/view/mod.rs:103-122):
-/// заливка `panel` радиусом `radii::LG` и hairline `border`. Отличие одно и
-/// сознательное: меню рисует рамку четырьмя полосами (`stroke_rect`), и его
-/// углы дорисовывает композитор по layer-rule, а это окно — xdg toplevel,
-/// округлять его нечем, поэтому рамка ведётся по тому же скруглённому контуру,
-/// что и заливка, и пиксели снаружи остаются прозрачными.
+/// заливка `panel` без скругления и hairline `border`. Отличие одно и
+/// сознательное: меню рисует рамку четырьмя полосами (`stroke_rect`), а это
+/// окно — xdg toplevel, поэтому рамка ведётся по тому же контуру, что и
+/// заливка.
 pub fn card(pixmap: &mut tiny_skia::Pixmap, rect: Rect, ui: &UiPalette) {
     fill_round_rect(
         pixmap,
@@ -185,10 +184,10 @@ pub fn card(pixmap: &mut tiny_skia::Pixmap, rect: Rect, ui: &UiPalette) {
         rect.y * SCALE,
         rect.w * SCALE,
         rect.h * SCALE,
-        radius(radii::LG) * SCALE,
+        radius(radii::WINDOW) * SCALE,
         ui.panel,
     );
-    let r = (radius(radii::LG) * SCALE)
+    let r = (radius(radii::WINDOW) * SCALE)
         .min(rect.w * SCALE / 2.0)
         .min(rect.h * SCALE / 2.0);
     let mut builder = tiny_skia::PathBuilder::new();
@@ -614,15 +613,15 @@ mod tests {
         );
     }
 
-    /// Карточка закрашивает не всё: углы снаружи скругления прозрачны.
+    /// Карточка закрашивает углы: окна HUDbar с прямыми углами.
     #[test]
-    fn card_leaves_outer_corners_transparent() {
+    fn card_fills_its_outer_corners() {
         let mut pixmap =
             tiny_skia::Pixmap::new((CARD_W * SCALE) as u32, (200.0 * SCALE) as u32).expect("буфер");
         let ui = ui_palette(Palette::default());
         card(&mut pixmap, Rect::new(0.0, 0.0, CARD_W, 200.0), &ui);
         let corner = pixmap.pixel(0, 0).expect("угол");
-        assert_eq!(corner.alpha(), 0, "угол снаружи прозрачен");
+        assert!(corner.alpha() > 0, "угол карточки залит");
         let middle = pixmap
             .pixel(pixmap.width() / 2, pixmap.height() / 2)
             .expect("центр");

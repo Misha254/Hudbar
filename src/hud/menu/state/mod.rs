@@ -342,23 +342,6 @@ impl Menu {
                 ));
                 Outcome::Changed
             }
-            ItemKind::Action(action @ (Action::VpnMode(_) | Action::VpnNode(_))) => {
-                // Переключение может частично выполниться (например, первый
-                // PUT прошёл, второй нет). Перечитываем состояние и при успехе,
-                // и при ошибке, чтобы строка режима и выбранный узел не врали.
-                let result = (self.action_runner)(&action);
-                self.refresh_dynamic(ProviderKey::VPN);
-                match result {
-                    Ok(()) => {
-                        self.status = Some(Status::Applied(action.describe(self.lang)));
-                        Outcome::Changed
-                    }
-                    Err(error) => {
-                        self.status = Some(Status::Failed(error));
-                        Outcome::Idle
-                    }
-                }
-            }
             ItemKind::Action(Action::RefreshAndRunAll { commands, refresh }) => {
                 // Пресет: команда одна по смыслу, но по факту их несколько, и
                 // все они должны уйти одним нажатием и одним обновлением

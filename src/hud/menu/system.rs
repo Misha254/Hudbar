@@ -64,8 +64,6 @@ impl ProviderKey {
     pub const OUTPUTS: ProviderKey = ProviderKey::new("outputs");
     /// Раздел устройств (W5.5): накопители и безопасное извлечение.
     pub const STORAGE: ProviderKey = ProviderKey::new("storage");
-    /// Раздел VPN (W5.7): режимы поверх селекторов Mihomo.
-    pub const VPN: ProviderKey = ProviderKey::new("vpn");
 }
 
 /// Аргумент команды: обычное значение или секрет. Секрет не попадает в
@@ -893,7 +891,7 @@ mod tests {
     /// если у команды нет слова `password`: прячет тип, а не догадка по слову.
     #[test]
     fn a_marked_secret_is_redacted_under_any_key() {
-        let spec = CommandSpec::new("vpn")
+        let spec = CommandSpec::new("mytool")
             .arg("--psk")
             .secret_arg("s3cr3t-pw")
             .stdin(SecretData::from_str("s3cr3t-pw"));
@@ -935,8 +933,8 @@ mod tests {
         let unmarked = CommandSpec::new("nmcli").arg("password").arg("oops");
         assert_eq!(unmarked.log_line(), "nmcli password oops");
 
-        let marked = CommandSpec::new("vpn").arg("--token").secret_arg("oops");
-        assert_eq!(marked.log_line(), "vpn --token <redacted>");
+        let marked = CommandSpec::new("mytool").arg("--token").secret_arg("oops");
+        assert_eq!(marked.log_line(), "mytool --token <redacted>");
     }
 
     /// Записывающий исполнитель пишет отредактированное и отдаёт по сценарию.

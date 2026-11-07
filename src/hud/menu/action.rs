@@ -234,14 +234,6 @@ pub enum Action {
     /// нечего. Дальше `Menu::submit_secret_input` собирает `CommandSpec` с
     /// `CmdArg::Secret` и кладёт её в ту же очередь, что и `RefreshAndRun`.
     SecretInput(super::secret::SecretTarget),
-    /// Выбрать узел в группе `PROXY`. Отдельное действие, а не режим: режимы
-    /// двигают два селектора, а узел — один, и имя узла приходит из снимка, а не
-    /// из дерева.
-    VpnNode(String),
-    /// Переключить режим VPN: выбор двух селекторов у Mihomo. Это не команда
-    /// и не патч файла, поэтому у исполнителя появился отдельный вызов
-    /// [`Runner::set_selector`], а не ещё один `CommandSpec`.
-    VpnMode(super::vpn::VpnMode),
 }
 
 impl Action {
@@ -279,28 +271,6 @@ impl Action {
                 Language::En => "Refresh".to_string(),
             },
             Action::SecretInput(target) => target.subject().to_string(),
-            Action::VpnMode(mode) => mode.label(lang).to_string(),
-            Action::VpnNode(name) => name.clone(),
-        }
-    }
-
-    /// Режим VPN по действию: нужно тесту, чтобы проверить, что в дереве стоит
-    /// именно выбранный режим.
-    #[allow(dead_code)]
-    pub fn vpn_mode(&self) -> Option<super::vpn::VpnMode> {
-        match self {
-            Action::VpnMode(mode) => Some(*mode),
-            _ => None,
-        }
-    }
-
-    /// Имя узла по действию: нужно тесту, чтобы проверить, что в строке списка
-    /// стоит именно то название, которое пришло из снимка.
-    #[allow(dead_code)]
-    pub fn vpn_node(&self) -> Option<&str> {
-        match self {
-            Action::VpnNode(node) => Some(node),
-            _ => None,
         }
     }
 
@@ -329,9 +299,7 @@ impl Action {
             Action::RefreshAndRun { .. }
             | Action::RefreshAndRunAll { .. }
             | Action::RefreshDynamic(_)
-            | Action::SecretInput(_)
-            | Action::VpnMode(_)
-            | Action::VpnNode(_) => None,
+            | Action::SecretInput(_) => None,
         }
     }
 
@@ -353,9 +321,6 @@ impl Action {
             | Action::RefreshDynamic(_) => false,
             // Ввод пароля оставляет меню открытым на том же разделе.
             Action::SecretInput(_) => false,
-            // Смена режима и выбор узла — как и другие системные операции:
-            // человек остаётся в разделе и видит, что получилось.
-            Action::VpnMode(_) | Action::VpnNode(_) => false,
         }
     }
 
@@ -402,17 +367,6 @@ impl Action {
             // Секрет не умеет исполнитель: пароля у него нет, а собирает
             // команду модель из буфера ввода.
             Action::SecretInput(_) => Ok(()),
-            // Сначала `MODE-RU`, потом `MODE-REST`: между двумя записями трафик
-            // живёт в промежуточном состоянии, и порядок задаёт модель, а не
-            // исполнитель. Срыв на первой ошибке — вторая запись опиралась бы
-            // на несделанную первую.
-            Action::VpnMode(mode) => {
-                for (name, value) in mode.selectors() {
-                    runner.set_selector(name, value)?;
-                }
-                Ok(())
-            }
-            Action::VpnNode(node) => runner.set_selector(super::vpn::PROXY_GROUP, node),
         }
     }
 }
@@ -433,14 +387,6 @@ pub trait Runner {
     fn run_command(&self, spec: &CommandSpec) -> Result<CommandOutput, String> {
         let _ = spec;
         Err("исполнитель не умеет запускать команды".to_string())
-    }
-
-    /// Сменить выбор селектора у VPN-контроллера. Отдельный вызов, потому
-    /// что это HTTP, а не процесс: собирать его в `CommandSpec` пришлось бы
-    /// оборачивать в `curl` и класть секрет в `argv`.
-    fn set_selector(&self, name: &str, value: &str) -> Result<(), String> {
-        let _ = (name, value);
-        Err("исполнитель не умеет менять селекторы".to_string())
     }
 }
 
@@ -475,14 +421,6 @@ impl Runner for SystemRunner {
         super::system::SystemCommandRunner::with_timeout(spec.timeout())
             .run(spec)
             .map_err(|error| error.to_string())
-    }
-
-    fn set_selector(&self, name: &str, value: &str) -> Result<(), String> {
-        let client = super::vpn::controller();
-        client.put(
-            &super::vpn_api::selector_path(name),
-            &super::vpn_api::select_body(value),
-        )
     }
 }
 
@@ -559,11 +497,6 @@ impl Runner for RecordingRunner {
         // Пишется отредактированная строка: секрет из argv сюда не попадает.
         self.push(format!("run {}", spec.log_line()));
         Ok(CommandOutput::empty_success())
-    }
-
-    fn set_selector(&self, name: &str, value: &str) -> Result<(), String> {
-        self.push(format!("selector {name}={value}"));
-        Ok(())
     }
 }
 
@@ -735,36 +668,6 @@ mod tests {
             Action::RefreshDynamic(super::super::system::ProviderKey::AUDIO).describe(Language::Ru),
             "Обновить"
         );
-    }
-
-    #[test]
-    fn vpn_actions_write_the_expected_selectors_in_order() {
-        use super::super::vpn::{PROXY, PROXY_GROUP, SELECTOR_REST, SELECTOR_RU, VpnMode};
-
-        let runner = RecordingRunner::default();
-        Action::VpnMode(VpnMode::All)
-            .perform_with(&runner)
-            .expect("режим применён");
-        assert_eq!(
-            runner.calls(),
-            [
-                format!("selector {SELECTOR_RU}={PROXY}"),
-                format!("selector {SELECTOR_REST}={PROXY}")
-            ]
-        );
-
-        let runner = RecordingRunner::default();
-        let node = "[Q] 🇺🇸 США, Атланта";
-        Action::VpnNode(node.to_string())
-            .perform_with(&runner)
-            .expect("узел выбран");
-        assert_eq!(runner.calls(), [format!("selector {PROXY_GROUP}={node}")]);
-    }
-
-    #[test]
-    fn vpn_actions_keep_the_window_open() {
-        assert!(!Action::VpnMode(super::super::vpn::VpnMode::NoRu).closes_menu());
-        assert!(!Action::VpnNode("узел".to_string()).closes_menu());
     }
 
     /// Команда уходит исполнителю целиком, в записи — без секретов.

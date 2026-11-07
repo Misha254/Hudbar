@@ -1,7 +1,8 @@
 [package]
 name = "hudbar"
-version = "0.18.15"
+version = "0.18.16"
 edition = "2024"
+license = "MIT"
 
 # Release-профиль панели и окон: сборки одноразовые, поэтому единый codegen-unit
 # и thin-LTO дают меньший и быстрее работающий бинарник ценой времени сборки.
@@ -34,10 +35,6 @@ path = "src/bin/hud_keybinds.rs"
 [[bin]]
 name = "hud-yazibinds-rs"
 path = "src/bin/hud_yazibinds.rs"
-
-[[bin]]
-name = "hud-vpn-rs"
-path = "src/bin/hud_vpn.rs"
 
 [[bin]]
 name = "hud-apps-rs"

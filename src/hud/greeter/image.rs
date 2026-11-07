@@ -11,7 +11,7 @@
 //! обрезается по краям, центр совпадает с центром экрана.
 
 use std::path::Path;
-use std::process::Command;
+use std::time::Duration;
 
 use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 
@@ -19,6 +19,9 @@ use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 /// показывает картинку затемнённой и без мелких деталей, а 1920 по ширине
 /// держит файл в мегабайтах, а не в десятках.
 pub const MAX_WIDTH: u32 = 1920;
+/// Потолок на конвертацию внешней программой: битый файл не должен держать
+/// синхронизацию экрана входа бесконечно.
+const CONVERT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Как вписать картинку в кадр: `(масштаб, сдвиг по x, сдвиг по y)`.
 ///
@@ -141,26 +144,30 @@ pub fn to_png(src: &Path, dst: &Path, max_width: u32) -> Result<&'static str, St
         return Ok("png");
     }
     if let Some(tool) = converter() {
-        let output = match tool {
-            // Размер `1920x` — «по ширине, высота по пропорциям».
-            "vipsthumbnail" => Command::new(tool)
-                .arg("--size")
-                .arg(format!("{max_width}x"))
-                .arg("--output")
-                .arg(dst)
-                .arg(src)
-                .output(),
-            _ => Command::new(tool)
-                .arg(src)
-                .arg("-resize")
-                .arg(format!("{max_width}x>"))
-                .arg(dst)
-                .output(),
-        }
-        .map_err(|error| format!("{tool} не запустился: {error}"))?;
-        if !output.status.success() {
-            let reason = String::from_utf8_lossy(&output.stderr);
-            let reason = reason.lines().next().unwrap_or("без описания").trim();
+        // Размер `1920x` — «по ширине, высота по пропорциям».
+        let args: Vec<String> = match tool {
+            "vipsthumbnail" => vec![
+                "--size".to_string(),
+                format!("{max_width}x"),
+                "--output".to_string(),
+                dst.to_string_lossy().into_owned(),
+                src.to_string_lossy().into_owned(),
+            ],
+            _ => vec![
+                src.to_string_lossy().into_owned(),
+                "-resize".to_string(),
+                format!("{max_width}x>"),
+                dst.to_string_lossy().into_owned(),
+            ],
+        };
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        if let Err(error) = crate::exec_util::run_with_timeout(tool, &args, CONVERT_TIMEOUT) {
+            let reason = error.to_string();
+            // Нет утилиты и «утилита упала» — разные беды, и чинить их
+            // человеку тоже по-разному.
+            if matches!(&error, crate::exec_util::ExecError::NotFound { .. }) {
+                return Err(format!("{tool} не запустился: {reason}"));
+            }
             return Err(format!("{tool} не справился: {reason}"));
         }
         // Программа могла отдать картинку шире предела (у `magick` это

@@ -13,6 +13,7 @@
 //! останутся с прежними эффектами, и в журнале будет строка.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Имя include-файла рядом с конфигом niri.
 pub const FILE: &str = "hudbar-power.kdl";
@@ -80,14 +81,17 @@ pub fn apply(saver: bool) -> Result<(), String> {
 /// Перечитывание конфига niri. Отдельный процесс — так эффект подхватывается
 /// тем же путём, что и после ручной правки правил.
 fn reload() -> Result<(), String> {
-    let status = std::process::Command::new("niri")
-        .args(["msg", "action", "load-config-file"])
-        .status()
-        .map_err(|error| format!("niri: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("niri load-config-file: {status}"))
+    let timeout = Duration::from_secs(5);
+    match crate::exec_util::run_with_timeout(
+        "niri",
+        &["msg", "action", "load-config-file"],
+        timeout,
+    ) {
+        Ok(_) => Ok(()),
+        Err(crate::exec_util::ExecError::Exited { status, .. }) => {
+            Err(format!("niri load-config-file: {status}"))
+        }
+        Err(error) => Err(format!("niri: {error}")),
     }
 }
 

@@ -54,6 +54,28 @@ src/hud/tray.rs        протокол StatusNotifierWatcher / StatusNotifierIt
 src/hud/palette.rs     цвета из colors.css
 src/hud/settings.rs    что показывать, из settings.json
 src/hud/shell.rs       общие куски цикла окон: шаг колеса, ожидание сокета, дожимание проявления
+src/hud/exec_util.rs   единая обёртка внешних команд: таймаут, группа процессов, ошибки
+src/hud/apps/view.rs   каркас окна приложений: состояния и проверки
+src/hud/apps/view/layout.rs геометрия, цвета и подписи лаунчера
+src/hud/apps/view/draw.rs   отрисовка карточки, строк, плиток и подвала
+src/hud/menu/wifi.rs   раздел Wi-Fi: каркас и проверки
+src/hud/menu/wifi/data.rs   снимок, профили и разбор `nmcli`
+src/hud/menu/wifi/actions.rs команды `nmcli` для радио, подключения и пересканирования
+src/hud/menu/wifi/view.rs   строки раздела «Wi-Fi»
+src/hud/menu/bluetooth.rs   раздел Bluetooth: каркас и проверки
+src/hud/menu/bluetooth/data.rs   снимок, устройства и разбор `bluetoothctl`
+src/hud/menu/bluetooth/actions.rs команды `bluetoothctl` и поиск
+src/hud/menu/bluetooth/view.rs   строки раздела «Bluetooth»
+src/hud/menu/displays.rs   раздел дисплеев: каркас и проверки
+src/hud/menu/displays/data.rs   типы выводов, режимов и разбор JSON niri
+src/hud/menu/displays/actions.rs команды `niri msg output` и пресеты
+src/hud/menu/displays/view.rs   строки и подменю раздела «Дисплеи»
+src/hud/menu/real.rs   настоящее дерево меню: сборка и проверки
+src/hud/menu/real/data.rs   доступность программ, обои и подписи модулей
+src/hud/menu/real/sections.rs   разделы, группы и строки меню
+src/hud/menu/real/actions.rs   запуск редактора, цели конфигов и подтверждения
+src/hud/locker/auth.rs проверка пароля: выбор сервиса PAM и account-стека
+src/hud/locker/pam_ffi.rs FFI PAM: единственный unsafe-слой блокировки
 src/hud/app/mod.rs     связывает ui, render и handlers
 src/hud/app/ui.rs      константы, иконки, типы интерфейса, примитивы рисования
 src/hud/app/render/mod.rs     App и общие импорты отрисовки
@@ -165,7 +187,7 @@ DND, воркспейсы, элементы трея.
 | `colors.css` | `palette.rs` | каждый проход главного цикла |
 | `font` | `ui::configured_font` | один раз на старте |
 
-`settings.json` содержит секции `hudbar`, `notifications`, `osd`, `idle` и `vpn`; описание
+`settings.json` содержит секции `hudbar`, `notifications`, `osd` и `idle`; описание
 ключей, диапазонов и значений по умолчанию — в `docs/settings.schema.json`. Схема ложится рядом с
 настройками, а в установочном файле стоит ссылка `"$schema": "./settings.schema.json"`: редактор по
 ней проверяет файл и подсказывает ключи. Соответствие схемы коду держат тесты

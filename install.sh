@@ -120,12 +120,12 @@ section "Building release binaries"
 run cargo build --release --bins --manifest-path "$ROOT_DIR/Cargo.toml"
 
 section "Installing binaries → $PREFIX/bin"
-for binary in hudbar hud-menu-rs hud-apps-rs hud-keybinds-rs hud-yazibinds-rs hud-vpn-rs hud-wallpaper-rs hud-schemes-rs; do
+for binary in hudbar hud-menu-rs hud-apps-rs hud-keybinds-rs hud-yazibinds-rs hud-wallpaper-rs hud-schemes-rs; do
     install_file "$ROOT_DIR/target/release/$binary" "$PREFIX/bin/$binary" 0755
 done
 
 section "Installing scripts → $PREFIX/bin"
-for script in hud-menu hud-apps hud-keybinds hud-yazibinds hud-vpn hud-wallpaper hud-wallpapers hud-setting hud-update hud-close; do
+for script in hud-menu hud-apps hud-keybinds hud-yazibinds hud-wallpaper hud-wallpapers hud-setting hud-update hud-close; do
     install_file "$ROOT_DIR/scripts/$script" "$PREFIX/bin/$script" 0755
 done
 install_file "$ROOT_DIR/scripts/hud-migrate-settings" "$PREFIX/bin/hud-migrate-settings" 0755

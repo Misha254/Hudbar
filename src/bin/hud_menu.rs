@@ -79,6 +79,9 @@ mod anim;
 #[path = "../hud/canvas.rs"]
 mod canvas;
 #[allow(dead_code)]
+#[path = "../hud/exec_util.rs"]
+mod exec_util;
+#[allow(dead_code)]
 #[path = "../hud/geom.rs"]
 mod geom;
 #[allow(dead_code)]
@@ -241,7 +244,6 @@ fn spawn_provider_job(key: ProviderKey, generation: u64, lang: settings::Languag
             ProviderKey::STORAGE => {
                 JobOutcome::Provider(key, generation, menu::storage::fetch_nodes(lang))
             }
-            ProviderKey::VPN => JobOutcome::Provider(key, generation, menu::vpn::fetch_nodes(lang)),
             _ => JobOutcome::Provider(key, generation, Err("provider не реализован".to_string())),
         }),
     }

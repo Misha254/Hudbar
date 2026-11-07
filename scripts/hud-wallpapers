@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Скачивает набор обоев Hudbar из последнего релиза в ~/wallpapers.
+# Скачивает набор обоев Hudbar из релиза v0.18.15 в ~/wallpapers.
 #
 # Архив весит около 1.9 ГБ и распаковывается поверх текущих файлов; уже
 # существующие обои с теми же именами будут заменены. Только этим скриптом:
 # в git они не лежат, чтобы не раздувать репозиторий.
+#
+# Тег зафиксирован: набор обоев не меняется от релиза к релизу, а в новых
+# релизах ассета нет — `latest` указывал бы на релиз без архива.
+#
+# SHA-256 архива из атрибута digest релиза v0.18.15: GitHub считает его при
+# загрузке ассета. При смене тега или перезаливке архива хэш нужно обновить.
+walls_sha256="b411d268fea7fa2be958ebdfb4b3b9c794b8376e3f15caf287a542e2ec98b563"
 set -euo pipefail
 
-url=${HUDBAR_WALLPAPERS_URL:-https://github.com/Misha254/Hudbar/releases/latest/download/wallpapers.tar.zst}
+url=${HUDBAR_WALLPAPERS_URL:-https://github.com/Misha254/Hudbar/releases/download/v0.18.15/wallpapers.tar.zst}
 dest="$HOME/wallpapers"
 
 command -v curl >/dev/null 2>&1 || {
@@ -22,7 +29,31 @@ tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
 printf 'скачиваю %s\n' "$url"
-curl -fL --progress-bar "$url" -o "$tmp"
+http=$(curl -fL --progress-bar -w '%{http_code}' "$url" -o "$tmp") || {
+    if [ "$http" = 404 ]; then
+        printf 'архив обоев не найден (HTTP 404): %s\n' "$url" >&2
+        printf 'проверь тег в HUDBAR_WALLPAPERS_URL: в новых релизах ассета нет\n' >&2
+    else
+        printf 'не удалось скачать архив (HTTP %s): %s\n' "${http:-?}" "$url" >&2
+    fi
+    exit 1
+}
+
+if [ -n "$walls_sha256" ]; then
+    command -v sha256sum >/dev/null 2>&1 || {
+        printf 'нужен sha256sum для проверки архива\n' >&2
+        exit 1
+    }
+    actual=$(sha256sum "$tmp" | cut -d' ' -f1)
+    if [ "$actual" != "$walls_sha256" ]; then
+        printf 'SHA-256 не совпал: ожидался %s, получен %s\n' \
+            "$walls_sha256" "$actual" >&2
+        exit 1
+    fi
+    printf 'SHA-256 совпал\n'
+else
+    printf 'предупреждение: SHA-256 архива не задан, проверка пропущена\n' >&2
+fi
 
 printf 'распаковываю в %s\n' "$dest"
 mkdir -p "$dest"

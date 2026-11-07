@@ -4,22 +4,22 @@
 # его контрольная сумма может измениться без единого изменения в коде. Тег
 # зафиксирован, поэтому сборка повторяема и без суммы.
 #
-# Лицензия в репозитории не объявлена, поэтому `custom`. Если она появится,
-# строку нужно заменить, а файл положить в /usr/share/licenses/hudbar/.
+# Лицензия MIT, файл лежит в корне источника и ставится в
+# /usr/share/licenses/hudbar/.
 
 pkgname=hudbar
-pkgver=0.18.15
+pkgver=0.18.16
 pkgrel=1
-pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, VPN, экран входа и блокировки'
+pkgdesc='Панель для niri: бар, меню, лаунчер приложений, окна схем, обоев, экран входа и блокировки'
 arch=('x86_64')
 url='https://github.com/Misha254/Hudbar'
-license=('custom')
+license=('MIT')
 depends=('dbus' 'gcc-libs' 'libxkbcommon' 'pam' 'systemd-libs')
 makedepends=('cargo' 'git' 'rust')
 optdepends=(
     'niri: рабочий стол, для которого панель и написана, и композитор экрана входа'
     'greetd: экран входа hud-greeter-rs'
-    'networkmanager: чип сети, Wi-Fi и VPN (nmcli)'
+    'networkmanager: чип сети, Wi-Fi (nmcli)'
     'bluez-utils: состояние Bluetooth (bluetoothctl)'
     'pipewire: громкость и микрофон (wpctl, pactl)'
     'dunst: уведомления (dunstctl)'
@@ -41,7 +41,6 @@ _bins=(
     hud-apps-rs
     hud-keybinds-rs
     hud-yazibinds-rs
-    hud-vpn-rs
     hud-wallpaper-rs
     hud-schemes-rs
     hud-greeter-rs
@@ -52,7 +51,6 @@ _scripts=(
     hud-apps
     hud-keybinds
     hud-yazibinds
-    hud-vpn
     hud-wallpaper
     hud-setting
     hud-migrate-settings
@@ -95,6 +93,7 @@ package() {
     install -Dm755 contrib/greeter/install-greeter.sh \
         "$pkgdir/usr/share/hudbar/greeter/install-greeter.sh"
 
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgname/CHANGELOG.md"
     install -Dm644 docs/greeter.md "$pkgdir/usr/share/doc/$pkgname/greeter.md"

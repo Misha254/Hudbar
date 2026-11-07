@@ -485,7 +485,7 @@ mod tests {
         let path = dir.join("settings.json");
         seed(
             &path,
-            r#"{"hudbar":{"height":27},"vpn":{"timeout_ms":1500}}"#,
+            r#"{"hudbar":{"height":27},"notifications":{"font_size":15}}"#,
         );
 
         let changed = apply_patch_to(
@@ -502,7 +502,7 @@ mod tests {
         assert_eq!(root["idle"]["screen_off_seconds"], 600);
         assert_eq!(root["idle"]["suspend_seconds"], 1800);
         assert_eq!(root["hudbar"]["height"], 27);
-        assert_eq!(root["vpn"]["timeout_ms"], 1500);
+        assert_eq!(root["notifications"]["font_size"], 15);
     }
 
     #[test]
