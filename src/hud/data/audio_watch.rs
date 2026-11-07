@@ -11,7 +11,8 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use super::oneshot::wpctl_volume;
 use super::{Shared, Sys};
@@ -68,14 +69,41 @@ fn refresh(shared: &Shared) {
 
 pub fn spawn(shared: Arc<Shared>) {
     std::thread::spawn(move || {
-        while listen(&shared) {
-            std::thread::sleep(Duration::from_secs(1));
+        let mut retry = 1u64;
+        loop {
+            let started = Instant::now();
+            listen(&shared);
+            let (wait, next) = retry_step(started.elapsed(), retry);
+            retry = next;
+            std::thread::sleep(Duration::from_secs(wait));
         }
     });
 }
 
-/// Слушает поток событий до обрыва. `true` — пора переподключиться.
-fn listen(shared: &Shared) -> bool {
+/// Стрим, проживший дольше этого, считается рабочим: после него переподключение
+/// идёт сразу, без растущей паузы.
+const STABLE: Duration = Duration::from_secs(30);
+/// Предел паузы между переподключениями.
+const RETRY_MAX_SECS: u64 = 30;
+
+/// Пауза перед переподключением и следующий шаг.
+///
+/// `pactl subscribe` обычно живёт годами. Но если `pactl` есть, а PipeWire не
+/// поднят, процесс умирает сразу — без нарастающей паузы поток запускал бы его
+/// каждую секунду, то есть десятки тысяч процессов в сутки на пустом месте.
+fn retry_step(lived: Duration, current_secs: u64) -> (u64, u64) {
+    if lived >= STABLE {
+        (1, 1)
+    } else {
+        let wait = current_secs.min(RETRY_MAX_SECS);
+        (wait, (wait * 2).min(RETRY_MAX_SECS))
+    }
+}
+
+/// Слушает поток событий до обрыва.
+fn listen(shared: &Shared) {
+    // Пока потока нет, панель опрашивает `wpctl` запасным путём.
+    shared.audio_watch_live.store(false, Ordering::Relaxed);
     let Ok(mut child) = Command::new("pactl")
         .arg("subscribe")
         .stdin(Stdio::null())
@@ -83,19 +111,26 @@ fn listen(shared: &Shared) -> bool {
         .stderr(Stdio::null())
         .spawn()
     else {
-        return true;
+        return;
     };
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill();
-        return true;
+        let _ = child.wait();
+        return;
     };
+    shared.audio_watch_live.store(true, Ordering::Relaxed);
+    // События приходят только на изменения. Начальное значение читаем один
+    // раз, иначе до первого события панель показывала бы нулевую громкость.
+    refresh(shared);
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if is_audio_event(&line) {
             refresh(shared);
         }
     }
+    shared.audio_watch_live.store(false, Ordering::Relaxed);
+    // `kill` без `wait` оставил бы зомби в долгоживущей панели.
     let _ = child.kill();
-    true
+    let _ = child.wait();
 }
 
 #[cfg(test)]
@@ -125,6 +160,25 @@ mod tests {
     fn ignores_noise_and_empty_lines() {
         assert!(!is_audio_event(""));
         assert!(!is_audio_event("Server default sink: alsa_output.pci"));
+    }
+
+    #[test]
+    fn reconnect_backs_off_while_pactl_keeps_failing() {
+        let quick = Duration::from_millis(100);
+        let mut retry = 1;
+        let mut waits = Vec::new();
+        for _ in 0..7 {
+            let (wait, next) = retry_step(quick, retry);
+            waits.push(wait);
+            retry = next;
+        }
+        assert_eq!(waits, vec![1, 2, 4, 8, 16, 30, 30]);
+    }
+
+    #[test]
+    fn a_stable_stream_reconnects_without_a_long_pause() {
+        assert_eq!(retry_step(STABLE, RETRY_MAX_SECS), (1, 1));
+        assert_eq!(retry_step(STABLE + Duration::from_secs(60), 16), (1, 1));
     }
 
     fn sys() -> Sys {

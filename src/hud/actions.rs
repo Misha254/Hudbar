@@ -196,7 +196,8 @@ pub fn spawn_with_args(command: &str, args: &[&str]) {
     let command = command.to_string();
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
     std::thread::spawn(move || {
-        let _ = std::process::Command::new(command).args(&args).spawn();
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let _ = crate::exec_util::spawn_detached(&command, &borrowed);
     });
 }
 

@@ -163,6 +163,10 @@ pub struct Sys {
 pub struct Shared {
     pub sys: Mutex<Sys>,
     pub dirty: AtomicBool,
+    /// `pactl subscribe` подключён и изменения звука приходят событиями:
+    /// тогда секундный опрос `wpctl` не нужен. Флаг ставит поток
+    /// `audio_watch`; упавший поток снимает его, и опрос возвращается.
+    pub audio_watch_live: AtomicBool,
     pub wake_tx: OwnedFd,
 }
 
@@ -224,13 +228,27 @@ pub fn send_tray_menu_click(shared: &Arc<Shared>, entry_id: i32) {
 }
 
 const BATTERY_EVENT_DEBOUNCE_TICKS: u64 = 3;
-/// Громкость опрашивается реже остальных датчиков: `wpctl` — внешний процесс,
-/// а его отказ не должен ни обнулять значение, ни тормозить секундный тик, на
-/// котором читаются wifi и bluetooth.
+/// Запасной опрос громкости, когда `pactl subscribe` не подключён. При живом
+/// потоке событий `wpctl` не запускается вовсе: два процесса на опрос стоят
+/// дороже всех остальных чтений вместе.
 const AUDIO_POLL_TICKS: u64 = 6;
+/// AC/зарядка: `power_state` читает ACPI-EC, одно чтение стоит десятки
+/// миллисекунд на энергосбережении. Пяти секунд хватает: смена питания —
+/// редкое событие, а после неё полный пересчёт всё равно ждёт стабилизации.
+const POWER_POLL_TICKS: u64 = 5;
+/// `recorder_on` читает `/proc/*/comm` у всех процессов. Пяти секунд хватает,
+/// чтобы плашка REC появилась после старта записи.
+const RECORDER_POLL_TICKS: u64 = 5;
 /// Заряд наушников меняется медленно, а `GetManagedObjects` обходит всё дерево
 /// BlueZ. Пяти секунд хватает и на появление плашки после подключения.
 const HEADSET_POLL_TICKS: u64 = 5;
+/// Камера ищется обходом `/proc/*/fd` у всех процессов: под игрой это сотни
+/// дескрипторов каждые две секунды. Пяти секунд хватает, чтобы плашка
+/// появлялась на глаз сразу.
+const WEBCAM_POLL_TICKS: u64 = 5;
+/// `dunstctl is-paused` — внешний процесс. Состояние меняется вручную, так что
+/// опрос раз в пять секунд экономит запуски, не делая плашку запоздалой.
+const DND_POLL_TICKS: u64 = 5;
 
 fn battery_refresh_due(tick: u64, pending_since: Option<u64>) -> bool {
     match pending_since {
@@ -243,8 +261,30 @@ fn audio_poll_due(tick: u64) -> bool {
     tick % AUDIO_POLL_TICKS == 1
 }
 
+/// Опрос `wpctl` нужен только как запасной путь: пока события `pactl`
+/// доходят, значения и так свежие.
+fn audio_poll_needed(tick: u64, watch_live: bool) -> bool {
+    !watch_live && audio_poll_due(tick)
+}
+
+fn power_poll_due(tick: u64) -> bool {
+    tick % POWER_POLL_TICKS == 1
+}
+
+fn recorder_poll_due(tick: u64) -> bool {
+    tick % RECORDER_POLL_TICKS == 1
+}
+
 fn headset_poll_due(tick: u64) -> bool {
     tick % HEADSET_POLL_TICKS == 1
+}
+
+fn webcam_poll_due(tick: u64) -> bool {
+    tick % WEBCAM_POLL_TICKS == 1
+}
+
+fn dnd_poll_due(tick: u64) -> bool {
+    tick % DND_POLL_TICKS == 1
 }
 
 fn sys_loop(shared: Arc<Shared>) {
@@ -256,8 +296,9 @@ fn sys_loop(shared: Arc<Shared>) {
     loop {
         tick += 1;
         // AC/Charging проверяем часто, но полный расчёт ждёт стабилизации sysfs.
-        let power = power_state();
-        if let Some(state) = power {
+        if power_poll_due(tick)
+            && let Some(state) = power_state()
+        {
             if previous_power.is_some_and(|previous| previous != state) {
                 battery_pending_since = Some(tick);
             }
@@ -285,12 +326,13 @@ fn sys_loop(shared: Arc<Shared>) {
         } else {
             None
         };
-        let audio = audio_poll_due(tick).then(|| {
-            (
-                wpctl_volume("@DEFAULT_AUDIO_SINK@"),
-                wpctl_volume("@DEFAULT_AUDIO_SOURCE@"),
-            )
-        });
+        let audio =
+            audio_poll_needed(tick, shared.audio_watch_live.load(Ordering::Relaxed)).then(|| {
+                (
+                    wpctl_volume("@DEFAULT_AUDIO_SINK@"),
+                    wpctl_volume("@DEFAULT_AUDIO_SOURCE@"),
+                )
+            });
         let (wifi_up, wifi_signal, wifi_iface) = wifi();
         let wifi_en = wifi_radio_on(&wifi_iface);
         let bt = bt_on(bt_conn.as_ref());
@@ -301,11 +343,9 @@ fn sys_loop(shared: Arc<Shared>) {
         } else {
             Some(None)
         };
-        let extras = if tick.is_multiple_of(2) {
-            Some((recorder_on(), webcam_active(), dnd_paused()))
-        } else {
-            None
-        };
+        let extras = recorder_poll_due(tick).then(recorder_on);
+        let webcam = webcam_poll_due(tick).then(webcam_active);
+        let dnd = dnd_poll_due(tick).then(dnd_paused);
 
         let mut changed = false;
         {
@@ -346,10 +386,14 @@ fn sys_loop(shared: Arc<Shared>) {
             upd!(wifi_iface, wifi_iface);
             upd!(wifi_enabled, wifi_en);
             upd!(bt_on, bt);
-            if let Some((rec, cam, dnd)) = extras {
+            if let Some(rec) = extras {
                 upd!(recorder_on, rec);
+            }
+            if let Some(cam) = webcam {
                 upd!(webcam_active, cam);
-                upd!(dnd, dnd);
+            }
+            if let Some(paused) = dnd {
+                upd!(dnd, paused);
             }
         }
         if changed {
@@ -366,7 +410,8 @@ mod tests {
     use super::workspaces::parse_ws;
     use super::{
         AUDIO_POLL_TICKS, BATTERY_EVENT_DEBOUNCE_TICKS, BtDev, WifiNet, audio_poll_due,
-        battery_refresh_due, headset_poll_due,
+        audio_poll_needed, battery_refresh_due, dnd_poll_due, headset_poll_due, power_poll_due,
+        recorder_poll_due, webcam_poll_due,
     };
 
     #[test]
@@ -396,10 +441,40 @@ mod tests {
     }
 
     #[test]
+    fn audio_is_not_polled_while_the_event_stream_is_live() {
+        for tick in [1, AUDIO_POLL_TICKS + 1, 2 * AUDIO_POLL_TICKS + 1] {
+            assert!(audio_poll_needed(tick, false), "без событий — опрос");
+            assert!(!audio_poll_needed(tick, true), "события заменяют опрос");
+        }
+    }
+
+    #[test]
+    fn power_and_recording_are_polled_less_often_than_every_tick() {
+        assert!(power_poll_due(1), "первая проверка — сразу");
+        assert!(!power_poll_due(2));
+        assert!(power_poll_due(6), "следующая через пять секунд");
+
+        assert!(recorder_poll_due(1), "первая проверка — сразу");
+        assert!(!recorder_poll_due(2));
+        assert!(recorder_poll_due(6), "следующая через пять секунд");
+    }
+
+    #[test]
     fn headset_battery_is_polled_every_few_seconds() {
         assert!(headset_poll_due(1), "первый опрос — сразу");
         assert!(!headset_poll_due(2));
         assert!(headset_poll_due(6), "следующий опрос через пять секунд");
+    }
+
+    #[test]
+    fn camera_and_dnd_are_not_polled_every_tick() {
+        assert!(webcam_poll_due(1), "первый опрос — сразу");
+        assert!(!webcam_poll_due(2));
+        assert!(webcam_poll_due(6), "следующий опрос через пять секунд");
+
+        assert!(dnd_poll_due(1), "первый опрос — сразу");
+        assert!(!dnd_poll_due(2));
+        assert!(dnd_poll_due(6), "следующий опрос через пять секунд");
     }
 
     #[test]

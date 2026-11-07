@@ -401,13 +401,20 @@ fn spawn_sleep() {
         return;
     };
     let script = std::path::PathBuf::from(home).join(".local/bin/sleep.sh");
-    let _ = std::process::Command::new("setsid")
+    let child = std::process::Command::new("setsid")
         .arg("-f")
         .arg(&script)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+    // `setsid -f` выходит сразу, а меню может жить дальше: без ожидания
+    // каждый запуск оставлял бы в нём зомби.
+    if let Ok(mut child) = child {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
 }
 
 /// Уведомление о смене кофе-режима: те же слова, что слал скрипт.

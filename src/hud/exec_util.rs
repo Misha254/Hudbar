@@ -226,13 +226,21 @@ fn stop_child(child: &mut Child) {
 /// Запуск без ожидания и без вывода: приложение, скрипт, новая сессия.
 /// Ошибка только от `spawn`: живёт ли процесс дальше — уже не наша забота.
 pub fn spawn_detached(program: &str, args: &[&str]) -> Result<(), ExecError> {
+    let child = detached_child(program, args)?;
+    // Родитель может жить долго (меню, лаунчер): без ожидания завершившийся
+    // ребёнок остался бы зомби. Приложение от этого не умирает — ждёт лишь
+    // поток, который снимет его код выхода.
+    std::thread::spawn(move || reap(child));
+    Ok(())
+}
+
+fn detached_child(program: &str, args: &[&str]) -> Result<Child, ExecError> {
     Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map(|_| ())
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 ExecError::NotFound {
@@ -245,6 +253,11 @@ pub fn spawn_detached(program: &str, args: &[&str]) -> Result<(), ExecError> {
                 }
             }
         })
+}
+
+/// Снять завершившегося ребёнка: без `wait` запись в `/proc` живёт зомби.
+fn reap(mut child: Child) {
+    let _ = child.wait();
 }
 
 #[cfg(test)]
@@ -298,5 +311,19 @@ mod tests {
         let output = run_with_timeout_stdin("cat", &[], Some(b"quiet secret"), TEST_TIMEOUT)
             .expect("cat есть");
         assert_eq!(String::from_utf8_lossy(&output.stdout), "quiet secret");
+    }
+
+    /// Зомби — уже не работа: запись в `/proc` живёт, пока процесс не пожнут.
+    #[test]
+    fn a_detached_program_is_reaped_instead_of_staying_a_zombie() {
+        let child = detached_child("true", &[]).expect("true есть");
+        let pid = child.id();
+        std::thread::spawn(move || reap(child));
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        // Пока ребёнок не пожат, `/proc/<pid>` существует — даже мёртвым.
+        while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            assert!(Instant::now() < deadline, "true остался зомби");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

@@ -88,6 +88,7 @@ fn main() {
     let shared = Arc::new(hud::data::Shared {
         sys: std::sync::Mutex::new(hud::data::Sys::default()),
         dirty: std::sync::atomic::AtomicBool::new(true),
+        audio_watch_live: std::sync::atomic::AtomicBool::new(false),
         wake_tx,
     });
     hud::data::spawn(shared.clone());
