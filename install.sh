@@ -13,7 +13,8 @@ ZEN=0
 usage() {
     printf 'Usage: %s [--dry-run] [--force] [--zen]\n' "$0"
     printf '\nInstalls hudbar binaries and the repository-owned default config.\n'
-    printf 'Existing files are backed up before replacement.\n'
+    printf 'Binaries are updated on every run; the previous copy is backed up.\n'
+    printf 'Config files are kept unless --force replaces them.\n'
     printf '\n  --zen   also install the live Zen Browser theme (see contrib/zen)\n'
 }
 
@@ -99,6 +100,28 @@ install_file() {
     ok "${destination##*/}"
 }
 
+# Бинарник или скрипт из репозитория — не настройка пользователя: обновляется
+# при каждом запуске. Совпадающий файл не трогаем, а старый уходит в бэкап.
+install_updated() {
+    local source=$1
+    local destination=$2
+    local relative_path=${destination#/}
+
+    [[ -f "$source" ]] || die "file is missing: $source"
+    if [[ -e "$destination" ]] && cmp -s "$source" "$destination"; then
+        note "unchanged ${destination##*/}"
+        return
+    fi
+    if [[ -e "$destination" ]]; then
+        run mkdir -p "$BACKUP_ROOT/$(dirname "$relative_path")"
+        run cp -a "$destination" "$BACKUP_ROOT/$relative_path"
+        note "backup ${destination##*/}"
+    fi
+    run mkdir -p "$(dirname "$destination")"
+    run install -m 0755 "$source" "$destination"
+    ok "${destination##*/}"
+}
+
 install_default_file() {
     local source=$1
     local destination=$2
@@ -114,21 +137,21 @@ install_default_file() {
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT_DIR/Cargo.toml" | head -n 1)
 printf '\n%sHUDbar%s %s · installer\n' "$c_bold" "$c_reset" "$version"
 printf '%s────────────────────────────────────────%s\n' "$c_dim" "$c_reset"
-printf '  %sexisting files are kept; --force replaces them and makes a backup%s\n' "$c_dim" "$c_reset"
+printf '  %sbinaries and scripts update automatically; config is kept unless --force%s\n' "$c_dim" "$c_reset"
 
 section "Building release binaries"
 run cargo build --release --bins --manifest-path "$ROOT_DIR/Cargo.toml"
 
 section "Installing binaries → $PREFIX/bin"
-for binary in hudbar hud-menu-rs hud-apps-rs hud-keybinds-rs hud-yazibinds-rs hud-wallpaper-rs hud-schemes-rs; do
-    install_file "$ROOT_DIR/target/release/$binary" "$PREFIX/bin/$binary" 0755
+for binary in hudbar hud-menu-rs hud-apps-rs hud-keybinds-rs hud-yazibinds-rs hud-wallpaper-rs hud-schemes-rs hud-greeter-rs hud-lock-rs; do
+    install_updated "$ROOT_DIR/target/release/$binary" "$PREFIX/bin/$binary"
 done
 
 section "Installing scripts → $PREFIX/bin"
 for script in hud-menu hud-apps hud-keybinds hud-yazibinds hud-wallpaper hud-wallpapers hud-setting hud-update hud-close; do
-    install_file "$ROOT_DIR/scripts/$script" "$PREFIX/bin/$script" 0755
+    install_updated "$ROOT_DIR/scripts/$script" "$PREFIX/bin/$script"
 done
-install_file "$ROOT_DIR/scripts/hud-migrate-settings" "$PREFIX/bin/hud-migrate-settings" 0755
+install_updated "$ROOT_DIR/scripts/hud-migrate-settings" "$PREFIX/bin/hud-migrate-settings"
 
 section "Installing settings → $CONFIG_HOME/hudbar"
 if (( DRY_RUN )); then
@@ -163,7 +186,7 @@ else
     section "Done"
     printf '  %sbinaries%s  %s\n' "$c_dim" "$c_reset" "$PREFIX/bin"
     printf '  %sconfig%s    %s\n' "$c_dim" "$c_reset" "$CONFIG_HOME/hudbar"
-    if (( FORCE )); then
+    if [[ -d "$BACKUP_ROOT" ]]; then
         printf '  %sbackups%s   %s\n' "$c_dim" "$c_reset" "$BACKUP_ROOT"
     fi
 fi
