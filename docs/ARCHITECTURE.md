@@ -62,6 +62,10 @@ src/hud/menu/wifi.rs   раздел Wi-Fi: каркас и проверки
 src/hud/menu/wifi/data.rs   снимок, профили и разбор `nmcli`
 src/hud/menu/wifi/actions.rs команды `nmcli` для радио, подключения и пересканирования
 src/hud/menu/wifi/view.rs   строки раздела «Wi-Fi»
+src/hud/menu/bluetooth.rs   раздел Bluetooth: каркас и проверки
+src/hud/menu/bluetooth/data.rs   снимок, устройства и разбор `bluetoothctl`
+src/hud/menu/bluetooth/actions.rs команды `bluetoothctl` и поиск
+src/hud/menu/bluetooth/view.rs   строки раздела «Bluetooth»
 src/hud/locker/auth.rs проверка пароля: выбор сервиса PAM и account-стека
 src/hud/locker/pam_ffi.rs FFI PAM: единственный unsafe-слой блокировки
 src/hud/app/mod.rs     связывает ui, render и handlers
