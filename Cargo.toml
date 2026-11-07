@@ -1,6 +1,6 @@
 [package]
 name = "hudbar"
-version = "0.18.16"
+version = "0.19.0"
 edition = "2024"
 license = "MIT"
 

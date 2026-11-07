@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.19.0] - 2026-11-07
 
 ### Added
-- Лицензия MIT: файл `LICENSE`, поле `license` в `Cargo.toml` и PKGBUILD.
-  Владелец должен подтвердить выбор лицензии и правообладателя.
+- Лицензия MIT (Copyright (c) 2026 Misha254): файл `LICENSE`,
+  поле `license` в `Cargo.toml` и PKGBUILD.
 - README: блок «Для кого это» — только niri на Wayland, ориентир на Arch Linux,
   настройки в `settings.json`.
 
