@@ -70,6 +70,10 @@ src/hud/menu/displays.rs   раздел дисплеев: каркас и про
 src/hud/menu/displays/data.rs   типы выводов, режимов и разбор JSON niri
 src/hud/menu/displays/actions.rs команды `niri msg output` и пресеты
 src/hud/menu/displays/view.rs   строки и подменю раздела «Дисплеи»
+src/hud/menu/real.rs   настоящее дерево меню: сборка и проверки
+src/hud/menu/real/data.rs   доступность программ, обои и подписи модулей
+src/hud/menu/real/sections.rs   разделы, группы и строки меню
+src/hud/menu/real/actions.rs   запуск редактора, цели конфигов и подтверждения
 src/hud/locker/auth.rs проверка пароля: выбор сервиса PAM и account-стека
 src/hud/locker/pam_ffi.rs FFI PAM: единственный unsafe-слой блокировки
 src/hud/app/mod.rs     связывает ui, render и handlers
