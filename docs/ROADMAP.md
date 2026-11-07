@@ -201,9 +201,8 @@ nvim (lualine), zathura, spicetify, hudbar, swaylock, cal, clipse, chromium.
   flatpak, fwupd; документированный откат. Снапшотить и `/`, и `/home`.
 - PKGBUILD: сделано (0.11.0) — `packaging/PKGBUILD`: все восемь бинарников,
   девять обёрток и скриптов, файлы по умолчанию и схема в `/usr/share/hudbar`,
-  сборка из тега. Лицензия в репозитории не объявлена, поэтому в PKGBUILD стоит
-  `custom`: когда появится, строку заменить, а файл положить в
-  `/usr/share/licenses/hudbar/`.
+  сборка из тега. Лицензия MIT объявлена в `Cargo.toml` и PKGBUILD, файл
+  ставится в `/usr/share/licenses/hudbar/`.
 - Мастер первого запуска: имя хоста, часовой пояс, локаль, раскладка, GPU,
   Wi-Fi, первый снапшот.
 - Полный английский: сделано (0.16.0) — `language` в `settings.json`

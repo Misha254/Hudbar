@@ -139,6 +139,13 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+## Лицензия
+
+Проект распространяется по лицензии [MIT](LICENSE): Copyright (c) 2026 Misha254.
+
+Код в [`contrib/zen`](contrib/zen) — расширение и native-host Omafox — имеет
+собственную лицензию, см. [`LICENSE.omafox`](contrib/zen/LICENSE.omafox).
+
 ---
 
 Собрано на [smithay-client-toolkit](https://github.com/Smithay/client-toolkit),

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Лицензия MIT: файл `LICENSE`, поле `license` в `Cargo.toml` и PKGBUILD.
+  Владелец должен подтвердить выбор лицензии и правообладателя.
+
 ## [0.18.16] - 2026-11-07
 
 ### Removed
