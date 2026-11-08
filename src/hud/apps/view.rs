@@ -31,8 +31,8 @@ use super::super::ui_tokens::{
 mod draw;
 #[path = "view/layout.rs"]
 mod layout;
-pub(crate) use draw::*;
-pub(crate) use layout::*;
+pub use draw::*;
+pub use layout::*;
 
 #[cfg(test)]
 mod tests {

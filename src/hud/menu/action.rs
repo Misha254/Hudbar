@@ -19,6 +19,7 @@ use super::super::config_io::Patch;
 use super::super::log;
 use super::super::settings::{Language, Module};
 use super::system::{CommandOutput, CommandRunner, CommandSpec, ProviderKey};
+use super::tree::{Node, NodeKind};
 
 /// Операции без внешней команды: их исполняет сам HUDbar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -500,6 +501,43 @@ impl Runner for RecordingRunner {
     }
 }
 
+/// Действие по личности строки, без окна: бинд зовёт HUDbar напрямую, а
+/// скрипт-обёртка ему не нужен.
+pub fn run_by_id(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("--action требует личность строки".to_string());
+    }
+    let root = super::real::tree();
+    let Some(kind) = find(&root, id) else {
+        return Err(format!("нет строки {id}"));
+    };
+    match kind {
+        NodeKind::Action(action) => action.perform(),
+        NodeKind::Toggle { get, set } => {
+            set(!get());
+            Ok(())
+        }
+        _ => Err(format!("строка {id} не действие")),
+    }
+    .map_err(|error| format!("{id}: {error}"))
+}
+
+/// Поиск по всему дереву: строка может лежать во вложенном разделе, как
+/// `system/dnd` в «Системе».
+pub fn find<'a>(nodes: &'a [Node], id: &str) -> Option<&'a NodeKind> {
+    for node in nodes {
+        if node.identity() == id {
+            return Some(&node.kind);
+        }
+        if let NodeKind::Submenu(children) = &node.kind
+            && let Some(found) = find(children, id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,5 +826,21 @@ mod tests {
             .perform_with(&runner)
             .expect("no-op успешен");
         assert!(runner.calls().is_empty(), "исполнитель ничего не писал");
+    }
+
+    #[test]
+    fn the_tree_has_rows_a_bind_can_call_by_id() {
+        for id in ["system/dnd", "system/coffee", "system/power-profile"] {
+            let root = super::super::real::tree();
+            assert!(
+                super::find(&root, id).is_some(),
+                "нет строки {id} для бинда"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_id_is_an_error_rather_than_a_silent_no_op() {
+        assert!(super::find(&super::super::real::tree(), "system/нет").is_none());
     }
 }

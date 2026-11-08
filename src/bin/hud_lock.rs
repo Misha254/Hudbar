@@ -35,57 +35,7 @@ use wayland_client::{
     protocol::{wl_buffer, wl_keyboard, wl_output, wl_seat, wl_shm, wl_surface},
 };
 
-#[allow(dead_code)]
-#[path = "../hud/anim.rs"]
-mod anim;
-#[allow(dead_code)]
-#[path = "../hud/canvas.rs"]
-mod canvas;
-#[allow(dead_code)]
-#[path = "../hud/card_frame.rs"]
-mod card_frame;
-#[allow(dead_code)]
-#[path = "../hud/exec_util.rs"]
-mod exec_util;
-#[allow(dead_code)]
-#[path = "../hud/geom.rs"]
-mod geom;
-#[allow(dead_code)]
-#[path = "../hud/i18n.rs"]
-mod i18n;
-#[allow(dead_code)]
-#[path = "../hud/log.rs"]
-mod log;
-/// `log` запускает внешние команды через `data::oneshot`; потоки и DBus
-/// панели экрану блокировки не нужны.
-#[path = "../hud/data/oneshot.rs"]
-pub mod oneshot_data;
-pub mod data {
-    pub use super::oneshot_data as oneshot;
-}
-#[allow(dead_code)]
-#[path = "../hud/greeter/mod.rs"]
-mod greeter;
-#[allow(dead_code)]
-#[path = "../hud/palette.rs"]
-mod palette;
-#[allow(dead_code)]
-#[path = "../hud/settings.rs"]
-mod settings;
-#[allow(dead_code)]
-#[path = "../hud/settings_icons.rs"]
-mod settings_icons;
-#[path = "../hud/shell.rs"]
-mod shell;
-#[allow(dead_code)]
-#[path = "../hud/text.rs"]
-mod text;
-#[allow(dead_code)]
-#[path = "../hud/ui_tokens.rs"]
-mod ui_tokens;
-
-#[path = "../hud/locker/mod.rs"]
-mod locker;
+use hudbar::*;
 
 use greeter::config::Config;
 use greeter::flow::Secret;

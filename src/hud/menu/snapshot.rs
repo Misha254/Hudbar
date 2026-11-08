@@ -533,6 +533,39 @@ pub fn render_icon_gallery(directory: &std::path::Path) -> Result<Vec<std::path:
     Ok(written)
 }
 
+/// `--all <каталог>`: все состояния в обеих темах.
+pub fn run_all(dir: Option<&str>) -> Result<(), String> {
+    let dir = dir.ok_or("--all требует путь к каталогу")?;
+    let path = std::path::Path::new(dir);
+    std::fs::create_dir_all(path).map_err(|error| format!("не создался каталог {dir}: {error}"))?;
+    for file in render_all(path)? {
+        println!("{}", file.display());
+    }
+    Ok(())
+}
+
+/// `--real <каталог>`: настоящее дерево, корень и разделы в обеих темах.
+pub fn run_real(dir: Option<&str>) -> Result<(), String> {
+    let dir = dir.ok_or("--real требует путь к каталогу")?;
+    let path = std::path::Path::new(dir);
+    std::fs::create_dir_all(path).map_err(|error| format!("не создался каталог {dir}: {error}"))?;
+    for file in render_real_all(path)? {
+        println!("{}", file.display());
+    }
+    Ok(())
+}
+
+/// `--icons <каталог>`: галерея иконок в обеих темах.
+pub fn run_icons(dir: Option<&str>) -> Result<(), String> {
+    let dir = dir.ok_or("--icons требует путь к каталогу")?;
+    let path = std::path::Path::new(dir);
+    std::fs::create_dir_all(path).map_err(|error| format!("не создался каталог {dir}: {error}"))?;
+    for file in render_icon_gallery(path)? {
+        println!("{}", file.display());
+    }
+    Ok(())
+}
+
 /// Сколько значений и кругов на кадре: проверка для тестов.
 pub fn counts(frame: &Frame) -> (usize, usize) {
     let values = frame

@@ -44,73 +44,8 @@ use wayland_client::{
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
 };
 
-#[allow(dead_code)]
-#[path = "../hud/bind_data.rs"]
-mod bind_data;
-#[allow(dead_code)]
-#[path = "../hud/config.rs"]
-mod config;
-#[allow(dead_code)]
-#[path = "../hud/menu/instance.rs"]
-mod instance;
-#[allow(dead_code)]
-#[path = "../hud/layer.rs"]
-mod layer;
-/// Одноразовые читатели нужны `log`: он запускает внешние команды с
-/// предельным ожиданием. Весь `data` с его потоками и DBus этому бинарнику
-/// не нужен — только сам модуль чтений, как в `hud-menu`.
-#[path = "../hud/data/oneshot.rs"]
-pub mod oneshot_data;
-
-/// Псевдоним `data::oneshot`, чтобы `log` обращался к чтениям одним и тем же
-/// путём в панели и в этом бинарнике.
-pub mod data {
-    pub use super::oneshot_data as oneshot;
-}
-#[allow(dead_code)]
-#[path = "../hud/exec_util.rs"]
-mod exec_util;
-#[allow(dead_code)]
-#[path = "../hud/log.rs"]
-mod log;
-#[allow(dead_code)]
-#[path = "../hud/palette.rs"]
-mod palette;
-#[allow(dead_code)]
-#[path = "../hud/power_profile.rs"]
-mod power_profile;
-#[path = "../hud/repeat.rs"]
-mod repeat;
-// Нужен state.rs ради текущей схемы, но само окно обоев схемы уже не рисует.
-#[allow(dead_code)]
-#[path = "../hud/anim.rs"]
-mod anim;
-#[allow(dead_code)]
-#[path = "../hud/canvas.rs"]
-mod canvas;
-#[allow(dead_code)]
-#[path = "../hud/geom.rs"]
-mod geom;
-#[allow(dead_code)]
-#[path = "../hud/schemes.rs"]
-mod schemes;
-#[allow(dead_code)]
-#[path = "../hud/settings.rs"]
-mod settings;
-#[allow(dead_code)]
-#[path = "../hud/settings_icons.rs"]
-mod settings_icons;
-#[path = "../hud/shell.rs"]
-mod shell;
-#[allow(dead_code)]
-#[path = "../hud/text.rs"]
-mod text;
-#[allow(dead_code)]
-#[path = "../hud/ui_tokens.rs"]
-mod ui_tokens;
-#[allow(dead_code)]
-#[path = "../hud/wallpaper.rs"]
-mod wallpaper;
+use hudbar::menu::instance;
+use hudbar::*;
 
 use geom::Rect;
 use repeat::Repeat;

@@ -105,6 +105,10 @@ impl Lru {
         self.map.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
     pub fn put(&mut self, path: PathBuf, thumb: Thumb) {
         if self.map.contains_key(&path) {
             self.map.insert(path.clone(), thumb);

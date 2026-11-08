@@ -12,7 +12,7 @@ use super::geometry::{FOOTER_H, PAD, STATUS_DOT, center_band};
 /// Что делает Enter на выбранной строке. Подсказка в подвале зависит от
 /// вида строки: «ENTER ОТКРЫТЬ» на тумблере или числе врала бы.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HintKind {
+pub enum HintKind {
     Open,
     Toggle,
     Choice,

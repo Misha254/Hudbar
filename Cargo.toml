@@ -1,6 +1,6 @@
 [package]
 name = "hudbar"
-version = "0.19.0"
+version = "0.19.1"
 edition = "2024"
 license = "MIT"
 
@@ -15,6 +15,14 @@ license = "MIT"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[lib]
+name = "hudbar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hudbar"
+path = "src/main.rs"
 
 [[bin]]
 name = "hud-menu-rs"

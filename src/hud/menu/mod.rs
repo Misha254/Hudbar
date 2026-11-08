@@ -52,6 +52,8 @@ pub mod values;
 pub mod view;
 #[allow(dead_code)]
 pub mod wifi;
+#[allow(dead_code)]
+pub mod window;
 
 // Модули hud, нужные подмодулям меню. Реэкспорт, а не `super::super::`: в
 // `main.rs` меню лежит в `hud::menu`, а в бинаре меню — в корне

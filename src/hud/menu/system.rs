@@ -116,6 +116,7 @@ pub struct SecretData(Vec<u8>);
 
 impl SecretData {
     /// Скрытые байты из строки.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(text: &str) -> Self {
         SecretData(text.as_bytes().to_vec())
     }

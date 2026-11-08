@@ -1,16 +1,4 @@
-mod hud;
-// Меню обращается к профилю питания как `crate::power_profile`: в бинарях это
-// плоский модуль у корня, а панель держит всё в `hud`. Поэтому и здесь он
-// объявлен рядом с `hud`, а не внутри него.
-#[allow(dead_code)]
-#[path = "hud/power_profile.rs"]
-mod power_profile;
-// Общая обёртка внешних команд: её зовут и панель, и окна. Как и
-// `power_profile`, объявлена у корня, потому что бинари собирают модули
-// плоским списком.
-#[allow(dead_code)]
-#[path = "hud/exec_util.rs"]
-mod exec_util;
+use hudbar::*;
 
 use std::os::fd::AsFd;
 use std::sync::Arc;

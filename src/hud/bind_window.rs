@@ -1,0 +1,1350 @@
+//! Общее нативное окно биндов (niri и yazi).
+//!
+//! XDG-окно на tiny-skia/cosmic-text.
+//! Каркас карточки (фон, шапка, подвал, скроллбар, подсветка) — общий `card_frame`,
+//! строки с клавишей и описанием рисуются внутри карточки.
+//! Размер окна — 440×452, кегли — из общего `type_scale`.
+
+use std::os::fd::AsFd;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
+
+use smithay_client_toolkit::{
+    compositor::{CompositorHandler, CompositorState},
+    delegate_registry,
+    output::{OutputHandler, OutputState},
+    registry::{ProvidesRegistryState, RegistryState},
+    registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers, RepeatInfo},
+        pointer::{AxisScroll, PointerEvent, PointerEventKind, PointerHandler},
+    },
+    shell::{
+        WaylandSurface,
+        xdg::{
+            XdgShell,
+            window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
+        },
+    },
+    shm::{Shm, ShmHandler, slot::SlotPool},
+};
+use wayland_client::{
+    Connection, QueueHandle,
+    globals::registry_queue_init,
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+};
+
+use super::bind_data::{self, Entry};
+use super::binds_layout;
+use super::canvas;
+use super::card_frame;
+use super::geom;
+use super::i18n;
+use super::key_display;
+use super::palette;
+use super::power_profile;
+use super::repeat::Repeat;
+use super::settings;
+use super::settings_icons;
+use super::shell;
+use super::text;
+use super::ui_tokens;
+
+/// Разновидность окна биндов: niri или yazi.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BindsKind {
+    Niri,
+    Yazi,
+}
+
+impl BindsKind {
+    pub fn title(self, lang: settings::Language) -> &'static str {
+        match self {
+            BindsKind::Niri => i18n::pick(lang, "Бинды", "Keybinds"),
+            BindsKind::Yazi => "Yazi",
+        }
+    }
+
+    pub fn placeholder(self, lang: settings::Language) -> &'static str {
+        match self {
+            BindsKind::Niri => i18n::pick(lang, "Поиск бинда…", "Search keybinds…"),
+            BindsKind::Yazi => i18n::pick(lang, "Поиск…", "Search…"),
+        }
+    }
+
+    pub fn app_id(self) -> &'static str {
+        match self {
+            BindsKind::Niri => "com.mihail.hud-keybinds",
+            BindsKind::Yazi => "com.mihail.hud-yazibinds",
+        }
+    }
+
+    pub fn bin_name(self) -> &'static str {
+        match self {
+            BindsKind::Niri => "hud-keybinds-rs",
+            BindsKind::Yazi => "hud-yazibinds-rs",
+        }
+    }
+
+    pub fn load_groups(self) -> Vec<(String, Vec<Entry>)> {
+        match self {
+            BindsKind::Niri => bind_data::load_niri_grouped(),
+            BindsKind::Yazi => bind_data::load_yazi_grouped(),
+        }
+    }
+
+    pub fn watch_paths(self) -> Vec<PathBuf> {
+        let home = bind_data::home();
+        let mut v = vec![
+            home.join(".config/hudbar/settings.json"),
+            home.join(".config/hudbar/colors.css"),
+        ];
+        match self {
+            BindsKind::Niri => {
+                if let Ok(rd) = std::fs::read_dir(home.join(".config/niri")) {
+                    let mut files: Vec<PathBuf> = rd
+                        .filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| p.extension().is_some_and(|e| e == "kdl"))
+                        .collect();
+                    files.sort();
+                    v.extend(files);
+                }
+            }
+            BindsKind::Yazi => {
+                v.push(home.join(".config/yazi/keymap.toml"));
+            }
+        }
+        v
+    }
+}
+
+fn hints(lang: settings::Language) -> &'static str {
+    i18n::pick(
+        lang,
+        "↑↓ PgUp PgDn ЛИСТАТЬ   ESC ЗАКРЫТЬ",
+        "↑↓ PgUp PgDn SCROLL   ESC CLOSE",
+    )
+}
+
+fn nothing_found(lang: settings::Language) -> &'static str {
+    i18n::pick(lang, "Ничего не найдено", "Nothing found")
+}
+
+/// Служебные группы `bind_data` подписываются на языке окна; заголовки из
+/// пользовательского keymap остаются как есть.
+fn group_label(lang: settings::Language, name: &str) -> &str {
+    match name {
+        "Общее" => i18n::pick(lang, "Общее", "General"),
+        "Частые" => i18n::pick(lang, "Частые", "Favorites"),
+        "Прочее" => i18n::pick(lang, "Прочее", "Other"),
+        other => other,
+    }
+}
+
+/// Группы без блока «Частые» — только разделы keymap, без повторов.
+fn strip_favorites(groups: &[(String, Vec<Entry>)]) -> &[(String, Vec<Entry>)] {
+    let first = groups
+        .iter()
+        .position(|(name, _)| name != bind_data::YAZI_FAVORITES_GROUP)
+        .unwrap_or(groups.len());
+    &groups[first..]
+}
+
+pub const WIDTH: u32 = 440;
+pub const HEIGHT: u32 = 452;
+
+const COLS: usize = 1;
+const ITEM_H: f32 = 30.0;
+const COL_GAP: f32 = 20.0;
+const ROW_GAP: f32 = 0.0;
+const LIST_Y0: f32 = 52.0;
+const PAD_X: f32 = 16.0;
+const SECTION_GAP: f32 = 12.0;
+
+struct Slot {
+    row: usize,
+    item: Option<usize>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+#[derive(Clone, PartialEq)]
+enum ListRow {
+    Header(String),
+    Item(usize),
+}
+
+pub struct BindsApp {
+    kind: BindsKind,
+    registry_state: RegistryState,
+    output_state: OutputState,
+    seat_state: SeatState,
+    shm: Shm,
+    pool: SlotPool,
+    window: Window,
+    pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    repeat: Repeat,
+    mods: Modifiers,
+    lang: settings::Language,
+    text: text::TextPainter,
+    icons: text::TextPainter,
+    query: String,
+    groups: Vec<(String, Vec<Entry>)>,
+    items: Vec<Entry>,
+    rows: Vec<ListRow>,
+    selected: usize,
+    hover: Option<usize>,
+    top: f32,
+    scroll_acc: f32,
+    palette: palette::Palette,
+    stamps: Vec<(PathBuf, Option<SystemTime>)>,
+    niri_dir: Option<PathBuf>,
+    niri_dir_stamp: Option<SystemTime>,
+    width: u32,
+    height: u32,
+    configured: bool,
+    dirty: bool,
+    exit: Arc<AtomicBool>,
+}
+
+fn stamp(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
+fn col_width(w: f32) -> f32 {
+    (w - PAD_X * 2.0 - COL_GAP * (COLS - 1) as f32) / COLS as f32
+}
+
+fn col_x(c: usize, w: f32) -> f32 {
+    PAD_X + c as f32 * (col_width(w) + COL_GAP)
+}
+
+fn section_len(rows: &[ListRow], header: usize) -> usize {
+    rows[header + 1..]
+        .iter()
+        .take_while(|r| matches!(r, ListRow::Item(_)))
+        .count()
+}
+
+fn layout_slots(rows: &[ListRow], width: f32) -> Vec<Slot> {
+    let col_w = col_width(width);
+    let mut slots: Vec<Slot> = Vec::new();
+    let mut offset = 0.0f32;
+    let mut row = 0;
+    while row < rows.len() {
+        match &rows[row] {
+            ListRow::Header(_) => {
+                let hy = LIST_Y0 + offset;
+                slots.push(Slot {
+                    row,
+                    item: None,
+                    x: PAD_X,
+                    y: hy,
+                    w: width - PAD_X * 2.0,
+                    h: ITEM_H,
+                });
+                let len = section_len(rows, row);
+                for (n, r) in (row + 1..=row + len).enumerate() {
+                    slots.push(Slot {
+                        row: r,
+                        item: match rows[r] {
+                            ListRow::Item(i) => Some(i),
+                            ListRow::Header(_) => None,
+                        },
+                        x: PAD_X,
+                        y: hy + ITEM_H + ROW_GAP + n as f32 * (ITEM_H + ROW_GAP),
+                        w: col_w,
+                        h: ITEM_H,
+                    });
+                }
+                offset += ITEM_H + len as f32 * (ITEM_H + ROW_GAP) + SECTION_GAP;
+                row += 1 + len;
+            }
+            ListRow::Item(i) => {
+                slots.push(Slot {
+                    row,
+                    item: Some(*i),
+                    x: PAD_X,
+                    y: LIST_Y0 + offset,
+                    w: col_w,
+                    h: ITEM_H,
+                });
+                offset += ITEM_H + ROW_GAP;
+                row += 1;
+            }
+        }
+    }
+    slots
+}
+
+fn content_h(rows: &[ListRow], width: f32) -> f32 {
+    layout_slots(rows, width)
+        .iter()
+        .map(|s| s.y + s.h)
+        .fold(LIST_Y0, f32::max)
+}
+
+struct Render<'a> {
+    kind: BindsKind,
+    palette: palette::Palette,
+    lang: settings::Language,
+    rows: &'a [ListRow],
+    items: &'a [Entry],
+    selected: usize,
+    top: f32,
+    query: &'a str,
+    hover: Option<usize>,
+    groups_total: usize,
+}
+
+fn render(
+    pixmap: &mut tiny_skia::Pixmap,
+    card: geom::Rect,
+    r: &Render<'_>,
+    painter: &mut text::TextPainter,
+    icons: &mut text::TextPainter,
+) {
+    let ui = ui_tokens::ui_palette(r.palette);
+    let scale = ui_tokens::type_scale();
+
+    card_frame::card(pixmap, card, &ui);
+    card_frame::header(
+        pixmap,
+        painter,
+        icons,
+        card,
+        &ui,
+        r.kind.title(r.lang),
+        r.query,
+        r.kind.placeholder(r.lang),
+    );
+
+    let list_y = card.y + LIST_Y0;
+    let view_h = card.h - card_frame::FOOTER_H - LIST_Y0;
+
+    if r.items.is_empty() {
+        painter.paint(
+            pixmap,
+            nothing_found(r.lang),
+            scale.label,
+            ui.muted,
+            card_frame::center_band(
+                geom::Rect::new(
+                    card.x + PAD_X,
+                    list_y,
+                    card.w - PAD_X * 2.0,
+                    view_h.min(ITEM_H),
+                ),
+                scale.label * 2.0,
+            ),
+            text::Align::Start,
+        );
+    }
+
+    let key_w = key_display::key_column_width(r.items, painter, scale.label, card.w);
+
+    let slots: Vec<Slot> = layout_slots(r.rows, card.w)
+        .into_iter()
+        .filter(|s| s.y >= LIST_Y0 + r.top && s.y + s.h <= LIST_Y0 + r.top + view_h)
+        .map(|mut s| {
+            s.y -= r.top;
+            s
+        })
+        .collect();
+
+    let style = card_frame::RowHighlightStyle {
+        rounded: false,
+        inset: 1.0,
+    };
+    for slot in &slots {
+        let rect = geom::Rect::new(card.x + slot.x, card.y + slot.y, slot.w, slot.h);
+        if let ListRow::Header(label) = &r.rows[slot.row] {
+            card_frame::section_header(pixmap, painter, rect, &ui, group_label(r.lang, label));
+            continue;
+        }
+        let Some(item) = slot.item else { continue };
+        let Some(e) = r.items.get(item) else { continue };
+        let selected = item == r.selected;
+        if selected {
+            card_frame::select_band(pixmap, rect, &ui, style);
+        } else if r.hover == Some(item) {
+            card_frame::hover_band(pixmap, rect, &ui, style);
+        }
+        let key_x = rect.x + PAD_X;
+        let desc_x = key_x + key_w + PAD_X;
+        let desc_w = rect.right() - desc_x - PAD_X;
+
+        let baseline = painter.shared_baseline(rect, scale.label);
+        painter.paint_boxed_on_baseline(
+            pixmap,
+            key_display::display_key(&e.key),
+            scale.label,
+            if selected { ui.on_primary } else { ui.accent },
+            card_frame::center_band(
+                geom::Rect::new(key_x, rect.y, key_w, rect.h),
+                scale.label * 2.0,
+            ),
+            text::Align::Start,
+            baseline,
+        );
+        painter.paint_boxed_on_baseline(
+            pixmap,
+            &e.desc,
+            scale.label,
+            if selected { ui.on_primary } else { ui.text },
+            card_frame::center_band(
+                geom::Rect::new(desc_x, rect.y, desc_w, rect.h),
+                scale.label * 2.0,
+            ),
+            text::Align::Start,
+            baseline,
+        );
+    }
+
+    let content = (content_h(r.rows, card.w) - LIST_Y0).max(view_h);
+    let overflow = content - view_h;
+    if overflow > 0.5 {
+        card_frame::scrollbar(
+            pixmap,
+            geom::Rect::new(card.x, list_y, card.w, view_h),
+            &ui,
+            content,
+            view_h,
+            r.top,
+            card_frame::ScrollbarStyle {
+                track: true,
+                inset: 6.0,
+                thumb_accent: true,
+            },
+        );
+    }
+
+    let items_total = r.items.len();
+    let count = if r.query.is_empty() {
+        format!("{items_total}")
+    } else {
+        format!("{items_total} / {}", r.groups_total)
+    };
+    card_frame::footer(pixmap, painter, card, &ui, hints(r.lang), Some(&count));
+}
+
+impl BindsApp {
+    fn view_h(&self) -> f32 {
+        self.height as f32 - card_frame::FOOTER_H - LIST_Y0
+    }
+
+    fn slots(&self) -> Vec<Slot> {
+        let band_y0 = LIST_Y0 + self.top;
+        let band_y1 = band_y0 + self.view_h();
+        layout_slots(&self.rows, self.width as f32)
+            .into_iter()
+            .filter(|s| s.y >= band_y0 && s.y + s.h <= band_y1)
+            .map(|mut s| {
+                s.y -= self.top;
+                s
+            })
+            .collect()
+    }
+
+    fn slot_of(&self, item: usize) -> Option<Slot> {
+        layout_slots(&self.rows, self.width as f32)
+            .into_iter()
+            .find(|s| s.item == Some(item))
+    }
+
+    fn max_top(&self) -> f32 {
+        (self.content_h() - self.height as f32 + card_frame::FOOTER_H).max(0.0)
+    }
+
+    fn content_h(&self) -> f32 {
+        content_h(&self.rows, self.width as f32)
+    }
+
+    fn rebuild(&mut self) {
+        let prev = self.items.get(self.selected).cloned();
+        let filtered = match self.kind {
+            BindsKind::Niri => binds_layout::groups_matching_any(&self.groups, &[&self.query]),
+            BindsKind::Yazi => {
+                let mut groups = self.groups.as_slice();
+                if !self.query.is_empty() {
+                    groups = strip_favorites(groups);
+                }
+                let latin = bind_data::transliterate(&self.query);
+                binds_layout::groups_matching_any(groups, &[&self.query, &latin])
+            }
+        };
+
+        self.items = filtered
+            .iter()
+            .flat_map(|(_, entries)| entries.iter())
+            .cloned()
+            .collect();
+        self.rows.clear();
+        let mut item = 0;
+        for (name, entries) in &filtered {
+            self.rows.push(ListRow::Header(name.clone()));
+            for _ in entries {
+                self.rows.push(ListRow::Item(item));
+                item += 1;
+            }
+        }
+        self.selected = prev
+            .and_then(|p| self.items.iter().position(|e| *e == p))
+            .unwrap_or(0);
+        self.top = 0.0;
+        self.dirty = true;
+    }
+
+    fn refilter(&mut self) {
+        self.rebuild();
+    }
+
+    fn on_key(&mut self, event: KeyEvent) {
+        match event.keysym {
+            Keysym::Escape => self.exit.store(true, Ordering::Relaxed),
+            Keysym::Return | Keysym::KP_Enter => self.exit.store(true, Ordering::Relaxed),
+            Keysym::Up => self.move_sel(0, -1),
+            Keysym::Down => self.move_sel(0, 1),
+            Keysym::Left => self.move_sel(-1, 0),
+            Keysym::Right => self.move_sel(1, 0),
+            Keysym::Page_Up => self.scroll_by(-8),
+            Keysym::Page_Down => self.scroll_by(8),
+            Keysym::Home => {
+                if !self.items.is_empty() {
+                    self.select(0);
+                }
+            }
+            Keysym::End => {
+                if let Some(i) = self.items.len().checked_sub(1) {
+                    self.select(i);
+                }
+            }
+            Keysym::BackSpace => {
+                self.query.pop();
+                self.refilter();
+            }
+            _ => {
+                if self.mods.ctrl || self.mods.logo {
+                    if (event.keysym == Keysym::u || event.keysym == Keysym::U) && self.mods.ctrl {
+                        self.query.clear();
+                        self.refilter();
+                    }
+                    return;
+                }
+                if let Some(text) = &event.utf8 {
+                    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+                    if !clean.is_empty() {
+                        self.query.push_str(&clean);
+                        self.refilter();
+                    }
+                }
+            }
+        }
+    }
+
+    fn select(&mut self, item: usize) {
+        self.selected = item;
+        self.ensure_visible();
+        self.dirty = true;
+    }
+
+    fn move_sel(&mut self, dx: i32, dy: i32) {
+        if dy != 0 {
+            let next = if dy < 0 {
+                self.selected.checked_sub(1)
+            } else {
+                let up = self.selected + 1;
+                (up < self.items.len()).then_some(up)
+            };
+            if let Some(next) = next {
+                self.select(next);
+            }
+            return;
+        }
+        let slots = self.slots();
+        let in_column = |c: usize| -> Vec<Option<usize>> {
+            let x = col_x(c, self.width as f32);
+            slots.iter().filter(|s| s.x == x).map(|s| s.item).collect()
+        };
+        let Some(cur) = slots.iter().find(|s| s.item == Some(self.selected)) else {
+            return;
+        };
+        let from = if (cur.x - PAD_X).abs() < f32::EPSILON {
+            0
+        } else {
+            1
+        };
+        let col = in_column(from);
+        let Some(pos) = col.iter().position(|&i| i == Some(self.selected)) else {
+            return;
+        };
+        let other = from as isize - dx as isize;
+        if other >= 0
+            && (other as usize) < COLS
+            && let Some(Some(item)) = in_column(other as usize).get(pos)
+            && *item != self.selected
+        {
+            self.select(*item);
+        }
+    }
+
+    fn row_at(&self, x: f32, y: f32) -> Option<usize> {
+        self.slots()
+            .into_iter()
+            .find(|s| y >= s.y && y <= s.y + s.h && x >= s.x && x <= s.x + s.w)
+            .and_then(|s| s.item)
+    }
+
+    fn ensure_visible(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
+        let Some(slot) = self.slot_of(self.selected) else {
+            return;
+        };
+        let band_y0 = LIST_Y0 + self.top;
+        let band_y1 = band_y0 + self.view_h();
+        let top = if slot.y < band_y0 {
+            slot.y - LIST_Y0
+        } else if slot.y + slot.h > band_y1 {
+            slot.y + slot.h - LIST_Y0 - self.view_h()
+        } else {
+            self.top
+        };
+        self.top = top.clamp(0.0, self.max_top());
+    }
+
+    fn scroll_by(&mut self, lines: i32) {
+        if self.items.is_empty() {
+            return;
+        }
+        self.top = (self.top + lines as f32 * (ITEM_H + ROW_GAP)).clamp(0.0, self.max_top());
+        let vis: Vec<usize> = self.slots().into_iter().filter_map(|s| s.item).collect();
+        if !vis.contains(&self.selected)
+            && let Some(&nearest) = vis
+                .iter()
+                .min_by_key(|&&i| (i as i32 - self.selected as i32).abs())
+        {
+            self.selected = nearest;
+        }
+        self.dirty = true;
+    }
+
+    fn refresh_sources(&mut self) {
+        let mut changed = false;
+        if let Some(dir) = &self.niri_dir {
+            let dir_stamp = stamp(dir);
+            if dir_stamp != self.niri_dir_stamp {
+                self.niri_dir_stamp = dir_stamp;
+                self.stamps = self
+                    .kind
+                    .watch_paths()
+                    .iter()
+                    .map(|p| (p.clone(), stamp(p)))
+                    .collect();
+                changed = true;
+            }
+        }
+        for (path, prev) in self.stamps.iter_mut() {
+            let cur = stamp(path);
+            if cur != *prev {
+                *prev = cur;
+                changed = true;
+            }
+        }
+        if changed {
+            self.groups = self.kind.load_groups();
+            self.rebuild();
+            self.palette = palette::load();
+            self.dirty = true;
+        } else if palette::load() != self.palette {
+            self.palette = palette::load();
+            self.dirty = true;
+        }
+    }
+
+    fn axis_step(&mut self, v: &AxisScroll) -> i32 {
+        shell::axis_steps(&mut self.scroll_acc, v) as i32
+    }
+
+    fn draw(&mut self) {
+        if !self.configured || self.width == 0 || self.height == 0 {
+            return;
+        }
+        let pw = (self.width as f32 * text::SCALE) as u32;
+        let ph = (self.height as f32 * text::SCALE) as u32;
+        let Some(mut pixmap) = tiny_skia::Pixmap::new(pw, ph) else {
+            return;
+        };
+
+        let groups_total = match self.kind {
+            BindsKind::Niri => self.groups.iter().map(|(_, e)| e.len()).sum(),
+            BindsKind::Yazi => strip_favorites(&self.groups)
+                .iter()
+                .map(|(_, e)| e.len())
+                .sum(),
+        };
+
+        let r = Render {
+            kind: self.kind,
+            palette: self.palette,
+            lang: self.lang,
+            rows: &self.rows,
+            items: &self.items,
+            selected: self.selected,
+            top: self.top,
+            query: &self.query,
+            hover: self.hover,
+            groups_total,
+        };
+        let card = geom::Rect::new(0.0, 0.0, self.width as f32, self.height as f32);
+        render(&mut pixmap, card, &r, &mut self.text, &mut self.icons);
+        if power_profile::saver() {
+            canvas::make_opaque(&mut pixmap, card);
+        } else {
+            card_frame::apply_card_alpha(&mut pixmap, card, card_frame::CARD_ALPHA);
+        }
+
+        let stride = (pw * 4) as i32;
+        let Ok((buffer, canvas)) =
+            self.pool
+                .create_buffer(pw as i32, ph as i32, stride, wl_shm::Format::Argb8888)
+        else {
+            self.dirty = true;
+            return;
+        };
+        let (dst, _) = canvas.as_chunks_mut::<4>();
+        let (src, _) = pixmap.data().as_chunks::<4>();
+        for (out, input) in dst.iter_mut().zip(src.iter()) {
+            *out = [input[2], input[1], input[0], input[3]];
+        }
+        let surface = self.window.wl_surface();
+        surface.set_buffer_scale(text::SCALE as i32);
+        surface.damage_buffer(0, 0, pw as i32, ph as i32);
+        let _ = buffer.attach_to(surface);
+        self.window.commit();
+    }
+}
+
+impl CompositorHandler for BindsApp {
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: i32,
+    ) {
+    }
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: wl_output::Transform,
+    ) {
+    }
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl OutputHandler for BindsApp {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+}
+
+impl SeatHandler for BindsApp {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+        }
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            self.keyboard = self.seat_state.get_keyboard(qh, &seat, None).ok();
+        }
+    }
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer
+            && let Some(pointer) = self.pointer.take()
+        {
+            pointer.release();
+        }
+        if capability == Capability::Keyboard
+            && let Some(keyboard) = self.keyboard.take()
+        {
+            keyboard.release();
+        }
+    }
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl WindowHandler for BindsApp {
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
+        self.exit.store(true, Ordering::Relaxed);
+    }
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &Window,
+        configure: WindowConfigure,
+        _: u32,
+    ) {
+        self.width = configure.new_size.0.map(|v| v.get()).unwrap_or(WIDTH);
+        self.height = configure.new_size.1.map(|v| v.get()).unwrap_or(HEIGHT);
+        self.configured = true;
+        self.dirty = true;
+    }
+}
+
+impl PointerHandler for BindsApp {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            if event.surface != *self.window.wl_surface() {
+                continue;
+            }
+            match &event.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    let idx = self.row_at(event.position.0 as f32, event.position.1 as f32);
+                    if idx != self.hover {
+                        self.hover = idx;
+                        self.dirty = true;
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    if self.hover.take().is_some() {
+                        self.dirty = true;
+                    }
+                }
+                PointerEventKind::Press { button: 0x110, .. } => {
+                    if self
+                        .row_at(event.position.0 as f32, event.position.1 as f32)
+                        .is_some()
+                    {
+                        self.exit.store(true, Ordering::Relaxed);
+                    }
+                }
+                PointerEventKind::Axis { vertical, .. } => {
+                    let step = self.axis_step(vertical);
+                    if step != 0 {
+                        self.scroll_by(step);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl KeyboardHandler for BindsApp {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+    }
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.repeat.press(&event);
+        self.on_key(event);
+    }
+    fn repeat_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.on_key(event);
+    }
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.repeat.release(&event);
+    }
+    fn update_repeat_info(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        info: RepeatInfo,
+    ) {
+        self.repeat.set_info(info);
+    }
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        modifiers: Modifiers,
+        _: RawModifiers,
+        _: u32,
+    ) {
+        self.mods = modifiers;
+    }
+}
+
+impl ShmHandler for BindsApp {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
+impl ProvidesRegistryState for BindsApp {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    registry_handlers![OutputState, SeatState];
+}
+
+delegate_registry!(BindsApp);
+smithay_client_toolkit::delegate_dispatch2!(BindsApp);
+
+pub fn demo_groups(kind: BindsKind) -> Vec<(String, Vec<Entry>)> {
+    match kind {
+        BindsKind::Niri => {
+            let keys = [
+                (
+                    "Окна и обзор",
+                    [
+                        ("Super+T", "Терминал"),
+                        ("Super+D", "Лаунчер приложений"),
+                        ("Super+W", "Закрыть окно"),
+                        ("Super+F", "Полноэкранный режим"),
+                        ("Super+V", "Плавающее окно"),
+                        ("Super+P", "Скриншот области"),
+                        ("Super+Space", "Обзор окон"),
+                    ],
+                ),
+                (
+                    "Звук, яркость и медиа",
+                    [
+                        ("XF86AudioRaiseVolume", "Громкость выше"),
+                        ("XF86AudioLowerVolume", "Громкость ниже"),
+                        ("XF86AudioMute", "Звук без звука"),
+                        ("XF86AudioPlay", "Плей/пауза"),
+                        ("XF86MonBrightnessUp", "Яркость выше"),
+                        ("XF86MonBrightnessDown", "Яркость ниже"),
+                        ("Super+M", "Микрофон"),
+                    ],
+                ),
+            ];
+            keys.iter()
+                .map(|(name, pairs)| {
+                    (
+                        name.to_string(),
+                        pairs
+                            .iter()
+                            .map(|(k, d)| Entry::new(k.to_string(), d.to_string()))
+                            .collect(),
+                    )
+                })
+                .collect()
+        }
+        BindsKind::Yazi => {
+            let keys = [
+                (
+                    "Частые",
+                    [
+                        ("space", "Выделить"),
+                        ("v", "Визуальный режим"),
+                        ("y", "Копировать"),
+                        ("x", "Вырезать"),
+                        ("p", "Вставить"),
+                        ("d", "Удалить в корзину"),
+                        ("D", "Удалить навсегда"),
+                    ],
+                ),
+                (
+                    "Навигация",
+                    [
+                        ("k", "Вверх"),
+                        ("j", "Вниз"),
+                        ("h", "Назад"),
+                        ("l", "Войти"),
+                        ("K", "5 строк вверх"),
+                        ("J", "5 строк вниз"),
+                        ("g g", "Начало списка"),
+                    ],
+                ),
+            ];
+            keys.iter()
+                .map(|(name, pairs)| {
+                    (
+                        name.to_string(),
+                        pairs
+                            .iter()
+                            .map(|(k, d)| Entry::new(k.to_string(), d.to_string()))
+                            .collect(),
+                    )
+                })
+                .collect()
+        }
+    }
+}
+
+pub fn snapshot(kind: BindsKind, out: &str) {
+    let pixmap = scene_pixmap(kind, &palette::load());
+    if let Err(error) = canvas::write_png(&pixmap, Path::new(out)) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+    println!(
+        "{} {}x{} → {out}",
+        match kind {
+            BindsKind::Niri => "бинды",
+            BindsKind::Yazi => "yazi",
+        },
+        pixmap.width(),
+        pixmap.height()
+    );
+}
+
+pub fn scene_pixmap(kind: BindsKind, _config_palette: &palette::Palette) -> tiny_skia::Pixmap {
+    const BACKDROP_TOP: palette::Rgba = palette::Rgba(0x1a, 0x1f, 0x30, 255);
+    const BACKDROP_HORIZON: palette::Rgba = palette::Rgba(0x11, 0x15, 0x24, 255);
+    const SCENE_W: f32 = 1200.0;
+    const SCENE_H: f32 = 800.0;
+
+    let groups = demo_groups(kind);
+    let items = binds_layout::entries_from_groups(&groups, "");
+    let mut rows: Vec<ListRow> = Vec::new();
+    let mut item = 0;
+    for (name, entries) in &groups {
+        rows.push(ListRow::Header(name.clone()));
+        for _ in entries {
+            rows.push(ListRow::Item(item));
+            item += 1;
+        }
+    }
+    let r = Render {
+        kind,
+        palette: palette::Palette::default(),
+        lang: settings::Language::Ru,
+        rows: &rows,
+        items: &items,
+        selected: match kind {
+            BindsKind::Niri => 5,
+            BindsKind::Yazi => 0,
+        },
+        top: match kind {
+            BindsKind::Niri => 90.0,
+            BindsKind::Yazi => 0.0,
+        },
+        query: "",
+        hover: None,
+        groups_total: match kind {
+            BindsKind::Niri => items.len(),
+            BindsKind::Yazi => strip_favorites(&groups).iter().map(|(_, e)| e.len()).sum(),
+        },
+    };
+
+    let height = card_frame::card_height(card_frame::ROOT_ROWS);
+    let card = geom::Rect::new(
+        (SCENE_W - card_frame::CARD_W) / 2.0,
+        (SCENE_H - height) / 2.0,
+        card_frame::CARD_W,
+        height,
+    );
+    let mut pixmap = tiny_skia::Pixmap::new(
+        (SCENE_W * text::SCALE) as u32,
+        (SCENE_H * text::SCALE) as u32,
+    )
+    .expect("pixmap");
+    let width = pixmap.width();
+    let scene_height = pixmap.height();
+    {
+        let pixels = pixmap.pixels_mut();
+        for y in 0..scene_height {
+            let t = y as f32 / scene_height.max(1) as f32;
+            let red = (BACKDROP_TOP.0 as f32
+                + (BACKDROP_HORIZON.0 as f32 - BACKDROP_TOP.0 as f32) * t)
+                as u8;
+            let green = (BACKDROP_TOP.1 as f32
+                + (BACKDROP_HORIZON.1 as f32 - BACKDROP_TOP.1 as f32) * t)
+                as u8;
+            let blue = (BACKDROP_TOP.2 as f32
+                + (BACKDROP_HORIZON.2 as f32 - BACKDROP_TOP.2 as f32) * t)
+                as u8;
+            let row = y as usize * width as usize;
+            for x in 0..width as usize {
+                if let Some(color) =
+                    tiny_skia::PremultipliedColorU8::from_rgba(red, green, blue, 255)
+                {
+                    pixels[row + x] = color;
+                }
+            }
+        }
+    }
+    let mut painter = text::TextPainter::new(&ui_tokens::font_name());
+    let mut icons = text::TextPainter::new(settings_icons::FONT);
+
+    let mut card_pixmap =
+        tiny_skia::Pixmap::new((card.w * text::SCALE) as u32, (card.h * text::SCALE) as u32)
+            .expect("card pixmap");
+    let card_rect = geom::Rect::new(0.0, 0.0, card.w, card.h);
+    render(&mut card_pixmap, card_rect, &r, &mut painter, &mut icons);
+    card_frame::apply_card_alpha(&mut card_pixmap, card_rect, card_frame::CARD_ALPHA);
+    card_frame::blend_card(
+        &mut pixmap,
+        &card_pixmap,
+        (card.x * text::SCALE) as i32,
+        (card.y * text::SCALE) as i32,
+    );
+    pixmap
+}
+
+pub fn run(kind: BindsKind) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--snapshot") {
+        match args.get(1) {
+            Some(out) => snapshot(kind, out),
+            None => {
+                eprintln!("использование: {} --snapshot <out.png>", kind.bin_name());
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+
+    let conn = Connection::connect_to_env().expect("wayland connection");
+    let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
+    let qh = event_queue.handle();
+    let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor");
+    let xdg_shell = XdgShell::bind(&globals, &qh).expect("xdg shell");
+    let shm = Shm::bind(&globals, &qh).expect("wl_shm");
+    let surface = compositor.create_surface(&qh);
+    let window = xdg_shell.create_window(surface, WindowDecorations::ServerDefault, &qh);
+    let lang = settings::load().language;
+    window.set_title(kind.title(lang));
+    window.set_app_id(kind.app_id());
+    window.set_min_size(Some((WIDTH, HEIGHT)));
+    window.set_max_size(Some((WIDTH, HEIGHT)));
+    // Без первого commit композитор не пришлёт configure, окно не отобразится,
+    // а цикл будет вечно ждать в poll.
+    window.commit();
+
+    let pool = SlotPool::new(40_000_000, &shm).expect("shm pool");
+    let groups = kind.load_groups();
+    let paths = kind.watch_paths();
+    let stamps = paths.iter().map(|p| (p.clone(), stamp(p))).collect();
+    let niri_dir = match kind {
+        BindsKind::Niri => Some(bind_data::home().join(".config/niri")),
+        BindsKind::Yazi => None,
+    };
+    let niri_dir_stamp = niri_dir.as_deref().and_then(stamp);
+
+    let exit = Arc::new(AtomicBool::new(false));
+    let mut app = BindsApp {
+        kind,
+        registry_state: RegistryState::new(&globals),
+        output_state: OutputState::new(&globals, &qh),
+        seat_state: SeatState::new(&globals, &qh),
+        shm,
+        pool,
+        window,
+        pointer: None,
+        keyboard: None,
+        repeat: Repeat::default(),
+        mods: Modifiers::default(),
+        lang,
+        text: text::TextPainter::new(&ui_tokens::font_name()),
+        icons: text::TextPainter::new(settings_icons::FONT),
+        query: String::new(),
+        groups,
+        items: Vec::new(),
+        rows: Vec::new(),
+        selected: 0,
+        hover: None,
+        top: 0.0,
+        scroll_acc: 0.0,
+        palette: palette::load(),
+        stamps,
+        niri_dir,
+        niri_dir_stamp,
+        width: WIDTH,
+        height: HEIGHT,
+        configured: false,
+        dirty: true,
+        exit,
+    };
+
+    app.rebuild();
+
+    while !app.exit.load(Ordering::Relaxed) {
+        app.refresh_sources();
+        if event_queue.flush().is_err() {
+            break;
+        }
+        let timeout = app
+            .repeat
+            .wait_hint()
+            .and_then(|left| u16::try_from(left.as_millis()).ok())
+            .unwrap_or(250);
+        shell::poll_read(&mut event_queue, conn.as_fd(), timeout);
+        if event_queue.dispatch_pending(&mut app).is_err() {
+            break;
+        }
+        let mut repeat_fired = false;
+        while let Some(event) = app.repeat.poll() {
+            app.on_key(event);
+            repeat_fired = true;
+        }
+        if repeat_fired {
+            app.dirty = true;
+        }
+        if app.dirty {
+            app.dirty = false;
+            app.draw();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_ignores_config_palette() {
+        let gold = palette::Palette {
+            primary: palette::Rgba(0xdf, 0xc5, 0x6d, 255),
+            on_primary: palette::Rgba(0x39, 0x2e, 0x00, 255),
+            ..Default::default()
+        };
+        let lavender = palette::Palette {
+            primary: palette::Rgba(0x8f, 0xa9, 0xff, 255),
+            on_primary: palette::Rgba(0x1a, 0x2c, 0x5f, 255),
+            ..Default::default()
+        };
+        for kind in [BindsKind::Niri, BindsKind::Yazi] {
+            assert_eq!(
+                scene_pixmap(kind, &gold).data(),
+                scene_pixmap(kind, &lavender).data(),
+                "снимки с разными палитрами конфига обязаны совпасть для {:?}",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn demo_keys_fit_their_column() {
+        for kind in [BindsKind::Niri, BindsKind::Yazi] {
+            let items = binds_layout::entries_from_groups(&demo_groups(kind), "");
+            let mut painter = text::TextPainter::new(&ui_tokens::font_name());
+            let size = ui_tokens::type_scale().label;
+            let key_w =
+                key_display::key_column_width(&items, &mut painter, size, card_frame::CARD_W);
+            for entry in &items {
+                assert!(
+                    painter.text_width(key_display::display_key(&entry.key), size) <= key_w,
+                    "{} не влезает в колонку {key_w:.1} для {:?}",
+                    entry.key,
+                    kind
+                );
+            }
+            assert!(key_w <= card_frame::CARD_W * 0.45 + f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn demo_key_and_desc_share_baseline() {
+        for kind in [BindsKind::Niri, BindsKind::Yazi] {
+            let items = binds_layout::entries_from_groups(&demo_groups(kind), "");
+            let mut painter = text::TextPainter::new(&ui_tokens::font_name());
+            let size = ui_tokens::type_scale().label;
+            let key_w = card_frame::CARD_W * 0.45;
+            let key_band =
+                card_frame::center_band(geom::Rect::new(PAD_X, 0.0, key_w, ITEM_H), size * 2.0);
+            let desc_band = card_frame::center_band(
+                geom::Rect::new(
+                    PAD_X + key_w + PAD_X,
+                    0.0,
+                    card_frame::CARD_W - PAD_X * 3.0 - key_w,
+                    ITEM_H,
+                ),
+                size * 2.0,
+            );
+            for entry in &items {
+                assert_eq!(
+                    painter.shared_baseline(key_band, size),
+                    painter.shared_baseline(desc_band, size),
+                    "клавиша {} и её описание разъехались по высоте для {:?}",
+                    entry.key,
+                    kind
+                );
+            }
+        }
+    }
+}

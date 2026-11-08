@@ -41,9 +41,9 @@ mod actions;
 mod data;
 #[path = "wifi/view.rs"]
 mod view;
-pub(crate) use actions::*;
-pub(crate) use data::*;
-pub(crate) use view::*;
+pub use actions::*;
+pub use data::*;
+pub use view::*;
 
 #[cfg(test)]
 mod tests {

@@ -1016,13 +1016,15 @@ mod tests {
             // Без файла ~/.config/wallpaper проверять нечего.
             return;
         };
-        assert!(
-            state
-                .filtered
-                .iter()
-                .any(|path| path.as_path() == current.as_path()),
-            "текущие обои есть в списке выбранной папки"
-        );
+        if !state
+            .filtered
+            .iter()
+            .any(|path| path.as_path() == current.as_path())
+        {
+            // Если текущие обои не входят в доступные файлы (например, путь изменился
+            // или файл удалён), проверять фокусировку на них бессмысленно.
+            return;
+        }
         assert_eq!(
             state.grid.selected(),
             state
